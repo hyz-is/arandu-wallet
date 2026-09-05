@@ -31,7 +31,7 @@ import (
 // a policy is only as good as what it refuses when the money is really there.
 
 // everyAction is the whole set the policy answers about. A test that listed
-// nine of ten would pass while the tenth was open.
+// ten of eleven would pass while the eleventh was open.
 var everyAction = []security.Action{
 	wallet.WalletView,
 	wallet.WalletList,
@@ -41,6 +41,7 @@ var everyAction = []security.Action{
 	wallet.WalletWithdraw,
 	wallet.WalletTransfer,
 	wallet.WalletReverse,
+	wallet.WalletConfirm,
 	wallet.WalletCredit,
 	wallet.WalletForce,
 }
@@ -260,6 +261,11 @@ func TestTheServiceRefusesBeforeReachingTheModel(t *testing.T) {
 		"Reverse": func() error {
 			_, err := service.Reverse(ctx, actor, wallet.ReverseRequest{
 				IdempotencyKey: "key-1", OperationID: "operation-1", Reason: "asked"})
+			return err
+		},
+		"Confirm": func() error {
+			_, err := service.Confirm(ctx, actor, wallet.ConfirmRequest{
+				IdempotencyKey: "key-1", OperationID: "operation-1"})
 			return err
 		},
 		"SetCredit": func() error {

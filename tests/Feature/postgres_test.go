@@ -483,6 +483,81 @@ func TestConcurrentReversalsInterleaveAndUndoOnce(t *testing.T) {
 	}
 }
 
+// TestConcurrentConfirmationsSettleOnce is the exactly-once property of the
+// second half of a two-phase movement, and it needs an engine that interleaves
+// for the same reason the reversals do.
+//
+// Each caller has its own key, so none of these is a replay: they are different
+// requests to make one pending deposit count, all of them reading a table that
+// says it has not been confirmed yet. The unique index over the kind and the
+// operation being settled is what makes exactly one of them right, and the
+// money says so: the balance is the deposit, once.
+func TestConcurrentConfirmationsSettleOnce(t *testing.T) {
+	t.Parallel()
+
+	service := wallet.NewWalletService(postgres(t), nil)
+	account := openWallet(t, service, "user-1", "main", 2)
+	proposed, err := service.Deposit(context.Background(), staff(), wallet.DepositRequest{
+		IdempotencyKey: "later-1", WalletID: account.ID, Amount: "10.00", Pending: true,
+	})
+	if err != nil {
+		t.Fatalf("recording a pending deposit: %v", err)
+	}
+
+	const callers = 25
+
+	var (
+		start   sync.WaitGroup
+		done    sync.WaitGroup
+		mu      sync.Mutex
+		settled int
+		refused int
+		other   []error
+	)
+	start.Add(1)
+	done.Add(callers)
+
+	for i := range callers {
+		go func() {
+			defer done.Done()
+			start.Wait()
+
+			_, err := service.Confirm(context.Background(), staff(), wallet.ConfirmRequest{
+				IdempotencyKey: fmt.Sprintf("settle-%d", i),
+				OperationID:    proposed.Operation.ID,
+			})
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case err == nil:
+				settled++
+			case errors.Is(err, wallet.ErrAlreadyConfirmed), errors.Is(err, wallet.ErrNotPending):
+				refused++
+			default:
+				other = append(other, err)
+			}
+		}()
+	}
+	start.Done()
+	done.Wait()
+
+	for _, err := range other {
+		t.Errorf("a confirmation failed for a reason other than being second: %v", err)
+	}
+	if settled != 1 {
+		t.Errorf("%d of %d confirmations succeeded, want exactly 1", settled, callers)
+	}
+	if refused != callers-settled {
+		t.Errorf("%d confirmations were refused as already done, want %d", refused, callers-settled)
+	}
+	if got := balanceOf(t, service, account.ID); got != 1000 {
+		t.Fatalf("the balance is %d after one pending deposit confirmed %d times, want 1000", got, callers)
+	}
+	if got := ledgerOf(t, service, account.ID); got != 1000 {
+		t.Fatalf("the ledger sums to %d, want 1000", got)
+	}
+}
+
 func TestARolledBackTransferLeavesNothingBehind(t *testing.T) {
 	t.Parallel()
 

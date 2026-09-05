@@ -205,29 +205,105 @@ func TestMoneyReadsAsTheDecimalAndTheCurrency(t *testing.T) {
 	}
 }
 
-func TestAnEntrySignsItselfByDirection(t *testing.T) {
+func TestAnEntrySignsItselfByDirectionAndOnlyOnceItSettles(t *testing.T) {
 	t.Parallel()
 
-	if got := (wallet.Entry{Kind: wallet.EntryDeposit, Amount: 1050}).Signed(); got != 1050 {
+	if got := (wallet.Entry{Kind: wallet.EntryDeposit, Amount: 1050, Settled: true}).Signed(); got != 1050 {
 		t.Fatalf("a deposit signed itself %d, want 1050", got)
 	}
-	if got := (wallet.Entry{Kind: wallet.EntryWithdraw, Amount: 1050}).Signed(); got != -1050 {
+	if got := (wallet.Entry{Kind: wallet.EntryWithdraw, Amount: 1050, Settled: true}).Signed(); got != -1050 {
 		t.Fatalf("a withdrawal signed itself %d, want -1050", got)
+	}
+
+	// A pending row adds nothing to a balance, in either direction, which is
+	// what keeps the sum of this over a whole ledger equal to the balance
+	// column. What it was for is still readable: the amount is untouched.
+	for _, kind := range []wallet.EntryKind{wallet.EntryDeposit, wallet.EntryWithdraw} {
+		pending := wallet.Entry{Kind: kind, Amount: 1050}
+		if got := pending.Signed(); got != 0 {
+			t.Fatalf("a pending %s signed itself %d, want 0", kind, got)
+		}
+		if pending.Amount != 1050 {
+			t.Fatalf("a pending %s reports an amount of %d, want 1050", kind, pending.Amount)
+		}
 	}
 }
 
-func TestAnOperationNamesWhatItReverses(t *testing.T) {
+func TestAYesOrNoColumnReadsBackOffAnyEngine(t *testing.T) {
 	t.Parallel()
 
-	// Everything that undoes nothing settles itself, which is what lets one
-	// unique index carry the rule that an operation is reversed at most once.
-	own := wallet.Operation{ID: "operation-1", Kind: wallet.OperationDeposit, ReversesID: "operation-1"}
+	// The engines disagree about what a yes is, and this type is the one place
+	// that is flattened. A column this package could not read would be a column
+	// whose meaning it was inventing, so what it does not know is refused.
+	for _, answered := range []any{true, int64(1), int32(1), int16(1), 1, float64(1), []byte("1"), "true", "t", "YES"} {
+		var flag wallet.Flag
+		if err := flag.Scan(answered); err != nil {
+			t.Errorf("scanning %T(%v): %v", answered, answered, err)
+			continue
+		}
+		if !flag {
+			t.Errorf("%T(%v) read as no", answered, answered)
+		}
+	}
+	for _, answered := range []any{nil, false, int64(0), []byte("0"), "false", "f", ""} {
+		var flag wallet.Flag
+		if err := flag.Scan(answered); err != nil {
+			t.Errorf("scanning %T(%v): %v", answered, answered, err)
+			continue
+		}
+		if flag {
+			t.Errorf("%T(%v) read as yes", answered, answered)
+		}
+	}
+	for _, answered := range []any{"maybe", struct{}{}} {
+		var flag wallet.Flag
+		if err := flag.Scan(answered); err == nil {
+			t.Errorf("scanning %T(%v) was accepted and read as %t", answered, answered, bool(flag))
+		}
+	}
+
+	// And it goes back as the integer the column holds, which is what a driver
+	// told its column is a boolean would refuse.
+	for flag, want := range map[wallet.Flag]int64{true: 1, false: 0} {
+		got, err := flag.Value()
+		if err != nil {
+			t.Fatalf("Flag(%t).Value(): %v", bool(flag), err)
+		}
+		if got != want {
+			t.Errorf("Flag(%t) reaches the column as %v, want %d", bool(flag), got, want)
+		}
+	}
+}
+
+func TestAnOperationNamesWhatItSettles(t *testing.T) {
+	t.Parallel()
+
+	// Everything that settles nothing settles itself, which is what lets one
+	// unique index carry two rules at once: an operation is reversed at most
+	// once and confirmed at most once.
+	own := wallet.Operation{ID: "operation-1", Kind: wallet.OperationDeposit, SettlesID: "operation-1"}
 	if got := own.Reverses(); got != "" {
 		t.Fatalf("a deposit reported that it reverses %q", got)
 	}
+	if got := own.Confirms(); got != "" {
+		t.Fatalf("a deposit reported that it confirms %q", got)
+	}
 
-	undo := wallet.Operation{ID: "operation-2", Kind: wallet.OperationReversal, ReversesID: "operation-1"}
+	undo := wallet.Operation{ID: "operation-2", Kind: wallet.OperationReversal, SettlesID: "operation-1"}
 	if got := undo.Reverses(); got != "operation-1" {
 		t.Fatalf("a reversal reported that it reverses %q, want operation-1", got)
+	}
+	if got := undo.Confirms(); got != "" {
+		t.Fatalf("a reversal reported that it confirms %q", got)
+	}
+
+	// And the two never answer about each other: a confirmation names what it
+	// made count, and reverses nothing.
+	settle := wallet.Operation{ID: "operation-3", Kind: wallet.OperationConfirmation, SettlesID: "operation-1"}
+	if got := settle.Confirms(); got != "operation-1" {
+		t.Fatalf("a confirmation reported that it confirms %q, want operation-1", got)
+	}
+	if got := settle.Reverses(); got != "" {
+		t.Fatalf("a confirmation reported that it reverses %q", got)
 	}
 }

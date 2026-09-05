@@ -2,11 +2,20 @@
 //
 // A wallet holds an integer of minor units in one currency; a holder may have
 // several. Money enters and leaves through operations -- deposit, withdrawal,
-// transfer, exchange, reversal -- and every operation appends to a ledger that
-// is never rewritten. The balance column is the projection of that ledger and
-// is only ever moved by a statement carrying its own guard, so a withdrawal
-// that would overdraw is refused by the write itself rather than by a
-// comparison made before it.
+// transfer, exchange, reversal, confirmation -- and every operation appends to a
+// ledger that is never rewritten. The balance column is the projection of that
+// ledger and is only ever moved by a statement carrying its own guard, so a
+// withdrawal that would take the balance past what the wallet may hold is
+// refused by the write itself rather than by a comparison made before it.
+//
+// How far past zero a wallet may go is its credit limit, a column the guard
+// reads in the same statement that moves the money.
+//
+// A movement can be recorded without counting. Its entries are in the ledger
+// saying what was proposed, the balance has not moved, and a confirmation
+// appends the settled entry beside each of them under an operation naming the
+// one it settles. Nothing is ever flipped: the sum of the settled entries is the
+// balance, and what is still waiting is readable beside it.
 //
 // A transfer between wallets that are not counted the same way is an exchange,
 // which is its own kind of operation and not a transfer with a note on it. The
@@ -145,6 +154,7 @@ func (m *Module) Routes(r *fhttp.Router) {
 	m.register(r, "wallet.withdraw", m.withdraw)
 	m.register(r, "wallet.transfer", m.transfer)
 	m.register(r, "wallet.reverse", m.reverse)
+	m.register(r, "wallet.confirm", m.confirm)
 }
 
 // register mounts the named route, reading its method and its address from
@@ -328,10 +338,15 @@ func (m *Module) credit(ctx *fhttp.Context) error {
 
 // deposit puts money into one wallet.
 func (m *Module) deposit(ctx *fhttp.Context) error {
+	pending, err := readFlag("pending", ctx.Input("pending"))
+	if err != nil {
+		return m.answer(ctx, err)
+	}
 	in := DepositRequest{
 		IdempotencyKey: ctx.Header(IdempotencyHeader),
 		WalletID:       ctx.Param("id"),
 		Amount:         ctx.Input("amount"),
+		Pending:        pending,
 	}
 
 	receipt, err := m.svc.Deposit(ctx.Ctx(), m.subject(ctx.Request), in)
@@ -343,6 +358,10 @@ func (m *Module) deposit(ctx *fhttp.Context) error {
 
 // withdraw takes money out of one wallet.
 func (m *Module) withdraw(ctx *fhttp.Context) error {
+	pending, err := readFlag("pending", ctx.Input("pending"))
+	if err != nil {
+		return m.answer(ctx, err)
+	}
 	force, err := readFlag("force", ctx.Input("force"))
 	if err != nil {
 		return m.answer(ctx, err)
@@ -351,6 +370,7 @@ func (m *Module) withdraw(ctx *fhttp.Context) error {
 		IdempotencyKey: ctx.Header(IdempotencyHeader),
 		WalletID:       ctx.Param("id"),
 		Amount:         ctx.Input("amount"),
+		Pending:        pending,
 		Force:          force,
 	}
 
@@ -363,6 +383,10 @@ func (m *Module) withdraw(ctx *fhttp.Context) error {
 
 // transfer moves money from the wallet in the path into the one in the body.
 func (m *Module) transfer(ctx *fhttp.Context) error {
+	pending, err := readFlag("pending", ctx.Input("pending"))
+	if err != nil {
+		return m.answer(ctx, err)
+	}
 	force, err := readFlag("force", ctx.Input("force"))
 	if err != nil {
 		return m.answer(ctx, err)
@@ -372,6 +396,7 @@ func (m *Module) transfer(ctx *fhttp.Context) error {
 		FromWalletID:   ctx.Param("id"),
 		ToWalletID:     ctx.Input("to_wallet_id"),
 		Amount:         ctx.Input("amount"),
+		Pending:        pending,
 		Force:          force,
 	}
 
@@ -391,6 +416,25 @@ func (m *Module) reverse(ctx *fhttp.Context) error {
 	}
 
 	receipt, err := m.svc.Reverse(ctx.Ctx(), m.subject(ctx.Request), in)
+	if err != nil {
+		return m.answer(ctx, err)
+	}
+	return m.receipt(ctx, receipt)
+}
+
+// confirm makes one operation count.
+func (m *Module) confirm(ctx *fhttp.Context) error {
+	force, err := readFlag("force", ctx.Input("force"))
+	if err != nil {
+		return m.answer(ctx, err)
+	}
+	in := ConfirmRequest{
+		IdempotencyKey: ctx.Header(IdempotencyHeader),
+		OperationID:    ctx.Param("operation"),
+		Force:          force,
+	}
+
+	receipt, err := m.svc.Confirm(ctx.Ctx(), m.subject(ctx.Request), in)
 	if err != nil {
 		return m.answer(ctx, err)
 	}
@@ -519,6 +563,9 @@ func (m *Module) answer(ctx *fhttp.Context, err error) error {
 	case errors.Is(err, ErrAlreadyReversed):
 		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusConflict, "that operation has already been reversed")
 		return nil
+	case errors.Is(err, ErrAlreadyConfirmed):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusConflict, "that operation has already been confirmed")
+		return nil
 	case errors.Is(err, ErrOperationConflict):
 		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusConflict, "that idempotency key belongs to a different request")
 		return nil
@@ -553,6 +600,12 @@ func (m *Module) answer(ctx *fhttp.Context, err error) error {
 	case errors.Is(err, ErrNotReversible):
 		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, "a reversal cannot itself be reversed")
 		return nil
+	case errors.Is(err, ErrNotSettled):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, "that operation has not moved any money, so there is nothing to undo")
+		return nil
+	case errors.Is(err, ErrNotPending):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, "that operation has nothing waiting to be confirmed")
+		return nil
 	case errors.Is(err, ErrAmountNotPositive), errors.Is(err, ErrAmountScale),
 		errors.Is(err, ErrAmountSyntax), errors.Is(err, ErrAmountOverflow),
 		errors.Is(err, ErrDecimalPlaces):
@@ -581,6 +634,7 @@ func (m *Module) Migrations() []foundation.Migration {
 		createWalletEntries{},
 		createWalletConversions{},
 		addWalletCreditLimit{},
+		addWalletEntrySettlement{},
 	}
 }
 
@@ -594,6 +648,7 @@ var (
 	_ migrations.ReversibleMigration = createWalletEntries{}
 	_ migrations.ReversibleMigration = createWalletConversions{}
 	_ migrations.ReversibleMigration = addWalletCreditLimit{}
+	_ migrations.ReversibleMigration = addWalletEntrySettlement{}
 )
 
 // createWallets is the balances table.
@@ -817,5 +872,38 @@ func (addWalletCreditLimit) Up(ctx context.Context, conn migrations.Connection) 
 func (addWalletCreditLimit) Down(ctx context.Context, conn migrations.Connection) error {
 	return conn.Schema().Table(ctx, walletsTable, func(table *schema.Blueprint) {
 		table.DropColumn("credit_limit")
+	})
+}
+
+// addWalletEntrySettlement is whether a movement counted.
+type addWalletEntrySettlement struct{ migrations.BaseMigration }
+
+// GetName is the migration's identity, and it carries the order.
+func (addWalletEntrySettlement) GetName() string { return "20260905_0006_add_wallet_entry_settlement" }
+
+// Up adds to the ledger the column that says whether a row moved the balance.
+//
+// A small integer and not a boolean column, which is the same decision Flag
+// carries and made for the same reason: a Go bool arrives at the driver as 0 or
+// 1, and a driver told its column is a boolean refuses that.
+//
+// It defaults to one, which is what every row written before this ran is: the
+// ledger had no other kind. So the sum of the settled entries of any wallet is
+// what the sum of all of them was, and the balance column still equals it.
+//
+// The column is written once, with the row, and never updated -- the ledger is
+// appended to, and a confirmation appends the settled entry beside the pending
+// one rather than rewriting it. The table still has no updated_at, which is how
+// the schema says so.
+func (addWalletEntrySettlement) Up(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Table(ctx, entriesTable, func(table *schema.Blueprint) {
+		table.UnsignedSmallInteger("settled").Default(1)
+	})
+}
+
+// Down drops the column, which leaves every movement counting.
+func (addWalletEntrySettlement) Down(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Table(ctx, entriesTable, func(table *schema.Blueprint) {
+		table.DropColumn("settled")
 	})
 }

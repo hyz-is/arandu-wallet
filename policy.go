@@ -16,8 +16,9 @@ import (
 //
 // Money is split finer than read and write. A person who may see a balance is
 // not thereby a person who may spend it, and the one who may spend their own is
-// not the one who may undo somebody else's payment -- so viewing, depositing,
-// withdrawing, transferring and reversing are five decisions and not one.
+// not the one who may undo somebody else's payment, raise their own overdraft
+// limit or spend past it -- so each of those is its own decision rather than a
+// share of one.
 const (
 	// WalletView is reading one wallet, balance included.
 	WalletView security.Action = "wallet.view"
@@ -35,6 +36,8 @@ const (
 	WalletTransfer security.Action = "wallet.transfer"
 	// WalletReverse is undoing an operation.
 	WalletReverse security.Action = "wallet.reverse"
+	// WalletConfirm is making an operation that was only recorded count.
+	WalletConfirm security.Action = "wallet.confirm"
 	// WalletCredit is setting how far below zero a wallet may go.
 	WalletCredit security.Action = "wallet.credit"
 	// WalletForce is moving money past the limit that would otherwise refuse
@@ -117,7 +120,7 @@ func (WalletPolicy) Can(ctx context.Context, s security.Subject, a security.Acti
 		switch a {
 		case WalletView, WalletList, WalletCreate, WalletHistory,
 			WalletDeposit, WalletWithdraw, WalletTransfer, WalletReverse,
-			WalletCredit, WalletForce:
+			WalletConfirm, WalletCredit, WalletForce:
 			return nil
 		}
 	}
@@ -133,11 +136,12 @@ func (WalletPolicy) Can(ctx context.Context, s security.Subject, a security.Acti
 	// read them has already read them, so the service adds the holder predicate
 	// for a subject who is not an operator.
 	//
-	// Reversal is absent from the list, so it stops here for everybody who is
-	// not an operator.
+	// Reversal, the credit limit and forcing a movement past it are absent from
+	// the list, so all three stop here for everybody who is not an operator.
 	if isProbe(record) {
 		switch a {
-		case WalletList, WalletView, WalletHistory, WalletDeposit, WalletWithdraw, WalletTransfer:
+		case WalletList, WalletView, WalletHistory, WalletDeposit, WalletWithdraw,
+			WalletTransfer, WalletConfirm:
 			return nil
 		}
 		return fmt.Errorf("no rule allows %s on wallet", a)
@@ -146,7 +150,8 @@ func (WalletPolicy) Can(ctx context.Context, s security.Subject, a security.Acti
 	// The holder, on a row that has one. This is the call that decides.
 	if s.ID != "" && s.ID == record.HolderID {
 		switch a {
-		case WalletView, WalletHistory, WalletCreate, WalletDeposit, WalletWithdraw, WalletTransfer:
+		case WalletView, WalletHistory, WalletCreate, WalletDeposit, WalletWithdraw,
+			WalletTransfer, WalletConfirm:
 			return nil
 		}
 	}

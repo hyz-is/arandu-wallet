@@ -141,6 +141,7 @@ func TestTheModuleRegistersItsRoutesUnderItsPrefix(t *testing.T) {
 		"GET /widgets/{id}",
 		"GET /widgets/{id}/entries",
 		"POST /widgets",
+		"POST /widgets/operations/{operation}/confirmations",
 		"POST /widgets/operations/{operation}/reversals",
 		"POST /widgets/{id}/deposits",
 		"POST /widgets/{id}/transfers",

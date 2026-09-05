@@ -1,5 +1,59 @@
 # Upgrade Guide
 
+## Unreleased
+
+### Read what an operation settles under its new name
+
+`Operation.ReversesID` is now `Operation.SettlesID`. The column behind it keeps
+the name it was created under, so no data moves and no migration renames
+anything; what changed is the field, because the value it holds is now the
+operation a row reverses **or** the one it confirms.
+
+```go
+// Before.
+if operation.ReversesID != operation.ID {
+	// it undoes something
+}
+
+// After.
+if undone := operation.Reverses(); undone != "" {
+	// it undoes that
+}
+if settled := operation.Confirms(); settled != "" {
+	// it makes that count
+}
+```
+
+`Reverses()` answers exactly what it answered before. `Confirms()` is its twin
+for the new kind, and each is empty where the row is not that.
+
+### Sum the ledger the way it was always summed
+
+`Entry.Signed()` now answers zero for an entry that has not settled, so the sum
+of it over a wallet's whole history is still the balance column. Code that
+totals `Signed()` needs no change. Code that reads `Entry.Amount` and applies
+the sign itself has to read `Entry.Settled` as well, or it counts money that has
+not moved.
+
+```go
+// Before, and still correct.
+total += entry.Signed()
+
+// Before, and now wrong.
+if entry.Kind == wallet.EntryWithdraw {
+	total -= entry.Amount
+} else {
+	total += entry.Amount
+}
+```
+
+### Run the new migrations
+
+`aru migrate` before serving this version: `20260905_0005_add_wallet_credit_limit`
+and `20260905_0006_add_wallet_entry_settlement`. Both add a column with a
+default that leaves every existing row meaning exactly what it meant -- a floor
+of zero, and a movement that counted.
+
 ## v0.4.0
 
 Version 0.4.0 hands publishing to the framework. The package no longer defines

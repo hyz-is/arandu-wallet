@@ -16,6 +16,27 @@ they describe releases of the template and not of this package.
 
 ### Added
 
+- `(*WalletService).Confirm`, `ConfirmRequest`, `OperationConfirmation` and
+  `WalletConfirm`: a movement can be recorded without counting and made to count
+  later. Confirming appends the settled entry beside the pending one under an
+  operation that names the one it settles, so nothing already written changes
+  and a statement reads as what was proposed and then what happened. There is
+  one method and not the reference's pair of a safe and an unsafe one: this is
+  the safe one, and a caller who wants the movement anyway asks with `Force` and
+  is answered by the policy.
+- `Pending` on `DepositRequest`, `WithdrawRequest` and `TransferRequest`, and a
+  `pending` field on their bodies. False is what a client that never heard of it
+  sends, and is what those requests have always done.
+- `Entry.Settled`, whether a movement counted, and `Flag`, the type that spells
+  a yes-or-no column and reads it back off any engine. `Entry.Signed` answers
+  zero for a row that has not settled, so the sum of it over a whole ledger is
+  the balance column exactly as it was before anything could be pending.
+- `Receipt.Pending`, `Operation.Confirms`, and `confirms`, `pending` and
+  `settled` on the responses.
+- `ErrNotPending`, `ErrAlreadyConfirmed` and `ErrNotSettled`.
+- `POST <prefix>/operations/{operation}/confirmations`.
+- `20260905_0006_add_wallet_entry_settlement`. Running `aru migrate` is required
+  before this version serves.
 - `Wallet.CreditLimit`, how far below zero one wallet may go, as a positive
   number of minor units. It is a column and not a value an application answers
   for on each call, because the guard on a withdrawal reads it in the statement
@@ -40,7 +61,6 @@ they describe releases of the template and not of this package.
 - A wallet answers with `credit_limit_minor` and `credit_limit`, because a
   balance that may be negative is not readable without the number that says how
   far.
-
 - `OperationExchange`, the kind an operation is recorded under when it moved
   money between wallets that are not counted the same way. It is decided from
   the two wallets and never from the request, so a statement tells an exchange
@@ -74,6 +94,12 @@ they describe releases of the template and not of this package.
 
 ### Changed
 
+- `Operation.ReversesID` is now `Operation.SettlesID`, and holds the operation a
+  row reverses or the one it confirms. The column keeps the name it was created
+  under, so nothing moves and no migration renames it.
+- `(*WalletService).Reverse` refuses an operation that never moved anything,
+  with `ErrNotSettled`. What is undone is the operation that moved the money,
+  which for a movement that waited is its confirmation.
 - `ErrInsufficientFunds` now means the balance and the credit limit together
   are not enough, and its message says so. A wallet with no limit reads exactly
   as it did.

@@ -144,6 +144,13 @@ type DepositRequest struct {
 	// 1050. A value with more fraction digits than the wallet's scale is
 	// refused rather than rounded.
 	Amount string
+	// Pending records the movement without letting it count.
+	//
+	// The entry is written, the balance is not moved, and the money arrives
+	// when somebody confirms the operation. False is the ordinary request and
+	// the one a client that never heard of this field sends: what it asks for
+	// happens, once, now.
+	Pending bool
 }
 
 // Validate reports the errors per field.
@@ -159,6 +166,10 @@ type WithdrawRequest struct {
 	WalletID string
 	// Amount is the decimal to debit, written at the wallet's own scale.
 	Amount string
+	// Pending records the movement without letting it count, and holds
+	// nothing: the balance is judged where the money moves, which is at the
+	// confirmation.
+	Pending bool
 	// Force asks for the movement even where the balance and the credit limit
 	// do not cover it.
 	//
@@ -187,6 +198,10 @@ type TransferRequest struct {
 	// What arrives is the same amount when both wallets are counted the same
 	// way, and what the rate provider answers when they are not.
 	Amount string
+	// Pending records both movements without letting either count. A rate,
+	// where one is needed, is quoted and recorded now: what the confirmation
+	// applies is what this operation wrote down.
+	Pending bool
 	// Force asks for the movement even where the source's balance and credit
 	// limit do not cover it, and is answered by WalletForce.
 	Force bool
@@ -221,6 +236,30 @@ func (r ReverseRequest) Validate() validation.Errors {
 	validation.MaxLen(e, "operation_id", r.OperationID, maxIdentifierLen)
 	validation.Required(e, "reason", r.Reason)
 	validation.MaxLen(e, "reason", r.Reason, maxReasonLen)
+	return e
+}
+
+// ConfirmRequest is what settling a pending operation takes.
+type ConfirmRequest struct {
+	// IdempotencyKey is the caller's name for this request. It is the
+	// confirmation's own key, and never the key of the operation being
+	// confirmed.
+	IdempotencyKey string
+	// OperationID is the operation to make count.
+	OperationID string
+	// Force asks for the movement even where the balance and the credit limit
+	// do not cover it, and is answered by WalletForce on every wallet the
+	// operation touches.
+	Force bool
+}
+
+// Validate reports the errors per field.
+func (r ConfirmRequest) Validate() validation.Errors {
+	e := validation.Errors{}
+	validation.Required(e, "idempotency_key", r.IdempotencyKey)
+	validation.MaxLen(e, "idempotency_key", r.IdempotencyKey, maxIdempotencyKeyLen)
+	validation.Required(e, "operation_id", r.OperationID)
+	validation.MaxLen(e, "operation_id", r.OperationID, maxIdentifierLen)
 	return e
 }
 
@@ -266,6 +305,7 @@ var (
 	_ validation.Validatable = WithdrawRequest{}
 	_ validation.Validatable = TransferRequest{}
 	_ validation.Validatable = ReverseRequest{}
+	_ validation.Validatable = ConfirmRequest{}
 )
 
 // Statement is a page of one wallet's ledger, together with the wallet it
@@ -644,7 +684,7 @@ func (s *WalletService) Deposit(ctx context.Context, actor security.Subject, in 
 	return s.commit(ctx, g, operation{
 		key:  in.IdempotencyKey,
 		kind: OperationDeposit,
-	}, []movement{{wallet: target, kind: EntryDeposit, amount: amount}})
+	}, []movement{{wallet: target, kind: EntryDeposit, amount: amount, pending: in.Pending}})
 }
 
 // Withdraw takes money out of a wallet.
@@ -689,7 +729,7 @@ func (s *WalletService) Withdraw(ctx context.Context, actor security.Subject, in
 	return s.commit(ctx, g, operation{
 		key:  in.IdempotencyKey,
 		kind: OperationWithdraw,
-	}, []movement{{wallet: source, kind: EntryWithdraw, amount: amount, force: in.Force}})
+	}, []movement{{wallet: source, kind: EntryWithdraw, amount: amount, pending: in.Pending, force: in.Force}})
 }
 
 // allowForce asks the policy about ignoring the limit, and only where the
@@ -791,8 +831,8 @@ func (s *WalletService) Transfer(ctx context.Context, actor security.Subject, in
 		kind: kind,
 		rate: applied,
 	}, []movement{
-		{wallet: source, kind: EntryWithdraw, amount: debited, force: in.Force},
-		{wallet: target, kind: EntryDeposit, amount: credited},
+		{wallet: source, kind: EntryWithdraw, amount: debited, pending: in.Pending, force: in.Force},
+		{wallet: target, kind: EntryDeposit, amount: credited, pending: in.Pending},
 	})
 }
 
@@ -817,8 +857,11 @@ func converts(source, target Wallet) bool {
 // what a person asking "why is this balance what it is" needs to see.
 //
 // It is refused when the money is no longer there: a reversal that would take a
-// balance below zero answers ErrInsufficientFunds, because a wallet that owes
-// money is a state this package has no way to represent and no way to collect.
+// balance past what the wallet may hold answers ErrInsufficientFunds.
+//
+// It is refused as well when the operation never moved anything, with
+// ErrNotSettled. What you undo is the operation that moved the money, and for a
+// movement that waited to be confirmed that is the confirmation.
 //
 // An operation can be undone once. The second attempt answers
 // ErrAlreadyReversed, and the refusal is a unique index rather than a check, so
@@ -866,10 +909,10 @@ func (s *WalletService) Reverse(ctx context.Context, actor security.Subject, in 
 	}
 
 	receipt, err := s.commit(ctx, g, operation{
-		key:      in.IdempotencyKey,
-		kind:     OperationReversal,
-		reverses: original.ID,
-		reason:   in.Reason,
+		key:     in.IdempotencyKey,
+		kind:    OperationReversal,
+		settles: original.ID,
+		reason:  in.Reason,
 	}, movements)
 	if err != nil && !errors.Is(err, ErrInsufficientFunds) {
 		// The unique index on the operation being settled is what refuses a
@@ -883,13 +926,81 @@ func (s *WalletService) Reverse(ctx context.Context, actor security.Subject, in 
 	return receipt, err
 }
 
+// Confirm makes an operation that was only recorded count.
+//
+// It is the second half of a movement written as pending: the entries are
+// already in the ledger, saying what was proposed and counting for nothing, and
+// this appends the settled entry beside each of them under an operation that
+// names the one it settles. Nothing already written changes -- which is why
+// this is an operation of its own rather than a column somebody flips, and why
+// a statement afterwards reads as what was asked for and then what happened.
+//
+// The money is judged here, because here is where it moves. A pending
+// withdrawal holds nothing, so a confirmation whose wallet no longer covers it
+// answers ErrInsufficientFunds, and the balance it is judged against is the
+// balance at this write and not the one when the request was recorded.
+//
+// An operation is confirmed once. The second attempt answers
+// ErrAlreadyConfirmed, and the refusal is a unique index rather than a check,
+// so two confirmations arriving together cannot both be the one that succeeds.
+// An operation with nothing waiting -- one that settled when it was made, a
+// reversal, another confirmation -- answers ErrNotPending.
+//
+// There is one method and not the reference's pair of a safe and an unsafe one.
+// This is the safe one: it reports why it could not settle instead of answering
+// false, and a caller that wants the movement anyway asks for it in the request
+// and is answered by the policy.
+func (s *WalletService) Confirm(ctx context.Context, actor security.Subject, in ConfirmRequest) (Receipt, error) {
+	if errs := in.Validate(); errs.Any() {
+		return Receipt{}, errs
+	}
+
+	g, err := security.Authorize(ctx, s.policy, actor, WalletConfirm, Wallet{})
+	if err != nil {
+		return Receipt{}, err
+	}
+
+	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationConfirmation); err != nil || found {
+		return receipt, err
+	}
+
+	original, err := Operations(s.db).NewQuery().WhereKey(in.OperationID).First(ctx, g)
+	if err != nil {
+		return Receipt{}, err
+	}
+	if original == nil {
+		return Receipt{}, ErrNotFound
+	}
+
+	movements, err := s.settle(ctx, g, actor, in, original.ID)
+	if err != nil {
+		return Receipt{}, err
+	}
+
+	receipt, err := s.commit(ctx, g, operation{
+		key:     in.IdempotencyKey,
+		kind:    OperationConfirmation,
+		settles: original.ID,
+	}, movements)
+	if err != nil && !errors.Is(err, ErrInsufficientFunds) {
+		// The unique index on the operation being settled is what refuses a
+		// second confirmation, and this turns its answer into ours. Read after
+		// the failure, never instead of it: a check that ran before is a check
+		// two concurrent confirmations both passed.
+		if done, lookupErr := s.confirmed(ctx, g, original.ID); lookupErr == nil && done {
+			return Receipt{}, ErrAlreadyConfirmed
+		}
+	}
+	return receipt, err
+}
+
 // operation is what commit records before the money moves.
 type operation struct {
-	key      string
-	kind     OperationKind
-	reverses string
-	reason   string
-	rate     *appliedRate
+	key     string
+	kind    OperationKind
+	settles string
+	reason  string
+	rate    *appliedRate
 }
 
 // appliedRate is the conversion an operation performed, and nil where it
@@ -911,6 +1022,10 @@ type movement struct {
 	wallet *Wallet
 	kind   EntryKind
 	amount Amount
+	// pending records the movement without moving the balance. The entry it
+	// writes takes its place in the wallet's history and counts for nothing
+	// until a confirmation appends the settled entry beside it.
+	pending bool
 	// force lowers this movement's floor to the range of the column, and is
 	// authorized where the request that asked for it is read. It is a field
 	// rather than a second kind of movement, so there is one statement, one
@@ -977,14 +1092,15 @@ func (s *WalletService) commit(ctx context.Context, g security.Grant, op operati
 	record.IdempotencyKey = op.key
 	record.Kind = op.kind
 	record.Reason = op.reason
-	// An operation settles exactly one thing: the operation it reverses, or
-	// itself. With the kind beside it in a unique index, that one column
-	// carries the whole rule that an operation is undone at most once, and a
-	// row that undoes nothing collides with nothing -- including with the
-	// reversal that names it, which differs from it in kind.
-	record.ReversesID = op.reverses
-	if record.ReversesID == "" {
-		record.ReversesID = id
+	// An operation settles exactly one thing: the operation it reverses, the
+	// operation it confirms, or itself. With the kind beside it in a unique
+	// index, that one column carries the whole rule that an operation is undone
+	// at most once and confirmed at most once, and a row that settles nothing
+	// collides with nothing -- including with the reversal or the confirmation
+	// that names it, which differ from it in kind.
+	record.SettlesID = op.settles
+	if record.SettlesID == "" {
+		record.SettlesID = id
 	}
 
 	var entries []Entry
@@ -1102,15 +1218,23 @@ func (s *WalletService) move(ctx context.Context, g security.Grant, operationID 
 
 	var affected int64
 	var err error
-	switch m.kind {
-	case EntryWithdraw:
+	switch {
+	case m.pending:
+		// A movement that has not settled moves no balance, so its statement
+		// touches none. It still takes a position in the ledger, because the
+		// row it writes is part of that wallet's history and a history is read
+		// in order -- and the position has to be one nothing else can be
+		// holding, which is why it comes from the statement rather than from a
+		// number read here.
+		affected, err = rows.NewQuery().WhereKey(m.wallet.ID).Update(ctx, g, stepped())
+	case m.kind == EntryWithdraw:
 		// The balance has to still be enough at the moment of the write, and
 		// what "enough" is comes off the same row in the same statement.
 		affected, err = rows.NewQuery().
 			WhereKey(m.wallet.ID).
 			Where("balance", ">=", withdrawalFloor(m.amount, m.force)).
 			Decrement(ctx, g, "balance", int64(m.amount), stepped())
-	case EntryDeposit:
+	case m.kind == EntryDeposit:
 		// And it has to still have room, or the column wraps into a negative
 		// balance that no rule in this package would ever have allowed.
 		affected, err = rows.NewQuery().
@@ -1135,7 +1259,12 @@ func (s *WalletService) move(ctx context.Context, g security.Grant, operationID 
 		return Entry{}, ErrNotFound
 	}
 	if affected == 0 {
-		if m.kind == EntryWithdraw {
+		switch {
+		case m.pending:
+			// Nothing about the money can have refused this one, so the row is
+			// gone: another statement in this transaction would have read it.
+			return Entry{}, ErrNotFound
+		case m.kind == EntryWithdraw:
 			return Entry{}, ErrInsufficientFunds
 		}
 		return Entry{}, ErrAmountOverflow
@@ -1159,6 +1288,7 @@ func (s *WalletService) move(ctx context.Context, g security.Grant, operationID 
 	written.Position = position
 	written.Amount = m.amount
 	written.BalanceAfter = after.Balance
+	written.Settled = Flag(!m.pending)
 	written.CreatedAt = time.Now().UTC()
 	if _, err := written.Save(ctx, g); err != nil {
 		return Entry{}, err
@@ -1225,11 +1355,18 @@ func (s *WalletService) reversed(ctx context.Context, g security.Grant, operatio
 		Exists(ctx, g)
 }
 
-// mirror turns the entries of an operation into the movements that undo it, and
-// asks the policy about every wallet they touch.
+// mirror turns the settled entries of an operation into the movements that undo
+// it, and asks the policy about every wallet they touch.
 //
 // The question is asked per wallet and not once for the operation, because a
 // transfer's two entries are two people's money and a reversal moves both.
+//
+// Only the entries that settled are mirrored, and an operation that settled
+// none has nothing to undo: what a pending operation wrote is a record of what
+// was proposed, and appending its opposite would take out money that was never
+// put in. That is one rule and not a second path -- you undo the operation that
+// moved the money, which for a movement that waited is the confirmation and not
+// the request.
 func (s *WalletService) mirror(ctx context.Context, g security.Grant, actor security.Subject, operationID string) ([]movement, error) {
 	written, err := Entries(s.db).NewQuery().
 		Where("operation_id", "=", operationID).
@@ -1245,7 +1382,7 @@ func (s *WalletService) mirror(ctx context.Context, g security.Grant, actor secu
 	rows := Wallets(s.db)
 	movements := make([]movement, 0, len(written))
 	for _, entry := range written {
-		if entry == nil {
+		if entry == nil || !entry.Settled {
 			continue
 		}
 		holder, err := rows.NewQuery().WhereKey(entry.WalletID).First(ctx, g)
@@ -1264,7 +1401,71 @@ func (s *WalletService) mirror(ctx context.Context, g security.Grant, actor secu
 		}
 		movements = append(movements, movement{wallet: holder, kind: kind, amount: entry.Amount})
 	}
+	if len(movements) == 0 {
+		return nil, ErrNotSettled
+	}
 	return movements, nil
+}
+
+// settle turns the pending entries of an operation into the movements that make
+// them count, and asks the policy about every wallet they touch.
+//
+// Each movement is the pending one again, in the same direction and for the same
+// amount: what is being confirmed is what was written down, so nothing here
+// recomputes it. An exchange is not re-quoted either -- the rate belongs to the
+// operation that quoted it and is on the record beside it, and asking again
+// would settle at a number nobody was told.
+//
+// The amount is read off the entry rather than from the wallet, and the guard
+// runs at this write. A pending withdrawal holds nothing, so the balance that
+// decides is the balance now.
+func (s *WalletService) settle(ctx context.Context, g security.Grant, actor security.Subject, in ConfirmRequest, operationID string) ([]movement, error) {
+	written, err := Entries(s.db).NewQuery().
+		Where("operation_id", "=", operationID).
+		OrderBy("position").
+		Get(ctx, g)
+	if err != nil {
+		return nil, err
+	}
+	if len(written) == 0 {
+		return nil, ErrNotFound
+	}
+
+	rows := Wallets(s.db)
+	movements := make([]movement, 0, len(written))
+	for _, entry := range written {
+		if entry == nil || entry.Settled {
+			continue
+		}
+		holder, err := rows.NewQuery().WhereKey(entry.WalletID).First(ctx, g)
+		if err != nil {
+			return nil, err
+		}
+		if holder == nil {
+			return nil, ErrNotFound
+		}
+		if _, err := security.Authorize(ctx, s.policy, actor, WalletConfirm, *holder); err != nil {
+			return nil, err
+		}
+		if err := s.allowForce(ctx, actor, in.Force, *holder); err != nil {
+			return nil, err
+		}
+		movements = append(movements, movement{
+			wallet: holder, kind: entry.Kind, amount: entry.Amount, force: in.Force,
+		})
+	}
+	if len(movements) == 0 {
+		return nil, ErrNotPending
+	}
+	return movements, nil
+}
+
+// confirmed reports whether an operation has already been made to count.
+func (s *WalletService) confirmed(ctx context.Context, g security.Grant, operationID string) (bool, error) {
+	return Operations(s.db).NewQuery().
+		Where("reverses_id", "=", operationID).
+		Where("kind", "=", string(OperationConfirmation)).
+		Exists(ctx, g)
 }
 
 // convert is how much arrives in the target wallet, and the rate that decided

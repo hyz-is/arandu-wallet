@@ -63,9 +63,9 @@ this one must prove about itself it proves in its own suite or nowhere.
 | | measured with |
 | --- | --- |
 | 8 Go files, one per role, all in one package at the root | `grep -l '^package wallet' *.go` |
-| 15 test files, 130 passing tests and subtests, and 7 more when `ARANDU_TEST_POSTGRES_DSN` names a server | `find tests -name '*_test.go'` · `go test -count=1 ./... -v \| grep -cE '^( *)--- PASS'` |
-| 9 routes | `grep -c 'm.register(r,' module.go` |
-| 10 actions the policy answers about | `grep -cE '^\t[A-Za-z]+ security.Action = ' policy.go` |
+| 16 test files, 141 passing tests and subtests, and 8 more when `ARANDU_TEST_POSTGRES_DSN` names a server | `find tests -name '*_test.go'` · `go test -count=1 ./... -v \| grep -cE '^( *)--- PASS'` |
+| 10 routes | `grep -c 'm.register(r,' module.go` |
+| 11 actions the policy answers about | `grep -cE '^\t[A-Za-z]+ security.Action = ' policy.go` |
 | 4 direct dependencies, all under `arandu-io` | `go list -m -f '{{if and (not .Indirect) (not .Main)}}{{.Path}} {{.Version}}{{end}}' all` |
 
 Two of those four are database connectors, imported by the test suite and by

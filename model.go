@@ -1,7 +1,10 @@
 package wallet
 
 import (
+	"database/sql/driver"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/arandu-io/framework/data"
@@ -138,6 +141,12 @@ const (
 	OperationExchange OperationKind = "exchange"
 	// OperationReversal undid an earlier operation.
 	OperationReversal OperationKind = "reversal"
+	// OperationConfirmation settled an operation that was recorded without
+	// moving anything. It is its own operation and not a change to the one it
+	// settles, because the ledger is appended to and never rewritten: what was
+	// proposed stays on the record exactly as it was proposed, and what
+	// happened is the row beside it.
+	OperationConfirmation OperationKind = "confirmation"
 )
 
 // Operation is one request that moved money, recorded before the money moves.
@@ -163,16 +172,20 @@ type Operation struct {
 	// Kind is what the operation was asked to do.
 	Kind OperationKind `db:"kind"`
 
-	// ReversesID is the operation this one settles.
+	// SettlesID is the operation this one settles.
 	//
-	// A reversal holds the id of the operation it undoes. Everything else
-	// holds its own id, which is what lets one unique index over the kind and
-	// this column carry the whole rule: an operation is reversed at most once,
-	// and a row that reverses nothing collides with nothing -- not even with
-	// the reversal that names it, because the two differ in kind. Read it with
-	// Reverses, which answers with the empty string where this row reverses
-	// nothing.
-	ReversesID string `db:"reverses_id"`
+	// A reversal holds the id of the operation it undoes and a confirmation
+	// the id of the one it makes count. Everything else holds its own id,
+	// which is what lets one unique index over the kind and this column carry
+	// two rules at once: an operation is reversed at most once and confirmed at
+	// most once, and a row that settles nothing collides with nothing -- not
+	// even with the reversal or the confirmation naming it, because those
+	// differ from it in kind.
+	//
+	// It is stored in the column named reverses_id, which is the name the
+	// column was created under. Read it with Reverses and Confirms, each of
+	// which answers with the empty string where this row is not that.
+	SettlesID string `db:"reverses_id"`
 
 	// Reason is what the caller said about a reversal, and is empty on
 	// everything else.
@@ -193,10 +206,19 @@ func Operations(db *data.DB) *model.Model[Operation] {
 // Reverses is the operation this one undoes, and the empty string when it
 // undoes nothing.
 func (o Operation) Reverses() string {
-	if o.Kind != OperationReversal || o.ReversesID == o.ID {
+	if o.Kind != OperationReversal || o.SettlesID == o.ID {
 		return ""
 	}
-	return o.ReversesID
+	return o.SettlesID
+}
+
+// Confirms is the operation this one made count, and the empty string when it
+// confirms nothing.
+func (o Operation) Confirms() string {
+	if o.Kind != OperationConfirmation || o.SettlesID == o.ID {
+		return ""
+	}
+	return o.SettlesID
 }
 
 // Conversion is the rate one operation applied, recorded as it was applied.
@@ -319,6 +341,77 @@ const (
 	EntryWithdraw EntryKind = "withdraw"
 )
 
+// Flag is a yes-or-no column, and it carries how it is written and how it is
+// read back.
+//
+// The column behind it is a small integer rather than a boolean one, because
+// the two ends of the connection disagree about what a boolean is: the database
+// layer turns a Go bool into 0 or 1 before the driver sees it, and a driver that
+// has been told its column is a boolean refuses that integer. The column is
+// therefore the integer, and reading it is this type's own business -- which is
+// the same arrangement Amount has with the column that holds money, and for the
+// same reason: a value that spells its own column cannot be spelled differently
+// by an engine.
+type Flag bool
+
+// Value writes the flag as the integer the column holds.
+func (f Flag) Value() (driver.Value, error) {
+	if f {
+		return int64(1), nil
+	}
+	return int64(0), nil
+}
+
+// Scan reads the flag back from whatever an engine answers with.
+//
+// The engines disagree, and this is where that is flattened: an integer, a
+// boolean, the text of either, and the bytes of any of them all mean the same
+// thing. Anything else is refused rather than read as false, because a column
+// this package cannot read is a column whose meaning it would be inventing.
+func (f *Flag) Scan(value any) error {
+	switch v := value.(type) {
+	case nil:
+		*f = false
+		return nil
+	case bool:
+		*f = Flag(v)
+		return nil
+	case int64:
+		*f = v != 0
+		return nil
+	case int32:
+		*f = v != 0
+		return nil
+	case int16:
+		*f = v != 0
+		return nil
+	case int:
+		*f = v != 0
+		return nil
+	case float64:
+		*f = v != 0
+		return nil
+	case []byte:
+		return f.scanText(string(v))
+	case string:
+		return f.scanText(v)
+	}
+	return fmt.Errorf("wallet: a yes-or-no column answered with a %T", value)
+}
+
+// scanText reads a flag an engine answered as text.
+func (f *Flag) scanText(text string) error {
+	switch strings.ToLower(strings.TrimSpace(text)) {
+	case "1", "t", "true", "y", "yes", "on":
+		*f = true
+		return nil
+	case "0", "f", "false", "n", "no", "off", "":
+		*f = false
+		return nil
+	}
+	return fmt.Errorf("wallet: a yes-or-no column answered %q", text)
+}
+
 // Entry is one movement of money on one wallet, and the ledger is the sum of
 // them.
 //
@@ -368,8 +461,20 @@ type Entry struct {
 	// Written because a statement a person reads is a running balance, and
 	// recomputing one means replaying every earlier row. It is also what makes
 	// the ledger check itself: the last entry of a wallet has to equal the
-	// wallet's balance column.
+	// wallet's balance column. A pending entry moved nothing, so it records the
+	// balance it did not change, and that identity holds down the whole page.
 	BalanceAfter Amount `db:"balance_after"`
+
+	// Settled reports that this movement counted: that the balance moved by
+	// exactly this amount, in this direction, when the row was written.
+	//
+	// A pending entry is false, and it is the record of money that was proposed
+	// and has not moved. It is written once like every other column here and is
+	// never flipped afterwards -- confirming appends the settled entry beside
+	// it, under an operation that names the one it settles, so a wallet's
+	// history says what was asked for and then what happened rather than
+	// showing only the second of the two.
+	Settled Flag `db:"settled"`
 
 	// CreatedAt is when the movement was written, in UTC.
 	CreatedAt time.Time `db:"created_at"`
@@ -384,11 +489,18 @@ func Entries(db *data.DB) *model.Model[Entry] {
 }
 
 // Signed is the movement as it adds to a balance: positive for a deposit,
-// negative for a withdrawal.
+// negative for a withdrawal, and zero where it has not settled.
 //
 // It is how a sum over a history is taken, and it is a method rather than a
-// column so that the sign exists in exactly one place.
+// column so that the sign exists in exactly one place. The zero is the same
+// decision: a pending entry adds nothing to a balance, so the sum of this over
+// a wallet's whole history is the balance column, exactly as it was before
+// anything could be pending. What the amount of a pending row means is what was
+// proposed, and Amount is where that is read.
 func (e Entry) Signed() Amount {
+	if !e.Settled {
+		return 0
+	}
 	if e.Kind == EntryWithdraw {
 		return -e.Amount
 	}
@@ -443,6 +555,22 @@ var (
 	// reversal. Undoing an undo is a new operation with its own reason, not a
 	// second reversal of the same movement.
 	ErrNotReversible = errors.New("wallet: a reversal cannot itself be reversed")
+
+	// ErrNotSettled is returned when a reversal names an operation that never
+	// moved anything. There is nothing to undo: what a pending operation wrote
+	// is a record of what was proposed, and appending its opposite would take
+	// out money that was never put in.
+	ErrNotSettled = errors.New("wallet: that operation has not moved any money, so there is nothing to undo")
+
+	// ErrNotPending is returned when a confirmation names an operation that has
+	// no pending entry. Everything it wrote already counts, and confirming it
+	// again would move the money a second time.
+	ErrNotPending = errors.New("wallet: that operation has nothing waiting to be confirmed")
+
+	// ErrAlreadyConfirmed is returned when an operation has already been made
+	// to count. The refusal comes from a unique index, so two concurrent
+	// confirmations of one operation cannot both succeed.
+	ErrAlreadyConfirmed = errors.New("wallet: this operation has already been confirmed")
 
 	// ErrWalletExists is returned when the holder already has a wallet under
 	// this slug.
@@ -649,6 +777,7 @@ type EntryResource struct {
 	kind          EntryKind
 	amount        Amount
 	balanceAfter  Amount
+	settled       Flag
 	decimalPlaces int
 	createdAt     time.Time
 }
@@ -671,12 +800,18 @@ func NewEntryResource(record Entry, decimalPlaces int, kind OperationKind) Entry
 		kind:          record.Kind,
 		amount:        record.Amount,
 		balanceAfter:  record.BalanceAfter,
+		settled:       record.Settled,
 		decimalPlaces: decimalPlaces,
 		createdAt:     record.CreatedAt,
 	}
 }
 
 // ToArray returns the fields that may leave, by name.
+//
+// Whether the movement settled leaves with it, because the amount alone does
+// not say whether it counted: a client that added up the amounts of a page and
+// found the balance would be a client that was right until the first pending
+// row.
 func (r EntryResource) ToArray() map[string]any {
 	return map[string]any{
 		"id":                  r.id,
@@ -688,6 +823,7 @@ func (r EntryResource) ToArray() map[string]any {
 		"amount":              r.amount.Format(r.decimalPlaces),
 		"balance_after_minor": int64(r.balanceAfter),
 		"balance_after":       r.balanceAfter.Format(r.decimalPlaces),
+		"settled":             bool(r.settled),
 		"created_at":          r.createdAt.UTC().Format(time.RFC3339),
 	}
 }
@@ -785,12 +921,29 @@ type Receipt struct {
 	Replayed bool
 }
 
+// Pending reports that this operation is on the record and has not moved any
+// money: every entry it wrote is waiting to be confirmed.
+//
+// A receipt with no entries at all is not pending. There is nothing waiting in
+// it, and answering that there is would be answering about a movement that does
+// not exist.
+func (r Receipt) Pending() bool {
+	for _, entry := range r.Entries {
+		if entry.Settled {
+			return false
+		}
+	}
+	return len(r.Entries) > 0
+}
+
 // ReceiptResource is what a receipt may answer with.
 type ReceiptResource struct {
 	operationID    string
 	kind           OperationKind
 	idempotencyKey string
 	reverses       string
+	confirms       string
+	pending        bool
 	replayed       bool
 	entries        []EntryResource
 	conversion     *ConversionResource
@@ -820,6 +973,8 @@ func NewReceiptResource(receipt Receipt, places map[string]int) ReceiptResource 
 		kind:           receipt.Operation.Kind,
 		idempotencyKey: receipt.Operation.IdempotencyKey,
 		reverses:       receipt.Operation.Reverses(),
+		confirms:       receipt.Operation.Confirms(),
+		pending:        receipt.Pending(),
 		replayed:       receipt.Replayed,
 		entries:        entries,
 		conversion:     conversion,
@@ -847,6 +1002,8 @@ func (r ReceiptResource) ToArray() map[string]any {
 		"kind":            string(r.kind),
 		"idempotency_key": r.idempotencyKey,
 		"reverses":        r.reverses,
+		"confirms":        r.confirms,
+		"pending":         r.pending,
 		"replayed":        r.replayed,
 		"entries":         entries,
 		"conversion":      conversion,
