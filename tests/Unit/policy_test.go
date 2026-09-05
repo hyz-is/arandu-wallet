@@ -31,7 +31,7 @@ import (
 // a policy is only as good as what it refuses when the money is really there.
 
 // everyAction is the whole set the policy answers about. A test that listed
-// seven of eight would pass while the eighth was open.
+// nine of ten would pass while the tenth was open.
 var everyAction = []security.Action{
 	wallet.WalletView,
 	wallet.WalletList,
@@ -41,6 +41,8 @@ var everyAction = []security.Action{
 	wallet.WalletWithdraw,
 	wallet.WalletTransfer,
 	wallet.WalletReverse,
+	wallet.WalletCredit,
+	wallet.WalletForce,
 }
 
 // operator is the most privileged subject this package knows: somebody the
@@ -115,6 +117,27 @@ func TestOnlyAnOperatorMayReverse(t *testing.T) {
 	if _, err := security.Authorize(context.Background(), wallet.WalletPolicy{},
 		operator(), wallet.WalletReverse, theirWallet()); err != nil {
 		t.Fatalf("an operator was refused a reversal: %v", err)
+	}
+}
+
+func TestOnlyAnOperatorSetsACreditLimitOrIgnoresIt(t *testing.T) {
+	t.Parallel()
+
+	// A holder who could set their own limit could lend themselves money, and
+	// one who could force a movement past it would not need to set it first.
+	// Both are refused at the probe as well as on the row, so neither is
+	// reachable by loading a wallet first.
+	for _, action := range []security.Action{wallet.WalletCredit, wallet.WalletForce} {
+		for _, record := range []wallet.Wallet{{}, theirWallet()} {
+			if _, err := security.Authorize(context.Background(), wallet.WalletPolicy{},
+				holder(), action, record); !errors.Is(err, security.ErrForbidden) {
+				t.Errorf("the holder was allowed %s: got %v, want ErrForbidden", action, err)
+			}
+		}
+		if _, err := security.Authorize(context.Background(), wallet.WalletPolicy{},
+			operator(), action, theirWallet()); err != nil {
+			t.Errorf("an operator was refused %s: %v", action, err)
+		}
 	}
 }
 
@@ -237,6 +260,11 @@ func TestTheServiceRefusesBeforeReachingTheModel(t *testing.T) {
 		"Reverse": func() error {
 			_, err := service.Reverse(ctx, actor, wallet.ReverseRequest{
 				IdempotencyKey: "key-1", OperationID: "operation-1", Reason: "asked"})
+			return err
+		},
+		"SetCredit": func() error {
+			_, err := service.SetCredit(ctx, actor, wallet.CreditRequest{
+				WalletID: "wallet-1", Limit: "10.00"})
 			return err
 		},
 	}

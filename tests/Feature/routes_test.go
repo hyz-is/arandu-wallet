@@ -145,6 +145,7 @@ func TestTheModuleRegistersItsRoutesUnderItsPrefix(t *testing.T) {
 		"POST /widgets/{id}/deposits",
 		"POST /widgets/{id}/transfers",
 		"POST /widgets/{id}/withdrawals",
+		"PUT /widgets/{id}/credit",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("registered %v, want %v", got, want)

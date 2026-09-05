@@ -218,6 +218,87 @@ func TestTheGuardIsWhatKeepsTheBalanceWhole(t *testing.T) {
 	}
 }
 
+// TestTheGuardCountsTheCreditLimitAndStopsAtIt is the same property as the
+// test above with a floor that is not zero, and it is a separate test because
+// the mutation that breaks it is a different one.
+//
+// A guard that compared the balance against the amount alone would be safe and
+// wrong: it would refuse ten of the thirty withdrawals this wallet can afford,
+// and the count below says so. A guard that read the limit in Go and decided
+// there would pass on SQLite and let this wallet past its limit here, which is
+// why the assertion is on the exact count and the exact final balance rather
+// than only on the sign.
+func TestTheGuardCountsTheCreditLimitAndStopsAtIt(t *testing.T) {
+	t.Parallel()
+
+	service := wallet.NewWalletService(postgres(t), nil)
+	account := openWallet(t, service, "user-1", "main", 2)
+
+	// Twenty units in and ten of credit: thirty withdrawals of one unit are
+	// affordable and the two hundredth is not.
+	const (
+		opening    = wallet.Amount(2000)
+		credit     = wallet.Amount(1000)
+		each       = wallet.Amount(100)
+		affordable = int((opening + credit) / each)
+	)
+	deposit(t, service, account.ID, "opening", "20.00")
+	creditLimit(t, service, account.ID, "10.00")
+
+	var (
+		start     sync.WaitGroup
+		done      sync.WaitGroup
+		mu        sync.Mutex
+		succeeded int
+		other     []error
+	)
+	start.Add(1)
+	done.Add(withdrawers)
+
+	for i := range withdrawers {
+		go func() {
+			defer done.Done()
+			start.Wait()
+
+			_, err := service.Withdraw(context.Background(), staff(), wallet.WithdrawRequest{
+				IdempotencyKey: fmt.Sprintf("withdraw-%d", i),
+				WalletID:       account.ID,
+				Amount:         "1.00",
+			})
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case err == nil:
+				succeeded++
+			case errors.Is(err, wallet.ErrInsufficientFunds):
+			default:
+				other = append(other, err)
+			}
+		}()
+	}
+	start.Done()
+	done.Wait()
+
+	for _, err := range other {
+		t.Errorf("a withdrawal failed for a reason that is not the balance: %v", err)
+	}
+	if succeeded != affordable {
+		t.Errorf("%d withdrawals succeeded against a balance of %d and a credit limit of %d, want exactly %d",
+			succeeded, opening, credit, affordable)
+	}
+
+	balance := balanceOf(t, service, account.ID)
+	if balance < -credit {
+		t.Fatalf("the balance is %d, which is past a credit limit of %d", balance, credit)
+	}
+	if want := opening - wallet.Amount(succeeded)*each; balance != want {
+		t.Fatalf("the balance is %d, want %d", balance, want)
+	}
+	if ledger := ledgerOf(t, service, account.ID); ledger != balance {
+		t.Fatalf("the ledger sums to %d and the balance column says %d", ledger, balance)
+	}
+}
+
 func TestTheIdempotencyKeyHoldsWhenTransactionsInterleave(t *testing.T) {
 	t.Parallel()
 

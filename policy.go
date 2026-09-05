@@ -35,6 +35,13 @@ const (
 	WalletTransfer security.Action = "wallet.transfer"
 	// WalletReverse is undoing an operation.
 	WalletReverse security.Action = "wallet.reverse"
+	// WalletCredit is setting how far below zero a wallet may go.
+	WalletCredit security.Action = "wallet.credit"
+	// WalletForce is moving money past the limit that would otherwise refuse
+	// it. It is its own decision and not a field the caller is trusted with:
+	// the request says that it wants the limit ignored, and this says who may
+	// be answered.
+	WalletForce security.Action = "wallet.force"
 )
 
 // OperatorRole is the role an application grants to the people who run its
@@ -58,6 +65,10 @@ const OperatorRole = "wallet.operator"
 // Reversal is deliberately not the holder's. Undoing a payment is a decision
 // about a movement that already settled, and letting the person who received it
 // take it back is a hole with a name.
+//
+// Neither is the overdraft limit, and neither is moving money past it. A holder
+// who could raise their own limit could spend money nobody lent them, and one
+// who could ignore it would not need to raise it first.
 type WalletPolicy struct{}
 
 // Compile-time proof that the policy answers about this entity and no other. A
@@ -105,7 +116,8 @@ func (WalletPolicy) Can(ctx context.Context, s security.Subject, a security.Acti
 	if s.HasRole(OperatorRole) {
 		switch a {
 		case WalletView, WalletList, WalletCreate, WalletHistory,
-			WalletDeposit, WalletWithdraw, WalletTransfer, WalletReverse:
+			WalletDeposit, WalletWithdraw, WalletTransfer, WalletReverse,
+			WalletCredit, WalletForce:
 			return nil
 		}
 	}

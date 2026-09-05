@@ -140,6 +140,7 @@ func (m *Module) Routes(r *fhttp.Router) {
 	m.register(r, "wallet.store", m.store)
 	m.register(r, "wallet.show", m.show)
 	m.register(r, "wallet.entries", m.entries)
+	m.register(r, "wallet.credit", m.credit)
 	m.register(r, "wallet.deposit", m.deposit)
 	m.register(r, "wallet.withdraw", m.withdraw)
 	m.register(r, "wallet.transfer", m.transfer)
@@ -311,6 +312,20 @@ func (m *Module) entries(ctx *fhttp.Context) error {
 	return ctx.JSON(stdhttp.StatusOK, NewEntryCollection(statement, cursor))
 }
 
+// credit sets how far below zero one wallet may go.
+func (m *Module) credit(ctx *fhttp.Context) error {
+	in := CreditRequest{
+		WalletID: ctx.Param("id"),
+		Limit:    ctx.Input("limit"),
+	}
+
+	record, err := m.svc.SetCredit(ctx.Ctx(), m.subject(ctx.Request), in)
+	if err != nil {
+		return m.answer(ctx, err)
+	}
+	return ctx.JSON(stdhttp.StatusOK, resourceFromPointer(record))
+}
+
 // deposit puts money into one wallet.
 func (m *Module) deposit(ctx *fhttp.Context) error {
 	in := DepositRequest{
@@ -328,10 +343,15 @@ func (m *Module) deposit(ctx *fhttp.Context) error {
 
 // withdraw takes money out of one wallet.
 func (m *Module) withdraw(ctx *fhttp.Context) error {
+	force, err := readFlag("force", ctx.Input("force"))
+	if err != nil {
+		return m.answer(ctx, err)
+	}
 	in := WithdrawRequest{
 		IdempotencyKey: ctx.Header(IdempotencyHeader),
 		WalletID:       ctx.Param("id"),
 		Amount:         ctx.Input("amount"),
+		Force:          force,
 	}
 
 	receipt, err := m.svc.Withdraw(ctx.Ctx(), m.subject(ctx.Request), in)
@@ -343,11 +363,16 @@ func (m *Module) withdraw(ctx *fhttp.Context) error {
 
 // transfer moves money from the wallet in the path into the one in the body.
 func (m *Module) transfer(ctx *fhttp.Context) error {
+	force, err := readFlag("force", ctx.Input("force"))
+	if err != nil {
+		return m.answer(ctx, err)
+	}
 	in := TransferRequest{
 		IdempotencyKey: ctx.Header(IdempotencyHeader),
 		FromWalletID:   ctx.Param("id"),
 		ToWalletID:     ctx.Input("to_wallet_id"),
 		Amount:         ctx.Input("amount"),
+		Force:          force,
 	}
 
 	receipt, err := m.svc.Transfer(ctx.Ctx(), m.subject(ctx.Request), in)
@@ -421,6 +446,27 @@ func (m *Module) subject(r *stdhttp.Request) security.Subject {
 	return sub
 }
 
+// readFlag reads a boolean a request wrote.
+//
+// An empty field is false, which is what a client that never heard of the field
+// sends. Anything that is neither a yes nor a no is refused rather than read as
+// false: a request that asked for something in a spelling this package does not
+// know is a request that would otherwise be answered by quietly doing something
+// else.
+func readFlag(field, text string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(text)) {
+	case "":
+		return false, nil
+	case "true", "1":
+		return true, nil
+	case "false", "0":
+		return false, nil
+	}
+	errs := validation.Errors{}
+	errs.Add(field, "has to be true or false")
+	return false, errs
+}
+
 // decimalPlaces reads the scale a wallet is being opened at.
 //
 // An empty field is two places, which is what most currencies are counted in.
@@ -476,10 +522,16 @@ func (m *Module) answer(ctx *fhttp.Context, err error) error {
 	case errors.Is(err, ErrOperationConflict):
 		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusConflict, "that idempotency key belongs to a different request")
 		return nil
+	case errors.Is(err, ErrCreditBelowBalance):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusConflict, "that wallet is already further below zero than the new credit limit allows")
+		return nil
 
 	// The request cannot be carried out against the money as it stands.
 	case errors.Is(err, ErrInsufficientFunds):
-		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, "the balance is not enough")
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, "the balance and the credit limit are not enough")
+		return nil
+	case errors.Is(err, ErrCreditNegative):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, "a credit limit is how far below zero a wallet may go, and cannot be negative")
 		return nil
 	case errors.Is(err, ErrCurrencyMismatch):
 		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, "those wallets are not counted the same way, and no rate provider is configured")
@@ -528,6 +580,7 @@ func (m *Module) Migrations() []foundation.Migration {
 		createWalletOperations{},
 		createWalletEntries{},
 		createWalletConversions{},
+		addWalletCreditLimit{},
 	}
 }
 
@@ -540,6 +593,7 @@ var (
 	_ migrations.ReversibleMigration = createWalletOperations{}
 	_ migrations.ReversibleMigration = createWalletEntries{}
 	_ migrations.ReversibleMigration = createWalletConversions{}
+	_ migrations.ReversibleMigration = addWalletCreditLimit{}
 )
 
 // createWallets is the balances table.
@@ -734,4 +788,34 @@ func (createWalletConversions) Up(ctx context.Context, conn migrations.Connectio
 // Down drops the table, which takes its index with it.
 func (createWalletConversions) Down(ctx context.Context, conn migrations.Connection) error {
 	return conn.Schema().DropIfExists(ctx, conversionsTable)
+}
+
+// addWalletCreditLimit is how far below zero a wallet may go.
+type addWalletCreditLimit struct{ migrations.BaseMigration }
+
+// GetName is the migration's identity, and it carries the order.
+func (addWalletCreditLimit) GetName() string { return "20260905_0005_add_wallet_credit_limit" }
+
+// Up adds the credit limit to the balances table.
+//
+// A big integer of minor units like the balance it is compared against, and
+// with a default of zero, which is the wallet that may not go below zero at all
+// -- so every row that existed before this ran keeps exactly the rule it had.
+//
+// It is a column rather than a value an application answers for on each call
+// because the guard on a withdrawal reads it: the statement that moves the
+// money compares the balance against the amount less this column, in one
+// statement, so the limit that decides is the one the row holds at that
+// instant.
+func (addWalletCreditLimit) Up(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Table(ctx, walletsTable, func(table *schema.Blueprint) {
+		table.BigInteger("credit_limit").Default(0)
+	})
+}
+
+// Down drops the column, which puts every wallet back at a floor of zero.
+func (addWalletCreditLimit) Down(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Table(ctx, walletsTable, func(table *schema.Blueprint) {
+		table.DropColumn("credit_limit")
+	})
 }

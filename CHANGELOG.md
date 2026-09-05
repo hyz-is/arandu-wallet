@@ -16,6 +16,31 @@ they describe releases of the template and not of this package.
 
 ### Added
 
+- `Wallet.CreditLimit`, how far below zero one wallet may go, as a positive
+  number of minor units. It is a column and not a value an application answers
+  for on each call, because the guard on a withdrawal reads it in the statement
+  that moves the money: the balance is compared against the amount less this
+  column, so the limit that decides is the one the row holds at that instant.
+- `(*WalletService).SetCredit`, `CreditRequest` and `WalletCredit`, the one way
+  a limit is set. It is refused to a holder: somebody who could raise their own
+  limit could lend themselves money. Lowering one is guarded too -- a wallet
+  already further below zero than the new limit answers
+  `ErrCreditBelowBalance` and nothing is written.
+- `WithdrawRequest.Force`, `TransferRequest.Force` and `WalletForce`, which is
+  how a movement past the limit is asked for and answered. A field and a policy
+  action rather than a second method beside each one: two entry points for a
+  movement are two places every later rule has to be written into. Force lowers
+  the guard's floor to the range of the column and never removes it, so a forced
+  withdrawal still cannot wrap the balance into a positive number.
+- `ErrCreditNegative` and `ErrCreditBelowBalance`.
+- `PUT <prefix>/{id}/credit`, and a `force` field on the deposit, withdrawal and
+  transfer bodies.
+- `20260905_0005_add_wallet_credit_limit`. Running `aru migrate` is required
+  before this version serves.
+- A wallet answers with `credit_limit_minor` and `credit_limit`, because a
+  balance that may be negative is not readable without the number that says how
+  far.
+
 - `OperationExchange`, the kind an operation is recorded under when it moved
   money between wallets that are not counted the same way. It is decided from
   the two wallets and never from the request, so a statement tells an exchange
@@ -49,6 +74,11 @@ they describe releases of the template and not of this package.
 
 ### Changed
 
+- `ErrInsufficientFunds` now means the balance and the credit limit together
+  are not enough, and its message says so. A wallet with no limit reads exactly
+  as it did.
+- `(*WalletService).Withdraw` and `(*WalletService).Transfer` authorize
+  `WalletForce` when, and only when, the request asked for it.
 - `RateProvider` answers with a rate instead of a converted amount:
   `ConvertTo(ctx, g, Money, Currency, int) (Money, error)` became
   `Rate(ctx, g, from, to Currency) (Rate, error)`. Applying the rate, rounding

@@ -70,6 +70,18 @@ type Wallet struct {
 	// its own guard -- never by a value read, adjusted in Go and written back.
 	Balance Amount `db:"balance"`
 
+	// CreditLimit is how far below zero this wallet may go, as a positive
+	// number of minor units. Zero is the ordinary wallet, which may not go
+	// below zero at all.
+	//
+	// It is a column and not a value the application answers for on each call,
+	// because it is read by the statement that moves the money: the guard on a
+	// withdrawal compares the balance against the amount less this column, in
+	// the same statement, so the limit that applies is the one the row holds at
+	// the moment of the write. A limit fetched a moment earlier would be a
+	// limit two concurrent withdrawals could both spend.
+	CreditLimit Amount `db:"credit_limit"`
+
 	// LastSequence is the position of the newest entry on this wallet.
 	//
 	// It moves in the same statement as the balance, so the number an entry is
@@ -393,9 +405,23 @@ var (
 	ErrNotFound = errors.New("wallet: record not found")
 
 	// ErrInsufficientFunds is returned when a withdrawal would take a balance
-	// below zero. It is the answer of the statement that would have moved the
-	// money, not of a check that ran before it.
-	ErrInsufficientFunds = errors.New("wallet: the balance is not enough for this withdrawal")
+	// past what the wallet may hold: below zero, or below the negative of its
+	// credit limit where it has one. It is the answer of the statement that
+	// would have moved the money, not of a check that ran before it.
+	ErrInsufficientFunds = errors.New("wallet: the balance and the credit limit are not enough for this withdrawal")
+
+	// ErrCreditNegative is returned when a credit limit is written as a
+	// negative number. The limit is how far below zero the wallet may go, so it
+	// is a magnitude; a negative one would read as a balance the wallet has to
+	// keep, which is a different rule nobody asked for.
+	ErrCreditNegative = errors.New("wallet: a credit limit is how far below zero a wallet may go, and cannot be negative")
+
+	// ErrCreditBelowBalance is returned when lowering a credit limit would
+	// leave the wallet already past it. The refusal comes from the statement
+	// that would have written it, so a balance that moved in between changes
+	// the answer -- and no wallet is left in a state no rule would have
+	// allowed it to reach.
+	ErrCreditBelowBalance = errors.New("wallet: the balance is already further below zero than the new credit limit allows")
 
 	// ErrCurrencyMismatch is returned when a transfer names two wallets that
 	// are not counted the same way -- a different currency, or the same
@@ -442,6 +468,7 @@ type Resource struct {
 	currency      Currency
 	decimalPlaces int
 	balance       Amount
+	creditLimit   Amount
 	createdAt     time.Time
 }
 
@@ -455,6 +482,7 @@ func NewResource(record Wallet) Resource {
 		currency:      record.Currency,
 		decimalPlaces: record.DecimalPlaces,
 		balance:       record.Balance,
+		creditLimit:   record.CreditLimit,
 		createdAt:     record.CreatedAt,
 	}
 }
@@ -472,17 +500,23 @@ func resourceFromPointer(record *Wallet) Resource {
 // as the decimal a person reads. A client that computes anything reads
 // balance_minor, one that prints reads balance, and neither has to know the
 // scale to do its half -- which is there anyway, for the one that does.
+//
+// The credit limit leaves beside it, in both spellings, because a balance that
+// may go below zero is not readable without the number that says how far. It is
+// a magnitude and never a negative: what it bounds is the negative side.
 func (r Resource) ToArray() map[string]any {
 	return map[string]any{
-		"id":             r.id,
-		"holder_id":      r.holderID,
-		"slug":           r.slug,
-		"name":           r.name,
-		"currency":       string(r.currency),
-		"decimal_places": r.decimalPlaces,
-		"balance_minor":  int64(r.balance),
-		"balance":        r.balance.Format(r.decimalPlaces),
-		"created_at":     r.createdAt.UTC().Format(time.RFC3339),
+		"id":                 r.id,
+		"holder_id":          r.holderID,
+		"slug":               r.slug,
+		"name":               r.name,
+		"currency":           string(r.currency),
+		"decimal_places":     r.decimalPlaces,
+		"balance_minor":      int64(r.balance),
+		"balance":            r.balance.Format(r.decimalPlaces),
+		"credit_limit_minor": int64(r.creditLimit),
+		"credit_limit":       r.creditLimit.Format(r.decimalPlaces),
+		"created_at":         r.createdAt.UTC().Format(time.RFC3339),
 	}
 }
 

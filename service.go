@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/arandu-io/framework/data"
@@ -106,6 +108,28 @@ func (r OpenRequest) Validate() validation.Errors {
 	return e
 }
 
+// CreditRequest is what setting a wallet's credit limit takes.
+type CreditRequest struct {
+	// WalletID is the wallet whose limit is being set.
+	WalletID string
+	// Limit is how far below zero the wallet may go, as a decimal at its own
+	// scale, and "0" is a wallet that may not go below zero at all.
+	//
+	// A magnitude and never a negative number: the sign belongs to the rule,
+	// which is that the balance may not end below the negative of this. A limit
+	// written with a minus is refused rather than read as its own opposite.
+	Limit string
+}
+
+// Validate reports the errors per field.
+func (r CreditRequest) Validate() validation.Errors {
+	e := validation.Errors{}
+	validation.Required(e, "wallet_id", r.WalletID)
+	validation.MaxLen(e, "wallet_id", r.WalletID, maxIdentifierLen)
+	validation.Required(e, "limit", r.Limit)
+	return e
+}
+
 // DepositRequest is what putting money into a wallet takes.
 type DepositRequest struct {
 	// IdempotencyKey is the caller's name for this request. Sending the same
@@ -135,6 +159,15 @@ type WithdrawRequest struct {
 	WalletID string
 	// Amount is the decimal to debit, written at the wallet's own scale.
 	Amount string
+	// Force asks for the movement even where the balance and the credit limit
+	// do not cover it.
+	//
+	// It is a field of the request and not a method beside Withdraw, because
+	// two entry points for one movement are two places every later rule has to
+	// be written into, and the one somebody forgets is the one that is not
+	// guarded. Asking is not being answered: WalletForce is a separate
+	// decision, and a subject the policy refuses it to is refused the movement.
+	Force bool
 }
 
 // Validate reports the errors per field.
@@ -154,6 +187,9 @@ type TransferRequest struct {
 	// What arrives is the same amount when both wallets are counted the same
 	// way, and what the rate provider answers when they are not.
 	Amount string
+	// Force asks for the movement even where the source's balance and credit
+	// limit do not cover it, and is answered by WalletForce.
+	Force bool
 }
 
 // Validate reports the errors per field.
@@ -225,6 +261,7 @@ func validateMovement(key, walletID, amount string) validation.Errors {
 // Compile-time proof that the requests honor the validation contract.
 var (
 	_ validation.Validatable = OpenRequest{}
+	_ validation.Validatable = CreditRequest{}
 	_ validation.Validatable = DepositRequest{}
 	_ validation.Validatable = WithdrawRequest{}
 	_ validation.Validatable = TransferRequest{}
@@ -308,6 +345,73 @@ func (s *WalletService) Open(ctx context.Context, actor security.Subject, in Ope
 		return nil, err
 	}
 	return candidate, nil
+}
+
+// SetCredit sets how far below zero a wallet may go.
+//
+// The limit is a column on the wallet and not a value the caller passes with
+// each withdrawal, because it is read by the statement that moves the money:
+// the guard compares the balance against the amount less this column, so what
+// applies is what the row holds at that instant. A limit that travelled with
+// the request would be a limit the request chose.
+//
+// Lowering one is guarded the same way. The write requires the balance to be
+// within the new limit at the moment it happens, so a wallet is never left
+// further below zero than any withdrawal could have taken it; where it already
+// is, the answer is ErrCreditBelowBalance and nothing changes.
+//
+// It is asked about twice, like every other read of one wallet: once to decide
+// whether this subject sets limits at all, and once about the wallet whose
+// limit it is.
+func (s *WalletService) SetCredit(ctx context.Context, actor security.Subject, in CreditRequest) (*Wallet, error) {
+	if errs := in.Validate(); errs.Any() {
+		return nil, errs
+	}
+
+	g, err := security.Authorize(ctx, s.policy, actor, WalletCredit, Wallet{})
+	if err != nil {
+		return nil, err
+	}
+
+	rows := Wallets(s.db)
+	record, err := rows.NewQuery().WhereKey(in.WalletID).First(ctx, g)
+	if err != nil {
+		return nil, err
+	}
+	if record == nil {
+		return nil, ErrNotFound
+	}
+	if _, err := security.Authorize(ctx, s.policy, actor, WalletCredit, *record); err != nil {
+		return nil, err
+	}
+
+	limit, err := ParseAmount(in.Limit, record.DecimalPlaces)
+	if err != nil {
+		return nil, err
+	}
+	if limit < 0 {
+		return nil, ErrCreditNegative
+	}
+
+	affected, err := rows.NewQuery().
+		WhereKey(in.WalletID).
+		Where("balance", ">=", int64(-limit)).
+		Update(ctx, g, map[string]any{"credit_limit": int64(limit)})
+	if err != nil {
+		return nil, err
+	}
+	if affected == 0 {
+		return nil, ErrCreditBelowBalance
+	}
+
+	written, err := rows.NewQuery().WhereKey(in.WalletID).First(ctx, g)
+	if err != nil {
+		return nil, err
+	}
+	if written == nil {
+		return nil, ErrNotFound
+	}
+	return written, nil
 }
 
 // Find returns one wallet, and asks the policy twice.
@@ -573,6 +677,9 @@ func (s *WalletService) Withdraw(ctx context.Context, actor security.Subject, in
 	if _, err := security.Authorize(ctx, s.policy, actor, WalletWithdraw, *source); err != nil {
 		return Receipt{}, err
 	}
+	if err := s.allowForce(ctx, actor, in.Force, *source); err != nil {
+		return Receipt{}, err
+	}
 
 	amount, err := positiveAmount(in.Amount, source.DecimalPlaces)
 	if err != nil {
@@ -582,7 +689,21 @@ func (s *WalletService) Withdraw(ctx context.Context, actor security.Subject, in
 	return s.commit(ctx, g, operation{
 		key:  in.IdempotencyKey,
 		kind: OperationWithdraw,
-	}, []movement{{wallet: source, kind: EntryWithdraw, amount: amount}})
+	}, []movement{{wallet: source, kind: EntryWithdraw, amount: amount, force: in.Force}})
+}
+
+// allowForce asks the policy about ignoring the limit, and only where the
+// request asked for it.
+//
+// The question is about the wallet the money leaves, because that is the money
+// the limit protects. A movement nobody asked to force asks nothing, so a
+// subject who may never force is refused nothing they did not request.
+func (s *WalletService) allowForce(ctx context.Context, actor security.Subject, force bool, record Wallet) error {
+	if !force {
+		return nil
+	}
+	_, err := security.Authorize(ctx, s.policy, actor, WalletForce, record)
+	return err
 }
 
 // Transfer moves money out of one wallet and into another, converting it when
@@ -638,6 +759,9 @@ func (s *WalletService) Transfer(ctx context.Context, actor security.Subject, in
 	if _, err := security.Authorize(ctx, s.policy, actor, WalletTransfer, *source); err != nil {
 		return Receipt{}, err
 	}
+	if err := s.allowForce(ctx, actor, in.Force, *source); err != nil {
+		return Receipt{}, err
+	}
 
 	// The wallets are read before the key is, because the kind an idempotent
 	// replay has to match is the kind these two wallets produce, and that is
@@ -667,7 +791,7 @@ func (s *WalletService) Transfer(ctx context.Context, actor security.Subject, in
 		kind: kind,
 		rate: applied,
 	}, []movement{
-		{wallet: source, kind: EntryWithdraw, amount: debited},
+		{wallet: source, kind: EntryWithdraw, amount: debited, force: in.Force},
 		{wallet: target, kind: EntryDeposit, amount: credited},
 	})
 }
@@ -787,6 +911,36 @@ type movement struct {
 	wallet *Wallet
 	kind   EntryKind
 	amount Amount
+	// force lowers this movement's floor to the range of the column, and is
+	// authorized where the request that asked for it is read. It is a field
+	// rather than a second kind of movement, so there is one statement, one
+	// guard and one place the floor is decided.
+	force bool
+}
+
+// withdrawalFloor is what the balance has to be at least for a withdrawal to
+// happen, written as the expression its statement carries.
+//
+// Ordinarily it is the amount less the wallet's credit limit, which is the same
+// thing as saying the balance may not end up further below zero than the limit
+// allows. The column is named rather than read, so the limit that applies is
+// the one the row holds at the moment of the write -- a limit fetched a moment
+// earlier is a limit two concurrent withdrawals both spend.
+//
+// A forced movement lowers the floor to the smallest value the column can hold,
+// and no further. The guard stays on the statement and stops being about the
+// money, which is the only thing force is allowed to change: a statement with no
+// guard at all would let the column wrap, and a balance that wrapped has changed
+// sign.
+//
+// The amount goes into the SQL rather than into a placeholder because it stands
+// beside a column on the right of a comparison. It is an int64 this package
+// parsed, never text a caller wrote.
+func withdrawalFloor(amount Amount, force bool) query.Expression {
+	if force {
+		return query.Raw(strconv.FormatInt(math.MinInt64+int64(amount), 10))
+	}
+	return query.Raw(strconv.FormatInt(int64(amount), 10) + ` - "credit_limit"`)
 }
 
 // stepped is the extra column every balance statement carries: the wallet's
@@ -950,10 +1104,11 @@ func (s *WalletService) move(ctx context.Context, g security.Grant, operationID 
 	var err error
 	switch m.kind {
 	case EntryWithdraw:
-		// The balance has to still be enough at the moment of the write.
+		// The balance has to still be enough at the moment of the write, and
+		// what "enough" is comes off the same row in the same statement.
 		affected, err = rows.NewQuery().
 			WhereKey(m.wallet.ID).
-			Where("balance", ">=", int64(m.amount)).
+			Where("balance", ">=", withdrawalFloor(m.amount, m.force)).
 			Decrement(ctx, g, "balance", int64(m.amount), stepped())
 	case EntryDeposit:
 		// And it has to still have room, or the column wraps into a negative

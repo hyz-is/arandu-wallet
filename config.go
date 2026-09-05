@@ -132,6 +132,7 @@ var routePatterns = []routePattern{
 	{http.MethodPost, "", "wallet.store"},
 	{http.MethodGet, "/{id}", "wallet.show"},
 	{http.MethodGet, "/{id}/entries", "wallet.entries"},
+	{http.MethodPut, "/{id}/credit", "wallet.credit"},
 	{http.MethodPost, "/{id}/deposits", "wallet.deposit"},
 	{http.MethodPost, "/{id}/withdrawals", "wallet.withdraw"},
 	{http.MethodPost, "/{id}/transfers", "wallet.transfer"},
