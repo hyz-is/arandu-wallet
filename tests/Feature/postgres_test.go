@@ -151,7 +151,7 @@ func withSearchPath(t *testing.T, dsn, schema string) string {
 func TestTheGuardIsWhatKeepsTheBalanceWhole(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(postgres(t), nil)
+	service := wallet.NewWalletService(postgres(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 
 	// Twenty units in, one per withdrawal, and far more askers than the balance
@@ -231,7 +231,7 @@ func TestTheGuardIsWhatKeepsTheBalanceWhole(t *testing.T) {
 func TestTheGuardCountsTheCreditLimitAndStopsAtIt(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(postgres(t), nil)
+	service := wallet.NewWalletService(postgres(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 
 	// Twenty units in and ten of credit: thirty withdrawals of one unit are
@@ -302,7 +302,7 @@ func TestTheGuardCountsTheCreditLimitAndStopsAtIt(t *testing.T) {
 func TestTheIdempotencyKeyHoldsWhenTransactionsInterleave(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(postgres(t), nil)
+	service := wallet.NewWalletService(postgres(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 
 	// The lookup that opens every movement finds nothing in all of these,
@@ -359,7 +359,7 @@ func TestTheIdempotencyKeyHoldsWhenTransactionsInterleave(t *testing.T) {
 func TestTransfersInOppositeDirectionsDoNotDeadlockOnRowLocks(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(postgres(t), nil)
+	service := wallet.NewWalletService(postgres(t), nil, nil, nil)
 	left := openWallet(t, service, "user-1", "main", 2)
 	right := openWallet(t, service, "user-2", "main", 2)
 	deposit(t, service, left.ID, "opening-left", "50.00")
@@ -423,7 +423,7 @@ func TestTransfersInOppositeDirectionsDoNotDeadlockOnRowLocks(t *testing.T) {
 func TestConcurrentReversalsInterleaveAndUndoOnce(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(postgres(t), nil)
+	service := wallet.NewWalletService(postgres(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 	credited := deposit(t, service, account.ID, "opening", "10.00")
 
@@ -495,7 +495,7 @@ func TestConcurrentReversalsInterleaveAndUndoOnce(t *testing.T) {
 func TestConcurrentConfirmationsSettleOnce(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(postgres(t), nil)
+	service := wallet.NewWalletService(postgres(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 	proposed, err := service.Deposit(context.Background(), staff(), wallet.DepositRequest{
 		IdempotencyKey: "later-1", WalletID: account.ID, Amount: "10.00", Pending: true,
@@ -561,7 +561,7 @@ func TestConcurrentConfirmationsSettleOnce(t *testing.T) {
 func TestARolledBackTransferLeavesNothingBehind(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(postgres(t), nil)
+	service := wallet.NewWalletService(postgres(t), nil, nil, nil)
 	source := openWallet(t, service, "user-1", "main", 2)
 	target := openWallet(t, service, "user-2", "main", 2)
 	deposit(t, service, source.ID, "opening", "10.00")
@@ -622,7 +622,7 @@ func TestConcurrentExchangesUnderOneKeySettleAtOneRate(t *testing.T) {
 	t.Parallel()
 
 	rates := &driftingRate{}
-	service := wallet.NewWalletService(postgres(t), rates)
+	service := wallet.NewWalletService(postgres(t), rates, nil, nil)
 	source := openIn(t, service, "user-1", "main", "USD", 2)
 	target := openIn(t, service, "user-2", "main", "BRL", 2)
 	deposit(t, service, source.ID, "opening", "100.00")

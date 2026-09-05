@@ -24,9 +24,18 @@
 // was quoted and the part no minor unit could carry -- so the arithmetic can be
 // done again from the row alone.
 //
+// A payment between two wallets can cost more or less than it moves. What the
+// payer is charged less and what the receiver charges to be paid are both the
+// application's to answer, through seams this package asks once and records: the
+// share, its floor and its ceiling, what it was computed from and where it went
+// are all on one row, so a receipt that says a different number from the request
+// says why. What leaves is what arrives plus the fee, exactly, and the share
+// that no minor unit could carry is written down rather than dropped.
+//
 // Every operation carries an idempotency key the caller chose. The same key
 // twice moves money once: the second call answers with the first one's receipt,
-// and for an exchange that means the first one's rate.
+// and for an exchange that means the first one's rate and the first one's
+// price.
 //
 // The files are laid out by role rather than by layer, so the whole package
 // reads top to bottom:
@@ -37,6 +46,7 @@
 //	model.go       -> the entities, and what they may answer with
 //	policy.go      -> who may do what
 //	rate.go        -> the rate, its arithmetic, and the seam that quotes it
+//	fee.go         -> the fee, its arithmetic, and the seams that price a payment
 //	service.go     -> the rules and Model access, after authorization
 //	views.go       -> the files the application takes ownership of
 //
@@ -119,7 +129,7 @@ func New(cfg Config, db *data.DB, sessions *security.SessionStore) (*Module, err
 	cfg = cfg.withDefaults()
 	return &Module{
 		cfg:      cfg,
-		svc:      NewWalletService(db, cfg.Rates),
+		svc:      NewWalletService(db, cfg.Rates, cfg.Fees, cfg.Discounts),
 		sessions: sessions,
 	}, nil
 }
@@ -583,6 +593,9 @@ func (m *Module) answer(ctx *fhttp.Context, err error) error {
 	case errors.Is(err, ErrCurrencyMismatch):
 		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, "those wallets are not counted the same way, and no rate provider is configured")
 		return nil
+	case errors.Is(err, ErrFeeExceedsAmount):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, "the fee is not smaller than the payment it is charged on")
+		return nil
 
 	// An amount worth less than one minor unit of the target is the caller's
 	// amount and not a fault of the configuration, so it is answered by name.
@@ -635,6 +648,7 @@ func (m *Module) Migrations() []foundation.Migration {
 		createWalletConversions{},
 		addWalletCreditLimit{},
 		addWalletEntrySettlement{},
+		createWalletCharges{},
 	}
 }
 
@@ -649,6 +663,7 @@ var (
 	_ migrations.ReversibleMigration = createWalletConversions{}
 	_ migrations.ReversibleMigration = addWalletCreditLimit{}
 	_ migrations.ReversibleMigration = addWalletEntrySettlement{}
+	_ migrations.ReversibleMigration = createWalletCharges{}
 )
 
 // createWallets is the balances table.
@@ -906,4 +921,63 @@ func (addWalletEntrySettlement) Down(ctx context.Context, conn migrations.Connec
 	return conn.Schema().Table(ctx, entriesTable, func(table *schema.Blueprint) {
 		table.DropColumn("settled")
 	})
+}
+
+// createWalletCharges is the table of what payments cost.
+type createWalletCharges struct{ migrations.BaseMigration }
+
+// GetName is the migration's identity, and it carries the order.
+func (createWalletCharges) GetName() string { return "20260905_0007_create_wallet_charges" }
+
+// Up creates the charges table.
+//
+// Every column is a number, a code or a yes-or-no integer, and there is not a
+// floating point one among them. The share is two big integers because a
+// fraction is what a share is, the amounts are big integers of minor units like
+// every other amount in this package, and the leftover is two more integers so
+// that what truncation dropped is a value rather than a discrepancy. A decimal
+// column for the share would arrive in Go as text or as a float, and the float
+// is where an audit stops being able to reproduce the row it is auditing.
+//
+// One charge per operation, held by a unique index: an operation charges once,
+// and a second row against it would be a second answer to what a payment cost.
+// The index also carries the read a receipt makes, which is the charge of one
+// operation.
+//
+// There is no updated_at, and its absence is the append-only rule written into
+// the schema, exactly as it is on the ledger and on the recorded rates.
+func (createWalletCharges) Up(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Create(ctx, chargesTable, func(table *schema.Blueprint) {
+		table.String("id").Primary()
+		table.String("tenant_id")
+		table.String("operation_id")
+
+		table.String("currency", 12)
+		table.UnsignedSmallInteger("decimal_places").Default(2)
+
+		table.BigInteger("requested_amount")
+		table.BigInteger("discount").Default(0)
+		table.BigInteger("base_amount")
+
+		table.BigInteger("fee_numerator").Default(0)
+		table.BigInteger("fee_denominator").Default(0)
+		table.BigInteger("fee_minimum").Default(0)
+		table.BigInteger("fee_maximum").Default(0)
+		table.UnsignedSmallInteger("fee_deductible").Default(0)
+		table.BigInteger("fee_amount").Default(0)
+		table.String("fee_wallet_id").Default("")
+
+		table.String("rounding", 16)
+		table.BigInteger("remainder_numerator").Default(0)
+		table.BigInteger("remainder_denominator").Default(1)
+
+		table.Timestamp("created_at")
+
+		table.Unique([]string{"tenant_id", "operation_id"}, "wallet_charges_operation_uq")
+	})
+}
+
+// Down drops the table, which takes its index with it.
+func (createWalletCharges) Down(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().DropIfExists(ctx, chargesTable)
 }

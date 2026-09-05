@@ -13,7 +13,7 @@ import (
 func TestADepositRaisesTheBalanceAndLeavesAnEntry(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 
 	receipt := deposit(t, service, account.ID, "key-1", "10.50")
@@ -40,7 +40,7 @@ func TestADepositRaisesTheBalanceAndLeavesAnEntry(t *testing.T) {
 func TestAWithdrawalLowersTheBalanceAndTheLedgerStillExplainsIt(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 	deposit(t, service, account.ID, "key-1", "10.00")
 
@@ -61,7 +61,7 @@ func TestAWithdrawalLowersTheBalanceAndTheLedgerStillExplainsIt(t *testing.T) {
 func TestAWithdrawalBeyondTheBalanceIsRefusedAndWritesNothing(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 	deposit(t, service, account.ID, "key-1", "10.00")
 
@@ -95,7 +95,7 @@ func TestAWithdrawalBeyondTheBalanceIsRefusedAndWritesNothing(t *testing.T) {
 func TestAnAmountWithMorePrecisionThanTheWalletIsRefused(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 
 	_, err := service.Deposit(context.Background(), staff(), wallet.DepositRequest{
@@ -112,7 +112,7 @@ func TestAnAmountWithMorePrecisionThanTheWalletIsRefused(t *testing.T) {
 func TestAMovementOfNothingIsRefused(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 
 	for _, amount := range []string{"0", "0.00", "-1.00"} {
@@ -131,7 +131,7 @@ func TestAMovementOfNothingIsRefused(t *testing.T) {
 func TestAWalletIsOpenedOncePerHolderAndSlug(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	openWallet(t, service, "user-1", "main", 2)
 
 	_, err := service.Open(context.Background(), staff(), wallet.OpenRequest{
@@ -157,7 +157,7 @@ func TestAWalletIsOpenedOncePerHolderAndSlug(t *testing.T) {
 func TestATransferMovesBothBalancesOrNeither(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	source := openWallet(t, service, "user-1", "main", 2)
 	target := openWallet(t, service, "user-2", "main", 2)
 	deposit(t, service, source.ID, "key-1", "10.00")
@@ -203,7 +203,7 @@ func TestATransferMovesBothBalancesOrNeither(t *testing.T) {
 func TestATransferNeedsTwoDifferentWallets(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 	deposit(t, service, account.ID, "key-1", "10.00")
 
@@ -219,7 +219,7 @@ func TestATransferBetweenCurrenciesNeedsARateProvider(t *testing.T) {
 	t.Parallel()
 
 	handle := database(t)
-	service := wallet.NewWalletService(handle, nil)
+	service := wallet.NewWalletService(handle, nil, nil, nil)
 
 	source := openIn(t, service, "user-1", "main", "BRL", 2)
 	target := openIn(t, service, "user-2", "main", "USD", 2)
@@ -234,7 +234,7 @@ func TestATransferBetweenCurrenciesNeedsARateProvider(t *testing.T) {
 
 	// With a provider, the rate is applied to what left and the source still
 	// loses what it was asked to.
-	converted := wallet.NewWalletService(handle, &fixedRate{numerator: 2, denominator: 1})
+	converted := wallet.NewWalletService(handle, &fixedRate{numerator: 2, denominator: 1}, nil, nil)
 	if _, err := converted.Transfer(context.Background(), staff(), wallet.TransferRequest{
 		IdempotencyKey: "key-3", FromWalletID: source.ID, ToWalletID: target.ID, Amount: "4.00",
 	}); err != nil {
@@ -252,14 +252,14 @@ func TestARateQuotedForAnotherPairIsRefused(t *testing.T) {
 	t.Parallel()
 
 	handle := database(t)
-	service := wallet.NewWalletService(handle, nil)
+	service := wallet.NewWalletService(handle, nil, nil, nil)
 	source := openIn(t, service, "user-1", "main", "BRL", 2)
 	target := openIn(t, service, "user-2", "main", "USD", 2)
 	deposit(t, service, source.ID, "key-1", "10.00")
 
 	// The provider answers about a pair nobody asked about. Applying it would
 	// be applying a number that means something else.
-	wrong := wallet.NewWalletService(handle, misquotedRate{from: "JPY", to: "USD"})
+	wrong := wallet.NewWalletService(handle, misquotedRate{from: "JPY", to: "USD"}, nil, nil)
 	_, err := wrong.Transfer(context.Background(), staff(), wallet.TransferRequest{
 		IdempotencyKey: "key-2", FromWalletID: source.ID, ToWalletID: target.ID, Amount: "4.00",
 	})
@@ -272,7 +272,7 @@ func TestARateQuotedForAnotherPairIsRefused(t *testing.T) {
 
 	// And one that does not say when it was quoted, which is a rate nothing
 	// can be reproduced against.
-	undated := wallet.NewWalletService(handle, undatedRate{})
+	undated := wallet.NewWalletService(handle, undatedRate{}, nil, nil)
 	_, err = undated.Transfer(context.Background(), staff(), wallet.TransferRequest{
 		IdempotencyKey: "key-3", FromWalletID: source.ID, ToWalletID: target.ID, Amount: "4.00",
 	})
@@ -285,7 +285,7 @@ func TestARateQuotedForAnotherPairIsRefused(t *testing.T) {
 
 	// A provider with no quote refuses, and its refusal is what the caller
 	// sees rather than a rate this package invented.
-	missing := wallet.NewWalletService(handle, unavailableRate{})
+	missing := wallet.NewWalletService(handle, unavailableRate{}, nil, nil)
 	_, err = missing.Transfer(context.Background(), staff(), wallet.TransferRequest{
 		IdempotencyKey: "key-4", FromWalletID: source.ID, ToWalletID: target.ID, Amount: "4.00",
 	})
@@ -300,7 +300,7 @@ func TestARateQuotedForAnotherPairIsRefused(t *testing.T) {
 func TestAReversalAppendsTheOppositeAndChangesNothingAlreadyWritten(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	source := openWallet(t, service, "user-1", "main", 2)
 	target := openWallet(t, service, "user-2", "main", 2)
 	deposit(t, service, source.ID, "key-1", "10.00")
@@ -359,7 +359,7 @@ func TestAReversalAppendsTheOppositeAndChangesNothingAlreadyWritten(t *testing.T
 func TestAnOperationIsReversedOnce(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 	credited := deposit(t, service, account.ID, "key-1", "10.00")
 
@@ -396,7 +396,7 @@ func TestAnOperationIsReversedOnce(t *testing.T) {
 func TestAReversalIsRefusedWhenTheMoneyIsGone(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 	credited := deposit(t, service, account.ID, "key-1", "10.00")
 
@@ -425,7 +425,7 @@ func TestAReversalIsRefusedWhenTheMoneyIsGone(t *testing.T) {
 func TestTheStatementPagesThroughTheWholeLedger(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 
 	const movements = 7

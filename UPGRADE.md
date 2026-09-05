@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Hand the service its two new seams
+
+`NewWalletService` takes what prices a payment beside what quotes a rate. An
+application that charges nothing passes nil twice, which is what it did before
+without having to say so:
+
+```go
+// Before.
+service := wallet.NewWalletService(db, rates)
+
+// After.
+service := wallet.NewWalletService(db, rates, nil, nil)
+```
+
+A module built through `wallet.New` needs no change: it reads `Config.Rates`,
+`Config.Fees` and `Config.Discounts`, and the two new fields default to nil.
+
 ### Read what an operation settles under its new name
 
 `Operation.ReversesID` is now `Operation.SettlesID`. The column behind it keeps
@@ -49,10 +66,13 @@ if entry.Kind == wallet.EntryWithdraw {
 
 ### Run the new migrations
 
-`aru migrate` before serving this version: `20260905_0005_add_wallet_credit_limit`
-and `20260905_0006_add_wallet_entry_settlement`. Both add a column with a
-default that leaves every existing row meaning exactly what it meant -- a floor
-of zero, and a movement that counted.
+`aru migrate` before serving this version:
+`20260905_0005_add_wallet_credit_limit`,
+`20260905_0006_add_wallet_entry_settlement` and
+`20260905_0007_create_wallet_charges`. The first two add a column with a default
+that leaves every existing row meaning exactly what it meant -- a floor of zero,
+and a movement that counted -- and the third is a new table nothing reads until
+something charges.
 
 ## v0.4.0
 

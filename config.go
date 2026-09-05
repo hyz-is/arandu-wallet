@@ -62,6 +62,24 @@ type Config struct {
 	// every exchange in the application is rounded the same way and leaves the
 	// same row behind whatever the provider is.
 	Rates RateProvider
+
+	// Fees answers with what a wallet charges to be paid, for the payments
+	// between two wallets where somebody charges anything.
+	//
+	// Nil is the ordinary case and not a degraded one: most applications charge
+	// nothing, and one that does knows its own pricing. What the provider
+	// supplies is the schedule and not the fee, for the reason Rates supplies a
+	// rate and not the converted amount -- the arithmetic, the rounding and the
+	// record belong here, so every fee in the application is computed the same
+	// way and leaves the same row behind.
+	Fees FeeProvider
+
+	// Discounts answers with what one payer is charged less on one payment.
+	//
+	// Nil is no discount anywhere. What it decides is the application's: who
+	// gets one and why is a question about customers, which this package has
+	// no way to answer and no business answering.
+	Discounts DiscountProvider
 }
 
 // Validate reports what the configuration cannot be used with.

@@ -33,7 +33,7 @@ func TestTheRateIsQuotedOnceAndTheWholeOperationUsesThatOne(t *testing.T) {
 	t.Parallel()
 
 	rates := &driftingRate{}
-	service := wallet.NewWalletService(database(t), rates)
+	service := wallet.NewWalletService(database(t), rates, nil, nil)
 
 	source := openIn(t, service, "user-1", "main", "USD", 2)
 	target := openIn(t, service, "user-2", "main", "BRL", 2)
@@ -94,7 +94,7 @@ func TestRoundingCreditsNoMoreThanTheRateAndRecordsWhatIsLeft(t *testing.T) {
 	t.Parallel()
 
 	// 5.4321, as the fraction it is.
-	service := wallet.NewWalletService(database(t), &fixedRate{numerator: 54321, denominator: 10000})
+	service := wallet.NewWalletService(database(t), &fixedRate{numerator: 54321, denominator: 10000}, nil, nil)
 
 	source := openIn(t, service, "user-1", "main", "USD", 2)
 	target := openIn(t, service, "user-2", "main", "BRL", 2)
@@ -162,7 +162,7 @@ func TestRoundingCreditsNoMoreThanTheRateAndRecordsWhatIsLeft(t *testing.T) {
 func TestAnExchangeIsDistinguishableFromATransferInTheStatement(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), &fixedRate{numerator: 2, denominator: 1})
+	service := wallet.NewWalletService(database(t), &fixedRate{numerator: 2, denominator: 1}, nil, nil)
 
 	source := openIn(t, service, "user-1", "main", "USD", 2)
 	sibling := openIn(t, service, "user-2", "main", "USD", 2)
@@ -235,7 +235,7 @@ func TestTheSameKeyExchangesOnceAtOneRate(t *testing.T) {
 	t.Parallel()
 
 	rates := &driftingRate{}
-	service := wallet.NewWalletService(database(t), rates)
+	service := wallet.NewWalletService(database(t), rates, nil, nil)
 
 	source := openIn(t, service, "user-1", "main", "USD", 2)
 	target := openIn(t, service, "user-2", "main", "BRL", 2)
@@ -303,7 +303,7 @@ func TestUndoingAnExchangeMovesBackWhatMovedAndQuotesNothing(t *testing.T) {
 	t.Parallel()
 
 	rates := &driftingRate{}
-	service := wallet.NewWalletService(database(t), rates)
+	service := wallet.NewWalletService(database(t), rates, nil, nil)
 
 	source := openIn(t, service, "user-1", "main", "USD", 2)
 	target := openIn(t, service, "user-2", "main", "BRL", 2)
@@ -356,7 +356,7 @@ func TestTheSameCurrencyAtAnotherScaleIsAlsoAnExchange(t *testing.T) {
 	t.Parallel()
 
 	// One to one: the currency is the same, only the scale moves.
-	service := wallet.NewWalletService(database(t), &fixedRate{numerator: 1, denominator: 1})
+	service := wallet.NewWalletService(database(t), &fixedRate{numerator: 1, denominator: 1}, nil, nil)
 
 	fine := openIn(t, service, "user-1", "fine", "BRL", 4)
 	coarse := openIn(t, service, "user-1", "coarse", "BRL", 2)
@@ -396,7 +396,7 @@ func TestAnAmountWorthLessThanOneMinorUnitIsRefused(t *testing.T) {
 	t.Parallel()
 
 	// A hundredth of a cent per cent.
-	service := wallet.NewWalletService(database(t), &fixedRate{numerator: 1, denominator: 10000})
+	service := wallet.NewWalletService(database(t), &fixedRate{numerator: 1, denominator: 10000}, nil, nil)
 
 	source := openIn(t, service, "user-1", "main", "USD", 2)
 	target := openIn(t, service, "user-2", "main", "BRL", 2)

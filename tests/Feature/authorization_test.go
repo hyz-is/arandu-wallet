@@ -19,7 +19,7 @@ import (
 func TestAWalletOfAnotherTenantIsNotReachable(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 	deposit(t, service, account.ID, "key-1", "10.00")
 
@@ -61,7 +61,7 @@ func TestAWalletOfAnotherTenantIsNotReachable(t *testing.T) {
 func TestAHolderReachesTheirOwnMoneyAndNobodyElsesf(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	mine := openWallet(t, service, "user-1", "main", 2)
 	theirs := openWallet(t, service, "user-2", "main", 2)
 	deposit(t, service, mine.ID, "key-1", "10.00")
@@ -114,7 +114,7 @@ func TestAHolderReachesTheirOwnMoneyAndNobodyElsesf(t *testing.T) {
 func TestAListingNarrowsToTheHolderRatherThanRefusingIt(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	mine := openWallet(t, service, "user-1", "main", 2)
 	openWallet(t, service, "user-2", "main", 2)
 
@@ -142,7 +142,7 @@ func TestAListingNarrowsToTheHolderRatherThanRefusingIt(t *testing.T) {
 func TestOnlyAnOperatorReversesAgainstTheDatabase(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 	credited := deposit(t, service, account.ID, "key-1", "10.00")
 
@@ -160,7 +160,7 @@ func TestOnlyAnOperatorReversesAgainstTheDatabase(t *testing.T) {
 func TestAGuestReachesNothing(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 	deposit(t, service, account.ID, "key-1", "10.00")
 

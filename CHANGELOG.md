@@ -16,6 +16,28 @@ they describe releases of the template and not of this package.
 
 ### Added
 
+- `FeeSchedule`, what a wallet charges to be paid: an exact fraction of the
+  payment with a floor, a ceiling, who pays it and the wallet it is credited to.
+  `FeeSchedule.Fee` applies it under the exchange's arithmetic -- integers
+  throughout, truncated toward zero -- and `Fee` carries the share that no minor
+  unit could take, over the schedule's denominator, rather than dropping it.
+- `FeeProvider` and `Config.Fees`, the seam that prices a payment, and
+  `DiscountProvider` and `Config.Discounts`, the seam that answers what one
+  payer is charged less. Both are asked once per payment and what they answer is
+  written down, so a replay is charged what the first call charged.
+- `Charge`, the record of what a payment cost: the money it was counted in, what
+  was asked for, what was taken off, what the fee was computed from, the exact
+  fraction, both bounds, who paid it, where it went, the rounding rule and what
+  the share could not divide. `Charges(db)` is its configured Model, and
+  `wallet_charges` its table, appended to and never rewritten, one row per
+  operation under a unique index.
+- `Receipt.Charge`, `Statement.Charges`, `NewChargeResource`, `ChargeResource`
+  and `charge` on a receipt, so a movement smaller than the request says why
+  beside itself.
+- `ErrFeeShare`, `ErrFeeBounds`, `ErrFeeWallet`, `ErrFeeCurrencyMismatch`,
+  `ErrFeeExceedsAmount` and `ErrDiscountNegative`.
+- `20260905_0007_create_wallet_charges`. Running `aru migrate` is required
+  before a fee or a discount can settle.
 - `(*WalletService).Confirm`, `ConfirmRequest`, `OperationConfirmation` and
   `WalletConfirm`: a movement can be recorded without counting and made to count
   later. Confirming appends the settled entry beside the pending one under an
@@ -94,6 +116,19 @@ they describe releases of the template and not of this package.
 
 ### Changed
 
+- `NewWalletService` takes the fee and discount seams beside the rate one:
+  `NewWalletService(db *data.DB, rates RateProvider)` became
+  `NewWalletService(db *data.DB, rates RateProvider, fees FeeProvider, discounts DiscountProvider)`.
+  Every one of the three may be nil, and nil is the ordinary application.
+- `(*WalletService).Transfer` asks the discount seam and then the fee seam, in
+  that order: the fee is a share of what is being paid rather than of what was
+  asked for. What leaves the payer is what arrives at the receiver plus what
+  arrives at the wallet collecting the fee, exactly, whichever of the two paid
+  it.
+- A fee never crosses a rate. Where the two wallets are not counted the same
+  way, or the wallet collecting the fee is not counted like them, the payment is
+  refused with `ErrFeeCurrencyMismatch` rather than converted -- carrying a fee
+  through a rate would round a number that is already the result of a rounding.
 - `Operation.ReversesID` is now `Operation.SettlesID`, and holds the operation a
   row reverses or the one it confirms. The column keeps the name it was created
   under, so nothing moves and no migration renames it.

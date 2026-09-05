@@ -62,8 +62,8 @@ this one must prove about itself it proves in its own suite or nowhere.
 
 | | measured with |
 | --- | --- |
-| 8 Go files, one per role, all in one package at the root | `grep -l '^package wallet' *.go` |
-| 16 test files, 141 passing tests and subtests, and 8 more when `ARANDU_TEST_POSTGRES_DSN` names a server | `find tests -name '*_test.go'` · `go test -count=1 ./... -v \| grep -cE '^( *)--- PASS'` |
+| 9 Go files, one per role, all in one package at the root | `grep -l '^package wallet' *.go` |
+| 18 test files, 161 passing tests and subtests, and 8 more when `ARANDU_TEST_POSTGRES_DSN` names a server | `find tests -name '*_test.go'` · `go test -count=1 ./... -v \| grep -cE '^( *)--- PASS'` |
 | 10 routes | `grep -c 'm.register(r,' module.go` |
 | 11 actions the policy answers about | `grep -cE '^\t[A-Za-z]+ security.Action = ' policy.go` |
 | 4 direct dependencies, all under `arandu-io` | `go list -m -f '{{if and (not .Indirect) (not .Main)}}{{.Path}} {{.Version}}{{end}}' all` |
@@ -82,14 +82,16 @@ module.go      registration, routes, handlers and migrations
 config.go      what the application passes in
 money.go       the amount type, its scale and its arithmetic
 rate.go        the rate, its arithmetic, and the seam that quotes it
+fee.go         the fee, its arithmetic, and the seams that price a payment
 model.go       the entities, and what they may answer with
 policy.go      who may do what
 service.go     the rules and authorized Model access
 views.go       the files the application takes ownership of
 ```
 
-`Wallets(db)`, `Operations(db)`, `Entries(db)` and `Conversions(db)` configure
-the four tables, each with a string primary key and the default
+`Wallets(db)`, `Operations(db)`, `Entries(db)`, `Conversions(db)` and
+`Charges(db)` configure the five tables, each with a string primary key and the
+default
 `tenant_id` scope. Its terminals return `*Wallet`/`[]*Wallet`; keep those
 pointers intact because copying an embedded Model leaves its `Entity` pointer
 aimed at the original allocation. `Resource` and `Collection` are the deliberate

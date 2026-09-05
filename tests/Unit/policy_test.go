@@ -221,7 +221,7 @@ func TestTheServiceRefusesBeforeReachingTheModel(t *testing.T) {
 	// The requests are valid ones, so that what is measured is the policy and
 	// not the validator: an invalid request would be refused before anything
 	// was authorized and would prove nothing about the order.
-	service := wallet.NewWalletService(nil, nil)
+	service := wallet.NewWalletService(nil, nil, nil, nil)
 	ctx := context.Background()
 	actor := security.Guest("acme")
 
@@ -307,6 +307,16 @@ func TestEveryModelIsWiredAndTenantScoped(t *testing.T) {
 			key: wallet.Entries(handle).GetTable(), keyType: wallet.Entries(handle).KeyType,
 			incr: wallet.Entries(handle).Incrementing, tenant: wallet.Entries(handle).TenantColumn,
 			entityOK: model.ModelOf(wallet.Entries(handle).Entity) != nil,
+		},
+		"wallet_conversions": {
+			key: wallet.Conversions(handle).GetTable(), keyType: wallet.Conversions(handle).KeyType,
+			incr: wallet.Conversions(handle).Incrementing, tenant: wallet.Conversions(handle).TenantColumn,
+			entityOK: model.ModelOf(wallet.Conversions(handle).Entity) != nil,
+		},
+		"wallet_charges": {
+			key: wallet.Charges(handle).GetTable(), keyType: wallet.Charges(handle).KeyType,
+			incr: wallet.Charges(handle).Incrementing, tenant: wallet.Charges(handle).TenantColumn,
+			entityOK: model.ModelOf(wallet.Charges(handle).Entity) != nil,
 		},
 	} {
 		if rows.key != table {

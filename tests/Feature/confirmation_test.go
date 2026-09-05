@@ -85,7 +85,7 @@ func confirm(t *testing.T, service *wallet.WalletService, actor security.Subject
 func TestAPendingMovementIsRecordedAndCountsForNothing(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 
 	receipt := pend(t, service, account.ID, "later-1", "10.00")
@@ -125,7 +125,7 @@ func TestAPendingMovementIsRecordedAndCountsForNothing(t *testing.T) {
 func TestConfirmingAppendsTheSettlementBesideWhatWasProposed(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 	proposed := pend(t, service, account.ID, "later-1", "10.00")
 
@@ -184,7 +184,7 @@ func TestConfirmingAppendsTheSettlementBesideWhatWasProposed(t *testing.T) {
 func TestAnOperationIsConfirmedOnce(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 	proposed := pend(t, service, account.ID, "later-1", "10.00")
 
@@ -213,7 +213,7 @@ func TestAnOperationIsConfirmedOnce(t *testing.T) {
 func TestConfirmingWhatHasNothingWaitingIsRefused(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 
 	// An ordinary deposit settled when it was made.
@@ -243,7 +243,7 @@ func TestConfirmingWhatHasNothingWaitingIsRefused(t *testing.T) {
 func TestAPendingWithdrawalHoldsNothingAndIsJudgedWhereItMoves(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 	deposit(t, service, account.ID, "opening", "10.00")
 
@@ -299,7 +299,7 @@ func TestAPendingWithdrawalHoldsNothingAndIsJudgedWhereItMoves(t *testing.T) {
 func TestWhatIsUndoneIsTheOperationThatMovedTheMoney(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 	proposed := pend(t, service, account.ID, "later-1", "10.00")
 
@@ -338,7 +338,7 @@ func TestWhatIsUndoneIsTheOperationThatMovedTheMoney(t *testing.T) {
 func TestAPendingTransferMovesNeitherSideUntilItIsConfirmed(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	source := openWallet(t, service, "user-1", "main", 2)
 	target := openWallet(t, service, "user-2", "main", 2)
 	deposit(t, service, source.ID, "opening", "10.00")
@@ -389,7 +389,7 @@ func TestAPendingExchangeQuotesItsRateOnceAndSettlesAtIt(t *testing.T) {
 	// A provider that answers differently every time, so a confirmation that
 	// asked again would settle at a number nobody was told.
 	rates := &driftingRate{}
-	service := wallet.NewWalletService(database(t), rates)
+	service := wallet.NewWalletService(database(t), rates, nil, nil)
 	source := openIn(t, service, "user-1", "main", "USD", 2)
 	target := openIn(t, service, "user-2", "main", "BRL", 2)
 	deposit(t, service, source.ID, "opening", "100.00")
@@ -426,7 +426,7 @@ func TestAPendingExchangeQuotesItsRateOnceAndSettlesAtIt(t *testing.T) {
 func TestConfirmingIsTheHoldersOnTheirOwnMoneyAndNobodyElsesf(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 	proposed := pend(t, service, account.ID, "later-1", "10.00")
 

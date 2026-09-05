@@ -55,19 +55,27 @@ var sortableWallet = map[string]string{
 // only owner of the database handle, so the request layer cannot reach a Model
 // before the policy has answered.
 type WalletService struct {
-	db     *data.DB
-	policy WalletPolicy
-	rates  RateProvider
+	db        *data.DB
+	policy    WalletPolicy
+	rates     RateProvider
+	fees      FeeProvider
+	discounts DiscountProvider
 }
 
 // NewWalletService wires the service over the application's database handle.
 //
-// The rate provider may be nil, and nil is not a degraded mode: it is an
-// application that moves money only between wallets counted the same way, which
-// is most of them. A transfer that would need a rate is refused rather than
-// guessed at.
-func NewWalletService(db *data.DB, rates RateProvider) *WalletService {
-	return &WalletService{db: db, rates: rates}
+// Every provider may be nil, and nil is not a degraded mode. It is an
+// application that moves money only between wallets counted the same way, that
+// charges nothing to be paid, and that discounts nothing -- which is most of
+// them. A transfer that would need a rate is refused rather than guessed at,
+// and a payment with no schedule is a payment with no fee.
+//
+// They are three parameters and not a struct of options, for the reason Config
+// is a struct and not a map: what this service is made of is written at the one
+// place that builds it, and reading that place is how somebody learns what the
+// package reaches for.
+func NewWalletService(db *data.DB, rates RateProvider, fees FeeProvider, discounts DiscountProvider) *WalletService {
+	return &WalletService{db: db, rates: rates, fees: fees, discounts: discounts}
 }
 
 // OpenRequest is what opening a wallet takes.
@@ -333,6 +341,10 @@ type Statement struct {
 	// identifier. Only an exchange has one, so this map is smaller than
 	// Operations and is empty on a wallet that never converted.
 	Conversions map[string]Conversion
+	// Charges are what those operations charged beyond the money they moved,
+	// by operation identifier. Only a payment that discounted or charged has
+	// one, so this map is empty on a wallet nobody charged.
+	Charges map[string]Charge
 }
 
 // Open creates a wallet for a holder.
@@ -583,24 +595,31 @@ func (s *WalletService) History(ctx context.Context, actor security.Subject, in 
 		return Statement{}, err
 	}
 
-	operations, conversions, err := s.behind(ctx, g, entries)
+	operations, conversions, charges, err := s.behind(ctx, g, entries)
 	if err != nil {
 		return Statement{}, err
 	}
-	return Statement{Wallet: *holder, Entries: entries, Operations: operations, Conversions: conversions}, nil
+	return Statement{
+		Wallet:      *holder,
+		Entries:     entries,
+		Operations:  operations,
+		Conversions: conversions,
+		Charges:     charges,
+	}, nil
 }
 
-// behind reads the operations a page of entries was written under, and the
-// rates those operations applied.
+// behind reads the operations a page of entries was written under, the rates
+// those operations applied, and what they charged.
 //
-// Two statements for the whole page rather than two per entry: a page is up to
-// two hundred rows, and a query per row is the read that makes a statement
-// slow on exactly the accounts that have a history worth reading.
+// Three statements for the whole page rather than three per entry: a page is up
+// to two hundred rows, and a query per row is the read that makes a statement
+// slow on exactly the accounts that have a history worth reading. Two of the
+// three are skipped where the page has nothing of that kind on it.
 //
-// Both are read through the Model with the Grant, so both are scoped to the
+// All are read through the Model with the Grant, so all are scoped to the
 // tenant like everything else. A ledger that could be explained by another
 // customer's operations would be a ledger that leaks one.
-func (s *WalletService) behind(ctx context.Context, g security.Grant, entries []*Entry) (map[string]Operation, map[string]Conversion, error) {
+func (s *WalletService) behind(ctx context.Context, g security.Grant, entries []*Entry) (map[string]Operation, map[string]Conversion, map[string]Charge, error) {
 	ids := make([]any, 0, len(entries))
 	seen := make(map[string]bool, len(entries))
 	for _, entry := range entries {
@@ -611,40 +630,56 @@ func (s *WalletService) behind(ctx context.Context, g security.Grant, entries []
 		ids = append(ids, entry.OperationID)
 	}
 	if len(ids) == 0 {
-		return map[string]Operation{}, map[string]Conversion{}, nil
+		return map[string]Operation{}, map[string]Conversion{}, map[string]Charge{}, nil
 	}
 
 	rows, err := Operations(s.db).NewQuery().WhereIn("id", ids).Get(ctx, g)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	operations := make(map[string]Operation, len(rows))
 	converting := make([]any, 0, len(rows))
+	paying := make([]any, 0, len(rows))
 	for _, row := range rows {
 		if row == nil {
 			continue
 		}
 		operations[row.ID] = *row
-		if row.Kind == OperationExchange {
+		switch row.Kind {
+		case OperationExchange:
 			converting = append(converting, row.ID)
+			paying = append(paying, row.ID)
+		case OperationTransfer:
+			paying = append(paying, row.ID)
 		}
 	}
 
 	conversions := make(map[string]Conversion, len(converting))
-	if len(converting) == 0 {
-		return operations, conversions, nil
-	}
-
-	rates, err := Conversions(s.db).NewQuery().WhereIn("operation_id", converting).Get(ctx, g)
-	if err != nil {
-		return nil, nil, err
-	}
-	for _, rate := range rates {
-		if rate != nil {
-			conversions[rate.OperationID] = *rate
+	if len(converting) > 0 {
+		rates, err := Conversions(s.db).NewQuery().WhereIn("operation_id", converting).Get(ctx, g)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		for _, rate := range rates {
+			if rate != nil {
+				conversions[rate.OperationID] = *rate
+			}
 		}
 	}
-	return operations, conversions, nil
+
+	charges := make(map[string]Charge, len(paying))
+	if len(paying) > 0 {
+		charged, err := Charges(s.db).NewQuery().WhereIn("operation_id", paying).Get(ctx, g)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		for _, row := range charged {
+			if row != nil {
+				charges[row.OperationID] = *row
+			}
+		}
+	}
+	return operations, conversions, charges, nil
 }
 
 // Deposit puts money into a wallet.
@@ -817,23 +852,168 @@ func (s *WalletService) Transfer(ctx context.Context, actor security.Subject, in
 		return receipt, err
 	}
 
-	debited, err := positiveAmount(in.Amount, source.DecimalPlaces)
-	if err != nil {
-		return Receipt{}, err
-	}
-	credited, applied, err := s.convert(ctx, g, *source, *target, debited)
+	requested, err := positiveAmount(in.Amount, source.DecimalPlaces)
 	if err != nil {
 		return Receipt{}, err
 	}
 
-	return s.commit(ctx, g, operation{
-		key:  in.IdempotencyKey,
-		kind: kind,
-		rate: applied,
-	}, []movement{
+	// What the payer is charged less comes off first, because everything after
+	// it is a share of what is being paid rather than of what was asked for.
+	discount, err := s.discount(ctx, g, *source, *target, requested)
+	if err != nil {
+		return Receipt{}, err
+	}
+	base, err := requested.Sub(discount)
+	if err != nil {
+		return Receipt{}, err
+	}
+	if base <= 0 {
+		return Receipt{}, ErrAmountNotPositive
+	}
+
+	credited, applied, err := s.convert(ctx, g, *source, *target, base)
+	if err != nil {
+		return Receipt{}, err
+	}
+
+	charged, collector, err := s.charge(ctx, g, *source, *target, requested, discount, base)
+	if err != nil {
+		return Receipt{}, err
+	}
+
+	// Who pays the fee is the only thing the schedule changes about the
+	// movement: on top of the payment, or out of what arrives. Either way what
+	// leaves is what arrives plus the fee, exactly.
+	debited := base
+	if collector != nil {
+		if charged.schedule.Deductible {
+			credited, err = credited.Sub(charged.fee.Amount)
+			if err != nil {
+				return Receipt{}, err
+			}
+			if credited <= 0 {
+				return Receipt{}, fmt.Errorf("%w: %s of %s", ErrFeeExceedsAmount,
+					charged.money(charged.fee.Amount), charged.money(base))
+			}
+		} else if debited, err = base.Add(charged.fee.Amount); err != nil {
+			return Receipt{}, err
+		}
+	}
+
+	movements := []movement{
 		{wallet: source, kind: EntryWithdraw, amount: debited, pending: in.Pending, force: in.Force},
 		{wallet: target, kind: EntryDeposit, amount: credited, pending: in.Pending},
-	})
+	}
+	if collector != nil {
+		movements = append(movements, movement{
+			wallet: collector, kind: EntryDeposit, amount: charged.fee.Amount, pending: in.Pending,
+		})
+	}
+
+	return s.commit(ctx, g, operation{
+		key:    in.IdempotencyKey,
+		kind:   kind,
+		rate:   applied,
+		charge: charged,
+	}, movements)
+}
+
+// discount is what the payer is charged less on this payment, and zero where
+// nothing answers.
+//
+// The provider is asked once, and what it answers is recorded: a discount that
+// was decided and not written down is a receipt that says a smaller number than
+// the request without saying why.
+func (s *WalletService) discount(ctx context.Context, g security.Grant, source, target Wallet, requested Amount) (Amount, error) {
+	if s.discounts == nil {
+		return 0, nil
+	}
+	discount, err := s.discounts.Discount(ctx, g, source, target, source.Money(requested))
+	if err != nil {
+		return 0, err
+	}
+	if discount < 0 {
+		return 0, fmt.Errorf("%w: got %s", ErrDiscountNegative, source.Money(discount))
+	}
+	return discount, nil
+}
+
+// charge is what this payment costs beyond the money it moves, and the wallet
+// the fee is credited to.
+//
+// Both are nil where there is nothing to record: no discount and no schedule.
+// A discount with no fee still produces a record and no third wallet, because
+// the number the payer was charged less is a fact about the payment whether or
+// not anybody charged for it.
+//
+// The provider is asked once and what it answers is applied once, which is the
+// same arrangement the rate has and for the same reason: a schedule read twice
+// could answer twice, and then the fee that was taken and the fee on the record
+// would be two different stories about one payment.
+//
+// A fee never crosses a rate. The two wallets have to be counted the same way
+// and so does the one collecting, because the fee is a share of the payment and
+// is charged in the payment's money -- carrying it through a rate would round a
+// number that is already the result of a rounding.
+func (s *WalletService) charge(ctx context.Context, g security.Grant, source, target Wallet, requested, discount, base Amount) (*appliedCharge, *Wallet, error) {
+	var schedule FeeSchedule
+	if s.fees != nil {
+		answered, err := s.fees.Fee(ctx, g, target, source.Money(base))
+		if err != nil {
+			return nil, nil, err
+		}
+		schedule = answered
+	}
+
+	if !schedule.Charges() {
+		if discount == 0 {
+			return nil, nil, nil
+		}
+		return &appliedCharge{
+			currency:      source.Currency,
+			decimalPlaces: source.DecimalPlaces,
+			requested:     requested,
+			discount:      discount,
+			base:          base,
+		}, nil, nil
+	}
+
+	if err := schedule.Validate(); err != nil {
+		return nil, nil, err
+	}
+	if converts(source, target) {
+		return nil, nil, fmt.Errorf("%w: %s and %s", ErrFeeCurrencyMismatch,
+			source.Money(base), target.Money(0))
+	}
+	if schedule.WalletID == source.ID || schedule.WalletID == target.ID {
+		return nil, nil, fmt.Errorf("%w: it names one of the two wallets the payment is between", ErrFeeWallet)
+	}
+
+	collector, err := Wallets(s.db).NewQuery().WhereKey(schedule.WalletID).First(ctx, g)
+	if err != nil {
+		return nil, nil, err
+	}
+	if collector == nil {
+		return nil, nil, fmt.Errorf("%w: %s is not a wallet of this customer", ErrFeeWallet, schedule.WalletID)
+	}
+	if converts(source, *collector) {
+		return nil, nil, fmt.Errorf("%w: the payment is %s and the fee would be credited in %s",
+			ErrFeeCurrencyMismatch, source.Money(base), collector.Money(0))
+	}
+
+	fee, err := schedule.Fee(source.Money(base))
+	if err != nil {
+		return nil, nil, err
+	}
+	return &appliedCharge{
+		currency:      source.Currency,
+		decimalPlaces: source.DecimalPlaces,
+		requested:     requested,
+		discount:      discount,
+		base:          base,
+		schedule:      schedule,
+		fee:           fee,
+	}, collector, nil
 }
 
 // converts reports that money moving between these two wallets has to go
@@ -1001,6 +1181,7 @@ type operation struct {
 	settles string
 	reason  string
 	rate    *appliedRate
+	charge  *appliedCharge
 }
 
 // appliedRate is the conversion an operation performed, and nil where it
@@ -1015,6 +1196,28 @@ type appliedRate struct {
 	rate      Rate
 	from      Money
 	converted Converted
+}
+
+// appliedCharge is what an operation charged beyond the money it moved, and nil
+// where it charged nothing.
+//
+// It carries every number the arithmetic used, which is everything the recorded
+// row holds. It is one value travelling from the place that asked the providers
+// to the place that writes the row, so there is exactly one discount and one
+// schedule in the operation and no second lookup between them.
+type appliedCharge struct {
+	currency      Currency
+	decimalPlaces int
+	requested     Amount
+	discount      Amount
+	base          Amount
+	schedule      FeeSchedule
+	fee           Fee
+}
+
+// money reads an amount at the currency and scale this charge was counted in.
+func (c appliedCharge) money(amount Amount) Money {
+	return Money{Amount: amount, Currency: c.currency, DecimalPlaces: c.decimalPlaces}
 }
 
 // movement is one wallet's share of an operation.
@@ -1105,6 +1308,7 @@ func (s *WalletService) commit(ctx context.Context, g security.Grant, op operati
 
 	var entries []Entry
 	var conversion *Conversion
+	var charge *Charge
 	err = data.Transaction(ctx, s.db, func(ctx context.Context) error {
 		if _, err := record.Save(ctx, g); err != nil {
 			return err
@@ -1115,11 +1319,22 @@ func (s *WalletService) commit(ctx context.Context, g security.Grant, op operati
 		// nobody can read is a movement nobody can explain, and the two either
 		// both exist or neither does.
 		if op.rate != nil {
-			quoted, err := s.record(ctx, g, id, *op.rate)
+			quoted, err := s.recordConversion(ctx, g, id, *op.rate)
 			if err != nil {
 				return err
 			}
 			conversion = quoted
+		}
+		// And the charge with it, for the same reason: a receipt that says a
+		// different number from the request has to say why in the same
+		// transaction that moved the money, or there is a state in which the
+		// payment settled and what it cost is missing.
+		if op.charge != nil {
+			taken, err := s.recordCharge(ctx, g, id, *op.charge)
+			if err != nil {
+				return err
+			}
+			charge = taken
 		}
 		written, err := s.apply(ctx, g, id, movements)
 		if err != nil {
@@ -1134,17 +1349,17 @@ func (s *WalletService) commit(ctx context.Context, g security.Grant, op operati
 		}
 		return Receipt{}, err
 	}
-	return Receipt{Operation: *record, Entries: entries, Conversion: conversion}, nil
+	return Receipt{Operation: *record, Entries: entries, Conversion: conversion, Charge: charge}, nil
 }
 
-// record writes the rate an operation converted at, inside the caller's
-// transaction.
+// recordConversion writes the rate an operation converted at, inside the
+// caller's transaction.
 //
 // Every number comes off the value the caller already holds. Nothing here asks
 // the provider again, and there is nowhere it could: the rate arrived as data,
 // and a second lookup would be a second rate in one operation -- which is a
 // receipt that says one thing and a ledger that did another.
-func (s *WalletService) record(ctx context.Context, g security.Grant, operationID string, applied appliedRate) (*Conversion, error) {
+func (s *WalletService) recordConversion(ctx context.Context, g security.Grant, operationID string, applied appliedRate) (*Conversion, error) {
 	id, err := data.NewID()
 	if err != nil {
 		return nil, err
@@ -1170,6 +1385,50 @@ func (s *WalletService) record(ctx context.Context, g security.Grant, operationI
 	written.Rounding = RoundDown
 	written.RemainderNumerator = applied.converted.RemainderNumerator
 	written.RemainderDenominator = applied.converted.RemainderDenominator
+	written.CreatedAt = time.Now().UTC()
+	if _, err := written.Save(ctx, g); err != nil {
+		return nil, err
+	}
+	return written, nil
+}
+
+// recordCharge writes what an operation charged, inside the caller's
+// transaction.
+//
+// Every number comes off the value the caller already holds. Nothing here asks
+// a provider again, and there is nowhere it could: the schedule and the discount
+// arrived as data, and a second lookup would be a second answer in one
+// operation -- which is a receipt that says one thing and a ledger that did
+// another.
+func (s *WalletService) recordCharge(ctx context.Context, g security.Grant, operationID string, applied appliedCharge) (*Charge, error) {
+	id, err := data.NewID()
+	if err != nil {
+		return nil, err
+	}
+	instance, err := Charges(s.db).NewInstance(nil, false)
+	if err != nil {
+		return nil, err
+	}
+
+	written := instance.Entity
+	written.ID = id
+	written.TenantID = data.Tenant(g)
+	written.OperationID = operationID
+	written.Currency = applied.currency
+	written.DecimalPlaces = applied.decimalPlaces
+	written.RequestedAmount = applied.requested
+	written.Discount = applied.discount
+	written.BaseAmount = applied.base
+	written.FeeNumerator = applied.schedule.Numerator
+	written.FeeDenominator = applied.schedule.Denominator
+	written.FeeMinimum = applied.schedule.Minimum
+	written.FeeMaximum = applied.schedule.Maximum
+	written.FeeDeductible = Flag(applied.schedule.Deductible)
+	written.FeeAmount = applied.fee.Amount
+	written.FeeWalletID = applied.schedule.WalletID
+	written.Rounding = RoundDown
+	written.RemainderNumerator = applied.fee.RemainderNumerator
+	written.RemainderDenominator = applied.fee.RemainderDenominator
 	written.CreatedAt = time.Now().UTC()
 	if _, err := written.Save(ctx, g); err != nil {
 		return nil, err
@@ -1344,7 +1603,27 @@ func (s *WalletService) replay(ctx context.Context, g security.Grant, key string
 			return Receipt{}, false, err
 		}
 	}
-	return Receipt{Operation: *record, Entries: entries, Conversion: conversion, Replayed: true}, true, nil
+
+	// And only a payment between two wallets can have been charged, so only one
+	// is asked. A replayed payment answers with what the first call charged,
+	// read back off the row rather than decided again: the same key twice pays
+	// once, at one price.
+	var charge *Charge
+	if record.Kind == OperationTransfer || record.Kind == OperationExchange {
+		charge, err = Charges(s.db).NewQuery().
+			Where("operation_id", "=", record.ID).
+			First(ctx, g)
+		if err != nil {
+			return Receipt{}, false, err
+		}
+	}
+	return Receipt{
+		Operation:  *record,
+		Entries:    entries,
+		Conversion: conversion,
+		Charge:     charge,
+		Replayed:   true,
+	}, true, nil
 }
 
 // reversed reports whether an operation has already been undone.

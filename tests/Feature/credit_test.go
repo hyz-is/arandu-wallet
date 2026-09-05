@@ -49,7 +49,7 @@ func withdraw(t *testing.T, service *wallet.WalletService, actor security.Subjec
 func TestACreditLimitLetsTheBalanceGoBelowZeroAndNoFurther(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 
 	if got := creditLimit(t, service, account.ID, "10.00").CreditLimit; got != 1000 {
@@ -88,7 +88,7 @@ func TestACreditLimitLetsTheBalanceGoBelowZeroAndNoFurther(t *testing.T) {
 func TestACreditLimitIsNotLoweredBelowWhatIsAlreadySpent(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 	creditLimit(t, service, account.ID, "10.00")
 	if err := withdraw(t, service, staff(), account.ID, "spend-1", "8.00", false); err != nil {
@@ -121,7 +121,7 @@ func TestACreditLimitIsNotLoweredBelowWhatIsAlreadySpent(t *testing.T) {
 func TestACreditLimitIsAMagnitudeAndNeverANegative(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 
 	_, err := service.SetCredit(context.Background(), staff(), wallet.CreditRequest{
@@ -138,7 +138,7 @@ func TestACreditLimitIsAMagnitudeAndNeverANegative(t *testing.T) {
 func TestOnlyAnOperatorSetsACreditLimitAgainstTheDatabase(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 
 	// The holder of the wallet, on their own wallet, which is the widest a
@@ -161,7 +161,7 @@ func TestOnlyAnOperatorSetsACreditLimitAgainstTheDatabase(t *testing.T) {
 func TestForcingAMovementIsAuthorizedSeparatelyFromMakingIt(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 
 	// The holder may take their own money out, and may not take out money that
@@ -196,7 +196,7 @@ func TestForcingAMovementIsAuthorizedSeparatelyFromMakingIt(t *testing.T) {
 func TestAForcedWithdrawalStillCannotWrapTheColumn(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	// Whole units, so the largest amount a request can name is the largest the
 	// column can hold.
 	account := openIn(t, service, "user-1", "main", "XAU", 0)

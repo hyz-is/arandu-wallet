@@ -41,7 +41,7 @@ const withdrawers = 200
 func TestConcurrentWithdrawalsNeverExceedTheBalance(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 
 	// Twenty units in, one unit per withdrawal, and two hundred goroutines
@@ -122,7 +122,7 @@ func TestConcurrentWithdrawalsNeverExceedTheBalance(t *testing.T) {
 func TestABalanceReadBeforeTheWriteIsRevalidatedByIt(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 	deposit(t, service, account.ID, "opening", "10.00")
 
@@ -158,7 +158,7 @@ func TestABalanceReadBeforeTheWriteIsRevalidatedByIt(t *testing.T) {
 func TestTheSameIdempotencyKeyCreditsOnce(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 
 	first := deposit(t, service, account.ID, "key-1", "10.00")
@@ -190,7 +190,7 @@ func TestTheSameIdempotencyKeyCreditsOnce(t *testing.T) {
 func TestConcurrentRequestsUnderOneKeyCreditOnce(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 
 	// The retry that arrives before the first request has finished. A lookup
@@ -248,7 +248,7 @@ func TestConcurrentRequestsUnderOneKeyCreditOnce(t *testing.T) {
 func TestAnIdempotencyKeyReusedForAnotherRequestIsRefused(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 	deposit(t, service, account.ID, "key-1", "10.00")
 
@@ -270,7 +270,7 @@ func TestAnIdempotencyKeyReusedForAnotherRequestIsRefused(t *testing.T) {
 func TestTransfersInOppositeDirectionsSettleWithoutDeadlock(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	left := openWallet(t, service, "user-1", "main", 2)
 	right := openWallet(t, service, "user-2", "main", 2)
 	deposit(t, service, left.ID, "opening-left", "50.00")
@@ -343,7 +343,7 @@ func TestTransfersInOppositeDirectionsSettleWithoutDeadlock(t *testing.T) {
 func TestConcurrentReversalsOfOneOperationUndoItOnce(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 	credited := deposit(t, service, account.ID, "opening", "10.00")
 
@@ -405,7 +405,7 @@ func TestConcurrentReversalsOfOneOperationUndoItOnce(t *testing.T) {
 func TestConcurrentDepositsKeepTheLedgerAndTheBalanceTogether(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(database(t), nil)
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
 
 	// The other direction of the same claim. Nothing here can be refused, so

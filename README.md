@@ -47,9 +47,9 @@ Then, once, before the application serves:
 aru migrate
 ```
 
-This package owns four tables -- the wallets, the operations, the ledger and the
-recorded rates -- which is why the migration step is not optional and why
-`arandu.mod.toml` says `migrations = true`.
+This package owns five tables -- the wallets, the operations, the ledger, the
+recorded rates and the recorded charges -- which is why the migration step is
+not optional and why `arandu.mod.toml` says `migrations = true`.
 
 ## Quote a rate, if your wallets are not all counted the same way
 
@@ -131,6 +131,9 @@ boot rather than answering the first request that reaches one of them with a
 | `Tenant` | yes | the customer a visitor with no session is read as. From the application's configuration, never from the request. |
 | `Prefix` | no | where the routes are mounted. Defaults to `/wallet`. |
 | `PageSize` | no | how many records one page answers with. Defaults to 25, refused above 200. |
+| `Rates` | no | quotes the rate between two currencies. Nil refuses every transfer that would need one. |
+| `Fees` | no | answers with what a wallet charges to be paid. Nil charges nothing. |
+| `Discounts` | no | answers with what one payer is charged less. Nil discounts nothing. |
 
 `New` returns an error rather than starting half-wired, so a setting that
 cannot work fails where it is written instead of on the first request that
@@ -187,7 +190,10 @@ report, export or raw SQL contract that the common Model path cannot express.
 ```
 module.go      registration, routes, handlers and migrations
 config.go      what the application passes in
-model.go       the entity, and what it may answer with
+money.go       the amount type, its scale and its arithmetic
+rate.go        the rate, its arithmetic, and the seam that quotes it
+fee.go         the fee, its arithmetic, and the seams that price a payment
+model.go       the entities, and what they may answer with
 policy.go      who may do what
 service.go     the rules and authorized Model access
 views.go       the files the application takes ownership of
