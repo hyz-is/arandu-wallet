@@ -192,6 +192,10 @@ type Operation struct {
 	// everything else.
 	Reason string `db:"reason"`
 
+	// Meta is what the application attached to the request as a whole: its own
+	// facts about what this money was for. Nothing in this package reads it.
+	Meta Meta `db:"meta"`
+
 	// CreatedAt is when the operation was recorded, in UTC.
 	CreatedAt time.Time `db:"created_at"`
 }
@@ -602,6 +606,16 @@ type Entry struct {
 	// showing only the second of the two.
 	Settled Flag `db:"settled"`
 
+	// Meta is what the application attached to this leg in particular, and it
+	// is empty where the leg said nothing the operation did not.
+	//
+	// A movement with one leg carries its facts on the operation, because there
+	// they are the request's. A movement with two or twenty carries them here as
+	// well, because a basket's line and the payment it is part of are different
+	// facts and a receipt that showed one for the other would be a receipt about
+	// something else.
+	Meta Meta `db:"meta"`
+
 	// CreatedAt is when the movement was written, in UTC.
 	CreatedAt time.Time `db:"created_at"`
 }
@@ -979,6 +993,7 @@ type EntryResource struct {
 	amount        Amount
 	balanceAfter  Amount
 	settled       Flag
+	meta          Meta
 	decimalPlaces int
 	createdAt     time.Time
 }
@@ -1002,6 +1017,7 @@ func NewEntryResource(record Entry, decimalPlaces int, kind OperationKind) Entry
 		amount:        record.Amount,
 		balanceAfter:  record.BalanceAfter,
 		settled:       record.Settled,
+		meta:          record.Meta,
 		decimalPlaces: decimalPlaces,
 		createdAt:     record.CreatedAt,
 	}
@@ -1025,6 +1041,7 @@ func (r EntryResource) ToArray() map[string]any {
 		"balance_after_minor": int64(r.balanceAfter),
 		"balance_after":       r.balanceAfter.Format(r.decimalPlaces),
 		"settled":             bool(r.settled),
+		"meta":                map[string]string(r.meta),
 		"created_at":          r.createdAt.UTC().Format(time.RFC3339),
 	}
 }
@@ -1162,6 +1179,7 @@ type ReceiptResource struct {
 	confirms       string
 	pending        bool
 	replayed       bool
+	meta           Meta
 	entries        []EntryResource
 	conversion     *ConversionResource
 	charge         *ChargeResource
@@ -1200,6 +1218,7 @@ func NewReceiptResource(receipt Receipt, places map[string]int) ReceiptResource 
 		confirms:       receipt.Operation.Confirms(),
 		pending:        receipt.Pending(),
 		replayed:       receipt.Replayed,
+		meta:           receipt.Operation.Meta,
 		entries:        entries,
 		conversion:     conversion,
 		charge:         charge,
@@ -1236,6 +1255,7 @@ func (r ReceiptResource) ToArray() map[string]any {
 		"confirms":        r.confirms,
 		"pending":         r.pending,
 		"replayed":        r.replayed,
+		"meta":            map[string]string(r.meta),
 		"entries":         entries,
 		"conversion":      conversion,
 		"charge":          charge,

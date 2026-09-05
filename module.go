@@ -357,6 +357,7 @@ func (m *Module) deposit(ctx *fhttp.Context) error {
 		WalletID:       ctx.Param("id"),
 		Amount:         ctx.Input("amount"),
 		Pending:        pending,
+		Meta:           m.meta(ctx, "meta"),
 	}
 
 	receipt, err := m.svc.Deposit(ctx.Ctx(), m.subject(ctx.Request), in)
@@ -382,6 +383,7 @@ func (m *Module) withdraw(ctx *fhttp.Context) error {
 		Amount:         ctx.Input("amount"),
 		Pending:        pending,
 		Force:          force,
+		Meta:           m.meta(ctx, "meta"),
 	}
 
 	receipt, err := m.svc.Withdraw(ctx.Ctx(), m.subject(ctx.Request), in)
@@ -392,8 +394,17 @@ func (m *Module) withdraw(ctx *fhttp.Context) error {
 }
 
 // transfer moves money from the wallet in the path into the one in the body.
+//
+// The two sides are asked about separately, and there is no field that answers
+// for both: a payment where what leaves counts now and what arrives waits is an
+// arrangement a single flag cannot spell, and a shorthand beside the two would
+// be a second way to say what one of them already says.
 func (m *Module) transfer(ctx *fhttp.Context) error {
-	pending, err := readFlag("pending", ctx.Input("pending"))
+	withdrawal, err := readFlag("withdrawal_pending", ctx.Input("withdrawal_pending"))
+	if err != nil {
+		return m.answer(ctx, err)
+	}
+	deposit, err := readFlag("deposit_pending", ctx.Input("deposit_pending"))
 	if err != nil {
 		return m.answer(ctx, err)
 	}
@@ -406,8 +417,10 @@ func (m *Module) transfer(ctx *fhttp.Context) error {
 		FromWalletID:   ctx.Param("id"),
 		ToWalletID:     ctx.Input("to_wallet_id"),
 		Amount:         ctx.Input("amount"),
-		Pending:        pending,
+		Withdrawal:     Leg{Pending: withdrawal, Meta: m.meta(ctx, "withdrawal_meta")},
+		Deposit:        Leg{Pending: deposit, Meta: m.meta(ctx, "deposit_meta")},
 		Force:          force,
+		Meta:           m.meta(ctx, "meta"),
 	}
 
 	receipt, err := m.svc.Transfer(ctx.Ctx(), m.subject(ctx.Request), in)
@@ -423,6 +436,7 @@ func (m *Module) reverse(ctx *fhttp.Context) error {
 		IdempotencyKey: ctx.Header(IdempotencyHeader),
 		OperationID:    ctx.Param("operation"),
 		Reason:         ctx.Input("reason"),
+		Meta:           m.meta(ctx, "meta"),
 	}
 
 	receipt, err := m.svc.Reverse(ctx.Ctx(), m.subject(ctx.Request), in)
@@ -442,6 +456,7 @@ func (m *Module) confirm(ctx *fhttp.Context) error {
 		IdempotencyKey: ctx.Header(IdempotencyHeader),
 		OperationID:    ctx.Param("operation"),
 		Force:          force,
+		Meta:           m.meta(ctx, "meta"),
 	}
 
 	receipt, err := m.svc.Confirm(ctx.Ctx(), m.subject(ctx.Request), in)
@@ -498,6 +513,23 @@ func (m *Module) subject(r *stdhttp.Request) security.Subject {
 		return security.Guest(m.cfg.Tenant)
 	}
 	return sub
+}
+
+// meta reads what the application attached under one field.
+//
+// The form is already parsed by the time this runs, because every handler that
+// calls it has read a field of its own first. It is read out of the parsed form
+// rather than asked for by name, because the names belong to the application
+// and this package has never heard of them.
+func (m *Module) meta(ctx *fhttp.Context, field string) Meta {
+	if ctx.Request.Form == nil {
+		if err := ctx.Request.ParseForm(); err != nil {
+			// A body that does not parse is a body no field of it was read
+			// from either, and the handler is already answering about that.
+			return nil
+		}
+	}
+	return metaFrom(ctx.Request.Form, field)
 }
 
 // readFlag reads a boolean a request wrote.
@@ -649,6 +681,7 @@ func (m *Module) Migrations() []foundation.Migration {
 		addWalletCreditLimit{},
 		addWalletEntrySettlement{},
 		createWalletCharges{},
+		addWalletMetadata{},
 	}
 }
 
@@ -664,6 +697,7 @@ var (
 	_ migrations.ReversibleMigration = addWalletCreditLimit{}
 	_ migrations.ReversibleMigration = addWalletEntrySettlement{}
 	_ migrations.ReversibleMigration = createWalletCharges{}
+	_ migrations.ReversibleMigration = addWalletMetadata{}
 )
 
 // createWallets is the balances table.
@@ -980,4 +1014,48 @@ func (createWalletCharges) Up(ctx context.Context, conn migrations.Connection) e
 // Down drops the table, which takes its index with it.
 func (createWalletCharges) Down(ctx context.Context, conn migrations.Connection) error {
 	return conn.Schema().DropIfExists(ctx, chargesTable)
+}
+
+// addWalletMetadata is what the application attaches to a movement.
+type addWalletMetadata struct{ migrations.BaseMigration }
+
+// GetName is the migration's identity, and it carries the order.
+func (addWalletMetadata) GetName() string { return "20260905_0008_add_wallet_metadata" }
+
+// Up adds the metadata column to the operations table and to the ledger.
+//
+// Text and not a document type. The engines spell one differently, only some of
+// them have it, and nothing in this package reads what is inside: the column is
+// carried, shown and exported, and every decision about the money is made from
+// the columns beside it. An application that wants to query its own facts keeps
+// them in a table of its own, against rows it owns.
+//
+// It defaults to the empty string, which is what every row written before this
+// ran holds and what a movement nobody attached anything to holds afterwards --
+// so no row is left saying that somebody attached nothing, which is a different
+// statement from saying nothing.
+//
+// The ledger still has no updated_at, and the column is written once with the
+// row like every other one there.
+func (addWalletMetadata) Up(ctx context.Context, conn migrations.Connection) error {
+	if err := conn.Schema().Table(ctx, operationsTable, func(table *schema.Blueprint) {
+		table.Text("meta").Default("")
+	}); err != nil {
+		return err
+	}
+	return conn.Schema().Table(ctx, entriesTable, func(table *schema.Blueprint) {
+		table.Text("meta").Default("")
+	})
+}
+
+// Down drops both columns, which leaves every movement carrying nothing.
+func (addWalletMetadata) Down(ctx context.Context, conn migrations.Connection) error {
+	if err := conn.Schema().Table(ctx, operationsTable, func(table *schema.Blueprint) {
+		table.DropColumn("meta")
+	}); err != nil {
+		return err
+	}
+	return conn.Schema().Table(ctx, entriesTable, func(table *schema.Blueprint) {
+		table.DropColumn("meta")
+	})
 }

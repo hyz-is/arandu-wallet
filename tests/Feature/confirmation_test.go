@@ -344,7 +344,8 @@ func TestAPendingTransferMovesNeitherSideUntilItIsConfirmed(t *testing.T) {
 	deposit(t, service, source.ID, "opening", "10.00")
 
 	proposed, err := service.Transfer(context.Background(), staff(), wallet.TransferRequest{
-		IdempotencyKey: "later-1", FromWalletID: source.ID, ToWalletID: target.ID, Amount: "4.00", Pending: true,
+		IdempotencyKey: "later-1", FromWalletID: source.ID, ToWalletID: target.ID, Amount: "4.00",
+		Withdrawal: wallet.Leg{Pending: true}, Deposit: wallet.Leg{Pending: true},
 	})
 	if err != nil {
 		t.Fatalf("recording a pending transfer: %v", err)
@@ -395,7 +396,8 @@ func TestAPendingExchangeQuotesItsRateOnceAndSettlesAtIt(t *testing.T) {
 	deposit(t, service, source.ID, "opening", "100.00")
 
 	proposed, err := service.Transfer(context.Background(), staff(), wallet.TransferRequest{
-		IdempotencyKey: "later-1", FromWalletID: source.ID, ToWalletID: target.ID, Amount: "10.00", Pending: true,
+		IdempotencyKey: "later-1", FromWalletID: source.ID, ToWalletID: target.ID, Amount: "10.00",
+		Withdrawal: wallet.Leg{Pending: true}, Deposit: wallet.Leg{Pending: true},
 	})
 	if err != nil {
 		t.Fatalf("recording a pending exchange: %v", err)

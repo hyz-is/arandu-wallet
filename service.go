@@ -159,11 +159,15 @@ type DepositRequest struct {
 	// the one a client that never heard of this field sends: what it asks for
 	// happens, once, now.
 	Pending bool
+	// Meta is what the application attaches to this request: its own facts
+	// about what the money was for. A movement with one leg carries them on the
+	// operation, because there they are the request's.
+	Meta Meta
 }
 
 // Validate reports the errors per field.
 func (r DepositRequest) Validate() validation.Errors {
-	return validateMovement(r.IdempotencyKey, r.WalletID, r.Amount)
+	return validateMovement(r.IdempotencyKey, r.WalletID, r.Amount, r.Meta)
 }
 
 // WithdrawRequest is what taking money out of a wallet takes.
@@ -187,11 +191,13 @@ type WithdrawRequest struct {
 	// guarded. Asking is not being answered: WalletForce is a separate
 	// decision, and a subject the policy refuses it to is refused the movement.
 	Force bool
+	// Meta is what the application attaches to this request.
+	Meta Meta
 }
 
 // Validate reports the errors per field.
 func (r WithdrawRequest) Validate() validation.Errors {
-	return validateMovement(r.IdempotencyKey, r.WalletID, r.Amount)
+	return validateMovement(r.IdempotencyKey, r.WalletID, r.Amount, r.Meta)
 }
 
 // TransferRequest is what moving money between two wallets takes.
@@ -206,21 +212,52 @@ type TransferRequest struct {
 	// What arrives is the same amount when both wallets are counted the same
 	// way, and what the rate provider answers when they are not.
 	Amount string
-	// Pending records both movements without letting either count. A rate,
-	// where one is needed, is quoted and recorded now: what the confirmation
-	// applies is what this operation wrote down.
-	Pending bool
+	// Withdrawal is what the leg that pays carries, and Deposit what the leg
+	// that is paid carries.
+	//
+	// They are two values and not one flag over the pair, because the two sides
+	// of a payment are not always the same decision. What leaves counting now
+	// while what arrives waits is money held until somebody says it may be
+	// delivered; the other way round is a delivery on credit. Both are ordinary
+	// arrangements, and neither is expressible by a single yes-or-no.
+	//
+	// A rate, where one is needed, is quoted and recorded when the operation is
+	// written, whatever either side says: what a confirmation applies is what
+	// this operation wrote down.
+	Withdrawal Leg
+	Deposit    Leg
 	// Force asks for the movement even where the source's balance and credit
 	// limit do not cover it, and is answered by WalletForce.
 	Force bool
+	// Meta is what the application attaches to the payment as a whole. What
+	// belongs to one side of it goes on that side's Leg.
+	Meta Meta
 }
 
 // Validate reports the errors per field.
 func (r TransferRequest) Validate() validation.Errors {
-	e := validateMovement(r.IdempotencyKey, r.FromWalletID, r.Amount)
+	e := validateMovement(r.IdempotencyKey, r.FromWalletID, r.Amount, r.Meta)
 	validation.Required(e, "to_wallet_id", r.ToWalletID)
 	validation.MaxLen(e, "to_wallet_id", r.ToWalletID, maxIdentifierLen)
+	checkMeta(e, "withdrawal_meta", r.Withdrawal.Meta)
+	checkMeta(e, "deposit_meta", r.Deposit.Meta)
 	return e
+}
+
+// Leg is what one side of a movement carries.
+//
+// It is a value on the request rather than a second method beside the one that
+// moves the money, for the reason Force is a field rather than a ForceTransfer:
+// two entry points for one movement are two places every later rule has to be
+// written into, and the one somebody forgets is the one that is not guarded.
+type Leg struct {
+	// Meta is what the application attaches to this side in particular, and it
+	// is empty where this side says nothing the payment does not.
+	Meta Meta
+	// Pending records this side without letting it count. The entry is written,
+	// the balance is not moved, and it moves when somebody confirms the
+	// operation.
+	Pending bool
 }
 
 // ReverseRequest is what undoing an operation takes.
@@ -233,6 +270,8 @@ type ReverseRequest struct {
 	// Reason is what the reversal is recorded as. It is required, because a
 	// reversal with no reason is a movement nobody can account for later.
 	Reason string
+	// Meta is what the application attaches to the reversal.
+	Meta Meta
 }
 
 // Validate reports the errors per field.
@@ -244,6 +283,7 @@ func (r ReverseRequest) Validate() validation.Errors {
 	validation.MaxLen(e, "operation_id", r.OperationID, maxIdentifierLen)
 	validation.Required(e, "reason", r.Reason)
 	validation.MaxLen(e, "reason", r.Reason, maxReasonLen)
+	checkMeta(e, "meta", r.Meta)
 	return e
 }
 
@@ -259,6 +299,8 @@ type ConfirmRequest struct {
 	// do not cover it, and is answered by WalletForce on every wallet the
 	// operation touches.
 	Force bool
+	// Meta is what the application attaches to the confirmation.
+	Meta Meta
 }
 
 // Validate reports the errors per field.
@@ -268,6 +310,7 @@ func (r ConfirmRequest) Validate() validation.Errors {
 	validation.MaxLen(e, "idempotency_key", r.IdempotencyKey, maxIdempotencyKeyLen)
 	validation.Required(e, "operation_id", r.OperationID)
 	validation.MaxLen(e, "operation_id", r.OperationID, maxIdentifierLen)
+	checkMeta(e, "meta", r.Meta)
 	return e
 }
 
@@ -295,14 +338,28 @@ type HistoryRequest struct {
 // the request replayable, a wallet to move, and an amount that is not empty.
 // The amount's digits are checked against the wallet's scale later, where the
 // scale is known.
-func validateMovement(key, walletID, amount string) validation.Errors {
+func validateMovement(key, walletID, amount string, meta Meta) validation.Errors {
 	e := validation.Errors{}
 	validation.Required(e, "idempotency_key", key)
 	validation.MaxLen(e, "idempotency_key", key, maxIdempotencyKeyLen)
 	validation.Required(e, "wallet_id", walletID)
 	validation.MaxLen(e, "wallet_id", walletID, maxIdentifierLen)
 	validation.Required(e, "amount", amount)
+	checkMeta(e, "meta", meta)
 	return e
+}
+
+// checkMeta reports why what the application attached under a field cannot be
+// stored.
+//
+// It is answered here rather than left to the column, because a movement the
+// database refuses is a movement refused after the operation was recorded --
+// and the caller would be told about a storage limit by a failed write instead
+// of about the payload it sent by a rejected field.
+func checkMeta(e validation.Errors, field string, meta Meta) {
+	if err := meta.Validate(); err != nil {
+		e.Add(field, err.Error())
+	}
 }
 
 // Compile-time proof that the requests honor the validation contract.
@@ -719,6 +776,7 @@ func (s *WalletService) Deposit(ctx context.Context, actor security.Subject, in 
 	return s.commit(ctx, g, operation{
 		key:  in.IdempotencyKey,
 		kind: OperationDeposit,
+		meta: in.Meta,
 	}, []movement{{wallet: target, kind: EntryDeposit, amount: amount, pending: in.Pending}})
 }
 
@@ -764,6 +822,7 @@ func (s *WalletService) Withdraw(ctx context.Context, actor security.Subject, in
 	return s.commit(ctx, g, operation{
 		key:  in.IdempotencyKey,
 		kind: OperationWithdraw,
+		meta: in.Meta,
 	}, []movement{{wallet: source, kind: EntryWithdraw, amount: amount, pending: in.Pending, force: in.Force}})
 }
 
@@ -901,18 +960,29 @@ func (s *WalletService) Transfer(ctx context.Context, actor security.Subject, in
 	}
 
 	movements := []movement{
-		{wallet: source, kind: EntryWithdraw, amount: debited, pending: in.Pending, force: in.Force},
-		{wallet: target, kind: EntryDeposit, amount: credited, pending: in.Pending},
+		{
+			wallet: source, kind: EntryWithdraw, amount: debited,
+			pending: in.Withdrawal.Pending, force: in.Force, meta: in.Withdrawal.Meta,
+		},
+		{
+			wallet: target, kind: EntryDeposit, amount: credited,
+			pending: in.Deposit.Pending, meta: in.Deposit.Meta,
+		},
 	}
 	if collector != nil {
+		// The fee settles with the money it is a share of, which is the money
+		// that leaves: a fee that counted while the payment it was taken out of
+		// did not would be a charge for a payment that has not happened.
 		movements = append(movements, movement{
-			wallet: collector, kind: EntryDeposit, amount: charged.fee.Amount, pending: in.Pending,
+			wallet: collector, kind: EntryDeposit, amount: charged.fee.Amount,
+			pending: in.Withdrawal.Pending,
 		})
 	}
 
 	return s.commit(ctx, g, operation{
 		key:    in.IdempotencyKey,
 		kind:   kind,
+		meta:   in.Meta,
 		rate:   applied,
 		charge: charged,
 	}, movements)
@@ -1093,6 +1163,7 @@ func (s *WalletService) Reverse(ctx context.Context, actor security.Subject, in 
 		kind:    OperationReversal,
 		settles: original.ID,
 		reason:  in.Reason,
+		meta:    in.Meta,
 	}, movements)
 	if err != nil && !errors.Is(err, ErrInsufficientFunds) {
 		// The unique index on the operation being settled is what refuses a
@@ -1161,6 +1232,7 @@ func (s *WalletService) Confirm(ctx context.Context, actor security.Subject, in 
 		key:     in.IdempotencyKey,
 		kind:    OperationConfirmation,
 		settles: original.ID,
+		meta:    in.Meta,
 	}, movements)
 	if err != nil && !errors.Is(err, ErrInsufficientFunds) {
 		// The unique index on the operation being settled is what refuses a
@@ -1180,6 +1252,7 @@ type operation struct {
 	kind    OperationKind
 	settles string
 	reason  string
+	meta    Meta
 	rate    *appliedRate
 	charge  *appliedCharge
 }
@@ -1234,6 +1307,8 @@ type movement struct {
 	// rather than a second kind of movement, so there is one statement, one
 	// guard and one place the floor is decided.
 	force bool
+	// meta is what the application attached to this side of the operation.
+	meta Meta
 }
 
 // withdrawalFloor is what the balance has to be at least for a withdrawal to
@@ -1295,6 +1370,7 @@ func (s *WalletService) commit(ctx context.Context, g security.Grant, op operati
 	record.IdempotencyKey = op.key
 	record.Kind = op.kind
 	record.Reason = op.reason
+	record.Meta = op.meta
 	// An operation settles exactly one thing: the operation it reverses, the
 	// operation it confirms, or itself. With the kind beside it in a unique
 	// index, that one column carries the whole rule that an operation is undone
@@ -1502,6 +1578,7 @@ func entryRow(entry Entry) map[string]any {
 		"amount":        int64(entry.Amount),
 		"balance_after": int64(entry.BalanceAfter),
 		"settled":       entry.Settled,
+		"meta":          entry.Meta,
 		"created_at":    entry.CreatedAt,
 	}
 }
@@ -1588,6 +1665,7 @@ func (s *WalletService) move(ctx context.Context, g security.Grant, operationID 
 	written.Amount = m.amount
 	written.BalanceAfter = after.Balance
 	written.Settled = Flag(!m.pending)
+	written.Meta = m.meta
 	written.CreatedAt = time.Now().UTC()
 	return *written, nil
 }
@@ -1768,6 +1846,10 @@ func (s *WalletService) settle(ctx context.Context, g security.Grant, actor secu
 		}
 		movements = append(movements, movement{
 			wallet: holder, kind: entry.Kind, amount: entry.Amount, force: in.Force,
+			// The same facts as the movement being settled. It is the same
+			// movement, now counting, so a receipt that lost what it was about
+			// would be a receipt about a different payment.
+			meta: entry.Meta,
 		})
 	}
 	if len(movements) == 0 {
