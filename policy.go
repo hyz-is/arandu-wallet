@@ -45,6 +45,20 @@ const (
 	// the request says that it wants the limit ignored, and this says who may
 	// be answered.
 	WalletForce security.Action = "wallet.force"
+	// WalletPay is buying with a wallet's money.
+	//
+	// It is not WalletTransfer under another name. A transfer says who is paid;
+	// a purchase says what for, leaves a record of it, and can be given back
+	// line by line -- so an application that lets somebody move their own money
+	// but not spend it in its shop has a rule to write rather than a fork to
+	// maintain.
+	WalletPay security.Action = "wallet.pay"
+	// WalletRefund is giving back a line of a purchase. It sits beside
+	// WalletReverse and not under it, for the same reason: undoing a movement
+	// that has already settled is not the holder's decision.
+	WalletRefund security.Action = "wallet.refund"
+	// WalletPurchases is reading what a wallet has bought.
+	WalletPurchases security.Action = "wallet.purchases"
 )
 
 // OperatorRole is the role an application grants to the people who run its
@@ -65,9 +79,9 @@ const OperatorRole = "wallet.operator"
 // subject from another tenant, a signed-in person reaching for somebody else's
 // wallet -- falls through to the refusal at the end.
 //
-// Reversal is deliberately not the holder's. Undoing a payment is a decision
-// about a movement that already settled, and letting the person who received it
-// take it back is a hole with a name.
+// Reversal is deliberately not the holder's, and neither is a refund. Undoing a
+// payment is a decision about a movement that already settled, and letting the
+// person who received it take it back is a hole with a name.
 //
 // Neither is the overdraft limit, and neither is moving money past it. A holder
 // who could raise their own limit could spend money nobody lent them, and one
@@ -120,7 +134,8 @@ func (WalletPolicy) Can(ctx context.Context, s security.Subject, a security.Acti
 		switch a {
 		case WalletView, WalletList, WalletCreate, WalletHistory,
 			WalletDeposit, WalletWithdraw, WalletTransfer, WalletReverse,
-			WalletConfirm, WalletCredit, WalletForce:
+			WalletConfirm, WalletCredit, WalletForce,
+			WalletPay, WalletRefund, WalletPurchases:
 			return nil
 		}
 	}
@@ -141,7 +156,7 @@ func (WalletPolicy) Can(ctx context.Context, s security.Subject, a security.Acti
 	if isProbe(record) {
 		switch a {
 		case WalletList, WalletView, WalletHistory, WalletDeposit, WalletWithdraw,
-			WalletTransfer, WalletConfirm:
+			WalletTransfer, WalletConfirm, WalletPay, WalletPurchases:
 			return nil
 		}
 		return fmt.Errorf("no rule allows %s on wallet", a)
@@ -151,7 +166,7 @@ func (WalletPolicy) Can(ctx context.Context, s security.Subject, a security.Acti
 	if s.ID != "" && s.ID == record.HolderID {
 		switch a {
 		case WalletView, WalletHistory, WalletCreate, WalletDeposit, WalletWithdraw,
-			WalletTransfer, WalletConfirm:
+			WalletTransfer, WalletConfirm, WalletPay, WalletPurchases:
 			return nil
 		}
 	}

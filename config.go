@@ -154,8 +154,10 @@ var routePatterns = []routePattern{
 	{http.MethodPost, "/{id}/deposits", "wallet.deposit"},
 	{http.MethodPost, "/{id}/withdrawals", "wallet.withdraw"},
 	{http.MethodPost, "/{id}/transfers", "wallet.transfer"},
+	{http.MethodGet, "/{id}/purchases", "wallet.purchases"},
 	{http.MethodPost, "/operations/{operation}/reversals", "wallet.reverse"},
 	{http.MethodPost, "/operations/{operation}/confirmations", "wallet.confirm"},
+	{http.MethodPost, "/purchases/refunds", "wallet.refund"},
 }
 
 // withDefaults returns the configuration with the optional fields filled in.

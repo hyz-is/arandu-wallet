@@ -163,9 +163,24 @@ func (m *Module) Routes(r *fhttp.Router) {
 	m.register(r, "wallet.deposit", m.deposit)
 	m.register(r, "wallet.withdraw", m.withdraw)
 	m.register(r, "wallet.transfer", m.transfer)
+	m.register(r, "wallet.purchases", m.purchases)
 	m.register(r, "wallet.reverse", m.reverse)
 	m.register(r, "wallet.confirm", m.confirm)
+	m.register(r, "wallet.refund", m.refund)
 }
+
+// Paying for a basket has no route here, and its absence is a decision.
+//
+// A basket names products, and a product is the application's type: what is for
+// sale, what it costs this customer and how many are left are three questions
+// this package has never been able to answer and has no address to ask them at.
+// A route that took a product identifier would need a catalogue seam to turn it
+// back into a product, which is the application's own handler written twice --
+// once here, badly, without the rest of the checkout around it.
+//
+// So Pay is a Go call the application makes from the handler that owns its
+// catalogue, and what this package answers over HTTP is what it does know: what
+// a wallet has bought, and giving a line of it back by identifier.
 
 // register mounts the named route, reading its method and its address from
 // routePatterns.
@@ -430,6 +445,47 @@ func (m *Module) transfer(ctx *fhttp.Context) error {
 	return m.receipt(ctx, receipt)
 }
 
+// purchases answers a page of what one wallet bought.
+func (m *Module) purchases(ctx *fhttp.Context) error {
+	records, err := m.svc.PurchasesOf(ctx.Ctx(), m.subject(ctx.Request), ctx.Param("id"), data.Query{
+		Cursor: ctx.Query("cursor"),
+		Limit:  m.cfg.PageSize,
+	})
+	if err != nil {
+		return m.answer(ctx, err)
+	}
+
+	// A full page is the only one that can have a successor. A short page is
+	// the last one, and offering a cursor for it would be offering a next page
+	// that comes back empty.
+	cursor := ""
+	if len(records) == m.cfg.PageSize {
+		cursor = records[len(records)-1].ID
+	}
+	return ctx.JSON(stdhttp.StatusOK, NewPurchaseCollection(records, cursor))
+}
+
+// refund gives back the lines the request names.
+func (m *Module) refund(ctx *fhttp.Context) error {
+	force, err := readFlag("force", ctx.Input("force"))
+	if err != nil {
+		return m.answer(ctx, err)
+	}
+	in := RefundRequest{
+		IdempotencyKey: ctx.Header(IdempotencyHeader),
+		PurchaseIDs:    m.list(ctx, "purchase_ids"),
+		Reason:         ctx.Input("reason"),
+		Force:          force,
+		Meta:           m.meta(ctx, "meta"),
+	}
+
+	receipt, err := m.svc.Refund(ctx.Ctx(), m.subject(ctx.Request), in)
+	if err != nil {
+		return m.answer(ctx, err)
+	}
+	return m.receipt(ctx, receipt)
+}
+
 // reverse undoes one operation.
 func (m *Module) reverse(ctx *fhttp.Context) error {
 	in := ReverseRequest{
@@ -532,6 +588,22 @@ func (m *Module) meta(ctx *fhttp.Context, field string) Meta {
 	return metaFrom(ctx.Request.Form, field)
 }
 
+// list reads the repeated field a request wrote.
+//
+// A form spells several of one thing by sending the field several times, which
+// is what a set of checkboxes produces and what a client library writes for a
+// list. It is read out of the parsed form because Input answers with the first
+// value only, and a refund of six lines that gave back one is worse than one
+// that gave back none.
+func (m *Module) list(ctx *fhttp.Context, field string) []string {
+	if ctx.Request.Form == nil {
+		if err := ctx.Request.ParseForm(); err != nil {
+			return nil
+		}
+	}
+	return ctx.Request.Form[field]
+}
+
 // readFlag reads a boolean a request wrote.
 //
 // An empty field is false, which is what a client that never heard of the field
@@ -608,6 +680,9 @@ func (m *Module) answer(ctx *fhttp.Context, err error) error {
 	case errors.Is(err, ErrAlreadyConfirmed):
 		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusConflict, "that operation has already been confirmed")
 		return nil
+	case errors.Is(err, ErrAlreadyRefunded):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusConflict, "that line has already been refunded")
+		return nil
 	case errors.Is(err, ErrOperationConflict):
 		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusConflict, "that idempotency key belongs to a different request")
 		return nil
@@ -644,6 +719,20 @@ func (m *Module) answer(ctx *fhttp.Context, err error) error {
 		return nil
 	case errors.Is(err, ErrNotReversible):
 		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, "a reversal cannot itself be reversed")
+		return nil
+	case errors.Is(err, ErrNotRefundable):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, "a refund cannot itself be refunded")
+		return nil
+	case errors.Is(err, ErrPurchaseOperation):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, "a purchase is undone line by line, with a refund")
+		return nil
+	case errors.Is(err, ErrProductStock):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, err.Error())
+		return nil
+	case errors.Is(err, ErrCartEmpty), errors.Is(err, ErrCartTooLarge),
+		errors.Is(err, ErrItemQuantity), errors.Is(err, ErrProductWallet),
+		errors.Is(err, ErrPaysItself):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, err.Error())
 		return nil
 	case errors.Is(err, ErrNotSettled):
 		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, "that operation has not moved any money, so there is nothing to undo")
@@ -682,6 +771,7 @@ func (m *Module) Migrations() []foundation.Migration {
 		addWalletEntrySettlement{},
 		createWalletCharges{},
 		addWalletMetadata{},
+		createWalletPurchases{},
 	}
 }
 
@@ -698,6 +788,7 @@ var (
 	_ migrations.ReversibleMigration = addWalletEntrySettlement{}
 	_ migrations.ReversibleMigration = createWalletCharges{}
 	_ migrations.ReversibleMigration = addWalletMetadata{}
+	_ migrations.ReversibleMigration = createWalletPurchases{}
 )
 
 // createWallets is the balances table.
@@ -1058,4 +1149,100 @@ func (addWalletMetadata) Down(ctx context.Context, conn migrations.Connection) e
 	return conn.Schema().Table(ctx, entriesTable, func(table *schema.Blueprint) {
 		table.DropColumn("meta")
 	})
+}
+
+// createWalletPurchases is what was bought from whom.
+type createWalletPurchases struct{ migrations.BaseMigration }
+
+// GetName is the migration's identity, and it carries the order.
+func (createWalletPurchases) GetName() string { return "20260905_0009_create_wallet_purchases" }
+
+// Up creates the purchases table.
+//
+// It is a projection of the ledger and the receipt of one line at once. The
+// ledger already holds every movement a basket made; what it cannot say is what
+// any of them was for, and assembling that from a catalogue on every read is
+// the query every application would write and none of them should have to.
+//
+// Every number the arithmetic used is a column, and there is not a floating
+// point one among them: the price and the amounts are big integers of minor
+// units like every other amount here, the share is two big integers because a
+// fraction is what a share is, and the leftover is two more so that what
+// truncation dropped is a value rather than a discrepancy. That is what lets a
+// refund move back exactly what moved by reading one row.
+//
+// The two indexes are the two questions. The first answers "has this wallet
+// already got this from that seller", newest first, which is the read a shop
+// makes before it sells the same licence twice; the second answers "what has
+// this seller sold", which is the read a statement makes. Both start with the
+// tenant, because without it every page is a scan of every customer's rows.
+//
+// There is no updated_at, and its absence is the append-only rule written into
+// the schema, exactly as it is on the ledger, the recorded rates and the
+// charges: a line that was given back is a second row naming the first, so what
+// was bought stays readable after it is undone.
+func (createWalletPurchases) Up(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Create(ctx, purchasesTable, func(table *schema.Blueprint) {
+		table.String("id").Primary()
+		table.String("tenant_id")
+		table.String("operation_id")
+		table.UnsignedSmallInteger("position").Default(0)
+
+		table.String("payer_wallet_id")
+		table.String("owner_wallet_id")
+		table.String("receiver_wallet_id")
+
+		table.String("product_key")
+		table.UnsignedInteger("quantity").Default(1)
+
+		table.String("currency", 12)
+		table.UnsignedSmallInteger("decimal_places").Default(2)
+
+		table.BigInteger("price_per_item")
+		table.BigInteger("requested_amount")
+		table.BigInteger("discount").Default(0)
+		table.BigInteger("base_amount")
+
+		table.BigInteger("fee_numerator").Default(0)
+		table.BigInteger("fee_denominator").Default(0)
+		table.BigInteger("fee_minimum").Default(0)
+		table.BigInteger("fee_maximum").Default(0)
+		table.UnsignedSmallInteger("fee_deductible").Default(0)
+		table.BigInteger("fee_amount").Default(0)
+		table.String("fee_wallet_id").Default("")
+
+		table.String("rounding", 16)
+		table.BigInteger("remainder_numerator").Default(0)
+		table.BigInteger("remainder_denominator").Default(1)
+
+		table.BigInteger("paid_amount")
+		table.BigInteger("credited_amount")
+
+		table.String("kind", 16)
+		table.String("settles_id")
+		table.BigInteger("sequence").Default(0)
+
+		table.Timestamp("created_at")
+
+		// One line is given back at most once, and the database says so rather
+		// than a check two concurrent refunds would both walk past. The kind is
+		// in the index because every row carries the line it settles -- its own
+		// identifier where it settles nothing -- so without it a refund naming
+		// its purchase would collide with the purchase's own row.
+		table.Unique([]string{"tenant_id", "kind", "settles_id"}, "wallet_purchases_settles_uq")
+
+		// A line is written once per operation and position, which is what makes
+		// a basket paid twice under one key impossible to record twice.
+		table.Unique([]string{"tenant_id", "operation_id", "position"}, "wallet_purchases_operation_uq")
+
+		table.Index([]string{"tenant_id", "owner_wallet_id", "receiver_wallet_id", "product_key", "sequence"},
+			"wallet_purchases_owner_product_idx")
+		table.Index([]string{"tenant_id", "receiver_wallet_id", "sequence"},
+			"wallet_purchases_receiver_idx")
+	})
+}
+
+// Down drops the table, which takes its indexes with it.
+func (createWalletPurchases) Down(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().DropIfExists(ctx, purchasesTable)
 }

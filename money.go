@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"strings"
 )
 
@@ -71,6 +72,27 @@ func (a Amount) Sub(b Amount) (Amount, error) {
 		return 0, ErrAmountOverflow
 	}
 	return a.Add(-b)
+}
+
+// Times returns a multiplied by a count, or ErrAmountOverflow.
+//
+// A count and not another amount: money times money is not money, and the only
+// place a quantity multiplies a price is a line of a basket. A count that is
+// not positive is refused rather than read as nothing, because a line for none
+// of something is a line somebody meant differently.
+//
+// The product is computed as a wider integer and narrowed once, so a result the
+// range cannot hold is reported rather than wrapped -- an int64 that overflows
+// wraps silently, and a price that wrapped has changed sign.
+func (a Amount) Times(count int) (Amount, error) {
+	if count <= 0 {
+		return 0, ErrAmountNotPositive
+	}
+	product := new(big.Int).Mul(big.NewInt(int64(a)), big.NewInt(int64(count)))
+	if !product.IsInt64() {
+		return 0, ErrAmountOverflow
+	}
+	return Amount(product.Int64()), nil
 }
 
 // Ceiling is the largest balance that can still take a without overflowing.

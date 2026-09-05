@@ -362,9 +362,89 @@ func checkMeta(e validation.Errors, field string, meta Meta) {
 	}
 }
 
+// PayRequest is what paying for a basket takes.
+//
+// There is no pending mode here, and its absence is a decision. A movement is
+// recorded without counting so that somebody can say later whether it happened;
+// a basket that has not been paid for is a basket, and what an application
+// wants held is the delivery, which is a transfer whose two sides settle apart.
+// A second half-paid state, with lines that are on the record and money that is
+// not, would be a second answer to what "has this been bought" means.
+type PayRequest struct {
+	// IdempotencyKey is the caller's name for this request. Sending the same
+	// key twice pays once.
+	IdempotencyKey string
+	// PayerWalletID is the wallet the money leaves. Every line of the basket
+	// is paid from it, and every price is read at its scale.
+	PayerWalletID string
+	// Cart is what is being bought.
+	Cart Cart
+	// Force asks for the payment even where the balance and the credit limit do
+	// not cover it, and is answered by WalletForce on the wallet paying.
+	Force bool
+}
+
+// Validate reports the errors per field.
+func (r PayRequest) Validate() validation.Errors {
+	e := validation.Errors{}
+	validation.Required(e, "idempotency_key", r.IdempotencyKey)
+	validation.MaxLen(e, "idempotency_key", r.IdempotencyKey, maxIdempotencyKeyLen)
+	validation.Required(e, "payer_wallet_id", r.PayerWalletID)
+	validation.MaxLen(e, "payer_wallet_id", r.PayerWalletID, maxIdentifierLen)
+	for field, messages := range r.Cart.Validate() {
+		for _, message := range messages {
+			e.Add(field, message)
+		}
+	}
+	return e
+}
+
+// RefundRequest is what giving back some lines of a purchase takes.
+type RefundRequest struct {
+	// IdempotencyKey is the caller's name for this request. It is the refund's
+	// own key, and never the key of the purchase being given back.
+	IdempotencyKey string
+	// PurchaseIDs are the lines to give back. They may come from one basket or
+	// from several: what is undone is a line, and which request it was part of
+	// changes nothing about the money.
+	PurchaseIDs []string
+	// Reason is what the refund is recorded as. It is required, for the reason a
+	// reversal's is: money that moved for no recorded reason is money nobody can
+	// account for later.
+	Reason string
+	// Force asks for the movement even where the wallet giving the money back
+	// does not cover it, and is answered by WalletForce.
+	Force bool
+	// Meta is what the application attaches to the refund.
+	Meta Meta
+}
+
+// Validate reports the errors per field.
+func (r RefundRequest) Validate() validation.Errors {
+	e := validation.Errors{}
+	validation.Required(e, "idempotency_key", r.IdempotencyKey)
+	validation.MaxLen(e, "idempotency_key", r.IdempotencyKey, maxIdempotencyKeyLen)
+	validation.Required(e, "reason", r.Reason)
+	validation.MaxLen(e, "reason", r.Reason, maxReasonLen)
+	if len(r.PurchaseIDs) == 0 {
+		e.Add("purchase_ids", "names no line, and a refund of nothing is not a movement")
+	}
+	if len(r.PurchaseIDs) > MaxCartLines {
+		e.Add("purchase_ids", ErrCartTooLarge.Error())
+	}
+	for _, id := range r.PurchaseIDs {
+		validation.Required(e, "purchase_ids", id)
+		validation.MaxLen(e, "purchase_ids", id, maxIdentifierLen)
+	}
+	checkMeta(e, "meta", r.Meta)
+	return e
+}
+
 // Compile-time proof that the requests honor the validation contract.
 var (
 	_ validation.Validatable = OpenRequest{}
+	_ validation.Validatable = PayRequest{}
+	_ validation.Validatable = RefundRequest{}
 	_ validation.Validatable = CreditRequest{}
 	_ validation.Validatable = DepositRequest{}
 	_ validation.Validatable = WithdrawRequest{}
@@ -1147,6 +1227,13 @@ func (s *WalletService) Reverse(ctx context.Context, actor security.Subject, in 
 	if original.Kind == OperationReversal {
 		return Receipt{}, ErrNotReversible
 	}
+	// A basket is undone line by line and never whole. Reversing one would give
+	// back every line of it including the ones already refunded, and the unique
+	// index that keeps a line from being refunded twice knows nothing about a
+	// reversal of the operation above it.
+	if original.Kind == OperationPurchase || original.Kind == OperationRefund {
+		return Receipt{}, ErrPurchaseOperation
+	}
 	if reversed, err := s.reversed(ctx, g, original.ID); err != nil {
 		return Receipt{}, err
 	} else if reversed {
@@ -1255,6 +1342,46 @@ type operation struct {
 	meta    Meta
 	rate    *appliedRate
 	charge  *appliedCharge
+	// lines are the basket this operation paid for or gave back, and empty on
+	// every operation that bought nothing. They are written inside the same
+	// transaction as the movements, because a line whose money moved and whose
+	// record is missing is a purchase nobody can find and nobody can refund.
+	lines []purchaseLine
+}
+
+// purchaseLine is one line of a basket as it will be recorded, and there are
+// none where an operation bought nothing.
+//
+// It carries every number the arithmetic used, which is everything the recorded
+// row holds. It is one value travelling from the place that asked the seams to
+// the place that writes the row, so there is exactly one price, one discount and
+// one schedule per line and no second lookup between them.
+type purchaseLine struct {
+	position      int
+	payer         string
+	owner         string
+	receiver      string
+	productKey    string
+	quantity      int
+	currency      Currency
+	decimalPlaces int
+	price         Amount
+	requested     Amount
+	discount      Amount
+	base          Amount
+	schedule      FeeSchedule
+	fee           Fee
+	paid          Amount
+	credited      Amount
+	kind          PurchaseKind
+	settles       string
+	force         bool
+	meta          Meta
+	// movement is where this line's first movement sits in the operation's
+	// movements, which is how the row learns the position it took in a ledger:
+	// the sequence is decided by the statement that moved the balance, and only
+	// that statement knows what the row said at the moment it ran.
+	movement int
 }
 
 // appliedRate is the conversion an operation performed, and nil where it
@@ -1385,6 +1512,7 @@ func (s *WalletService) commit(ctx context.Context, g security.Grant, op operati
 	var entries []Entry
 	var conversion *Conversion
 	var charge *Charge
+	var purchases []Purchase
 	err = data.Transaction(ctx, s.db, func(ctx context.Context) error {
 		if _, err := record.Save(ctx, g); err != nil {
 			return err
@@ -1417,6 +1545,15 @@ func (s *WalletService) commit(ctx context.Context, g security.Grant, op operati
 			return err
 		}
 		entries = written
+		// And the lines with them, in the same transaction and after the
+		// movements: the position a line takes in a ledger is decided by the
+		// statement that moved the balance, and there is no state in which
+		// money moved for a basket and what it bought is missing.
+		bought, err := s.recordPurchases(ctx, g, id, op.lines, written)
+		if err != nil {
+			return err
+		}
+		purchases = bought
 		return nil
 	})
 	if err != nil {
@@ -1425,7 +1562,135 @@ func (s *WalletService) commit(ctx context.Context, g security.Grant, op operati
 		}
 		return Receipt{}, err
 	}
-	return Receipt{Operation: *record, Entries: entries, Conversion: conversion, Charge: charge}, nil
+	return Receipt{
+		Operation:  *record,
+		Entries:    entries,
+		Conversion: conversion,
+		Charge:     charge,
+		Purchases:  purchases,
+	}, nil
+}
+
+// recordPurchases writes the lines of a basket, inside the caller's
+// transaction.
+//
+// Every number comes off the value the caller already holds. Nothing here asks
+// a seam again, and there is nowhere it could: the price, the discount and the
+// schedule arrived as data, and a second lookup would be a second answer in one
+// basket -- which is a receipt that says one thing and a ledger that did
+// another.
+//
+// The rows go in one statement, for the reason the entries do: a basket of
+// forty lines that wrote forty inserts would pay forty round trips for rows
+// that were all decided before the first of them was sent.
+func (s *WalletService) recordPurchases(ctx context.Context, g security.Grant, operationID string, lines []purchaseLine, entries []Entry) ([]Purchase, error) {
+	if len(lines) == 0 {
+		return nil, nil
+	}
+
+	written := make([]Purchase, 0, len(lines))
+	rows := make([]map[string]any, 0, len(lines))
+	for _, line := range lines {
+		id, err := data.NewID()
+		if err != nil {
+			return nil, err
+		}
+		// The sequence is read off the movement this line produced, which is
+		// the position it took in a ledger. A line naming no movement would be
+		// a row nothing could order, so the index is checked rather than
+		// trusted.
+		if line.movement < 0 || line.movement >= len(entries) {
+			return nil, fmt.Errorf("wallet: the line at position %d names no movement", line.position)
+		}
+
+		row := Purchase{
+			ID:                   id,
+			TenantID:             data.Tenant(g),
+			OperationID:          operationID,
+			Position:             line.position,
+			PayerWalletID:        line.payer,
+			OwnerWalletID:        line.owner,
+			ReceiverWalletID:     line.receiver,
+			ProductKey:           line.productKey,
+			Quantity:             line.quantity,
+			Currency:             line.currency,
+			DecimalPlaces:        line.decimalPlaces,
+			PricePerItem:         line.price,
+			RequestedAmount:      line.requested,
+			Discount:             line.discount,
+			BaseAmount:           line.base,
+			FeeNumerator:         line.schedule.Numerator,
+			FeeDenominator:       line.schedule.Denominator,
+			FeeMinimum:           line.schedule.Minimum,
+			FeeMaximum:           line.schedule.Maximum,
+			FeeDeductible:        Flag(line.schedule.Deductible),
+			FeeAmount:            line.fee.Amount,
+			FeeWalletID:          line.schedule.WalletID,
+			Rounding:             RoundDown,
+			RemainderNumerator:   line.fee.RemainderNumerator,
+			RemainderDenominator: line.fee.RemainderDenominator,
+			PaidAmount:           line.paid,
+			CreditedAmount:       line.credited,
+			Kind:                 line.kind,
+			SettlesID:            line.settles,
+			Sequence:             entries[line.movement].Sequence,
+			CreatedAt:            time.Now().UTC(),
+		}
+		// A line settles exactly one thing: the line a refund gives back, or
+		// itself. With the kind beside it in a unique index, that one column
+		// carries the whole rule that a line is refunded at most once.
+		if row.SettlesID == "" {
+			row.SettlesID = id
+		}
+		written = append(written, row)
+		rows = append(rows, purchaseRow(row))
+	}
+
+	if _, err := Purchases(s.db).NewQuery().Insert(ctx, g, rows...); err != nil {
+		return nil, err
+	}
+	return written, nil
+}
+
+// purchaseRow is one purchase as the insert writes it.
+//
+// The columns are named here and nowhere else, so the batch that writes forty
+// of them and the value a receipt answers with are the same fields: a column
+// added to the entity and forgotten here would be a row that stored a default
+// while the receipt reported what was charged.
+func purchaseRow(row Purchase) map[string]any {
+	return map[string]any{
+		"id":                    row.ID,
+		"operation_id":          row.OperationID,
+		"position":              row.Position,
+		"payer_wallet_id":       row.PayerWalletID,
+		"owner_wallet_id":       row.OwnerWalletID,
+		"receiver_wallet_id":    row.ReceiverWalletID,
+		"product_key":           row.ProductKey,
+		"quantity":              row.Quantity,
+		"currency":              string(row.Currency),
+		"decimal_places":        row.DecimalPlaces,
+		"price_per_item":        int64(row.PricePerItem),
+		"requested_amount":      int64(row.RequestedAmount),
+		"discount":              int64(row.Discount),
+		"base_amount":           int64(row.BaseAmount),
+		"fee_numerator":         row.FeeNumerator,
+		"fee_denominator":       row.FeeDenominator,
+		"fee_minimum":           int64(row.FeeMinimum),
+		"fee_maximum":           int64(row.FeeMaximum),
+		"fee_deductible":        row.FeeDeductible,
+		"fee_amount":            int64(row.FeeAmount),
+		"fee_wallet_id":         row.FeeWalletID,
+		"rounding":              string(row.Rounding),
+		"remainder_numerator":   row.RemainderNumerator,
+		"remainder_denominator": row.RemainderDenominator,
+		"paid_amount":           int64(row.PaidAmount),
+		"credited_amount":       int64(row.CreditedAmount),
+		"kind":                  string(row.Kind),
+		"settles_id":            row.SettlesID,
+		"sequence":              row.Sequence,
+		"created_at":            row.CreatedAt,
+	}
 }
 
 // recordConversion writes the rate an operation converted at, inside the
@@ -1732,11 +1997,31 @@ func (s *WalletService) replay(ctx context.Context, g security.Grant, key string
 			return Receipt{}, false, err
 		}
 	}
+	// And only a basket has lines, so only a basket is asked for them. A
+	// replayed purchase answers with what the first call bought, read back off
+	// the rows rather than priced again: the same key twice pays once, at one
+	// price.
+	var purchases []Purchase
+	if record.Kind == OperationPurchase || record.Kind == OperationRefund {
+		lines, err := Purchases(s.db).NewQuery().
+			Where("operation_id", "=", record.ID).
+			OrderBy("position").
+			Get(ctx, g)
+		if err != nil {
+			return Receipt{}, false, err
+		}
+		for _, line := range lines {
+			if line != nil {
+				purchases = append(purchases, *line)
+			}
+		}
+	}
 	return Receipt{
 		Operation:  *record,
 		Entries:    entries,
 		Conversion: conversion,
 		Charge:     charge,
+		Purchases:  purchases,
 		Replayed:   true,
 	}, true, nil
 }
@@ -1926,4 +2211,671 @@ func boundedLimit(limit int) int {
 		return maxLimit
 	}
 	return limit
+}
+
+// MaxPurchaseScan is how many purchase rows one batch question reads.
+//
+// A bound rather than none, for the reason a page has one: an unbounded read is
+// how one call takes a production database down on the day a customer has a
+// long history. It is stated rather than hidden because it is a real limit --
+// a question about a wallet with more recent purchases than this, from the
+// wallets named beside it, is answered from what the scan reached.
+const MaxPurchaseScan = 2000
+
+// MaxPurchaseQuestions is how many questions one batch may carry.
+const MaxPurchaseQuestions = 100
+
+// Pay buys a basket with one wallet's money.
+//
+// Every line is one movement out of the payer and one into the wallet that
+// sells it, plus a third into whoever collects the fee, and all of them are one
+// operation and one transaction. There is no state in which half a basket was
+// paid for: a line the application refuses, a price that does not fit or a
+// balance that runs out on the fourth of six leaves nothing written at all.
+//
+// The prices, the discounts and the fees are the application's, through the
+// seams it already supplies. What this package owns is the arithmetic and the
+// record: what was asked for, what was taken off, what the fee was computed
+// from and what actually left and arrived are all on the line's own row, so a
+// receipt that says a different number from the catalogue says why.
+//
+// A basket crosses no rate. Every wallet it names has to be counted the way the
+// payer's is, because a basket that converted line by line would round once per
+// line and the total would not be the total of anything -- an application
+// selling in another currency prices the line in the payer's money, which is
+// what Product.Price is asked for.
+//
+// A line bought for somebody else is a gift: the money still leaves the payer
+// and still arrives at the seller, and the record says the beneficiary bought
+// it. That is the whole of what a gift changes, and it is what "has this person
+// already got one" reads afterwards.
+func (s *WalletService) Pay(ctx context.Context, actor security.Subject, in PayRequest) (Receipt, error) {
+	if errs := in.Validate(); errs.Any() {
+		return Receipt{}, errs
+	}
+
+	g, err := security.Authorize(ctx, s.policy, actor, WalletPay, Wallet{})
+	if err != nil {
+		return Receipt{}, err
+	}
+
+	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationPurchase); err != nil || found {
+		return receipt, err
+	}
+
+	payer, err := Wallets(s.db).NewQuery().WhereKey(in.PayerWalletID).First(ctx, g)
+	if err != nil {
+		return Receipt{}, err
+	}
+	if payer == nil {
+		return Receipt{}, ErrNotFound
+	}
+	if _, err := security.Authorize(ctx, s.policy, actor, WalletPay, *payer); err != nil {
+		return Receipt{}, err
+	}
+	if err := s.allowForce(ctx, actor, in.Force, *payer); err != nil {
+		return Receipt{}, err
+	}
+
+	priced, err := s.priceBasket(ctx, g, *payer, in.Cart)
+	if err != nil {
+		return Receipt{}, err
+	}
+
+	return s.commit(ctx, g, operation{
+		key:   in.IdempotencyKey,
+		kind:  OperationPurchase,
+		meta:  in.Cart.Meta(),
+		lines: priced.lines,
+	}, priced.movements)
+}
+
+// basket is a priced cart: the lines as they will be recorded and the movements
+// that pay for them, in step.
+type basket struct {
+	lines     []purchaseLine
+	movements []movement
+}
+
+// priceBasket asks the application what the basket costs and turns it into
+// movements.
+//
+// Every wallet the basket names is read in two statements rather than one per
+// line: the sellers and the beneficiaries together, and then the wallets that
+// collect fees, which are not known until the schedules have been answered. A
+// basket of forty lines therefore costs the same reads as a basket of two, and
+// the number of statements does not depend on what somebody put in it.
+//
+// Nothing here writes. The application is asked about stock before any money is
+// judged and about price before any is moved, so a line it refuses is a refusal
+// with an empty ledger behind it.
+func (s *WalletService) priceBasket(ctx context.Context, g security.Grant, payer Wallet, cart Cart) (basket, error) {
+	items := cart.Items()
+	named := make([]any, 0, 2*len(items))
+	seen := make(map[string]bool, 2*len(items))
+	for _, item := range items {
+		for _, id := range []string{item.receiver(), item.BeneficiaryWalletID} {
+			if id == "" || id == payer.ID || seen[id] {
+				continue
+			}
+			seen[id] = true
+			named = append(named, id)
+		}
+	}
+
+	wallets, err := s.walletsByID(ctx, g, named)
+	if err != nil {
+		return basket{}, err
+	}
+	wallets[payer.ID] = payer
+
+	// What the fee is a share of is decided first, for every line, because the
+	// wallets that collect those fees are read together afterwards.
+	priced := make([]purchaseLine, 0, len(items))
+	collectors := make([]any, 0, len(items))
+	wanted := make(map[string]bool, len(items))
+	for position, item := range items {
+		line, err := s.priceLine(ctx, g, payer, wallets, position, item)
+		if err != nil {
+			return basket{}, err
+		}
+		priced = append(priced, line)
+		if id := line.schedule.WalletID; id != "" && !wanted[id] {
+			wanted[id] = true
+			collectors = append(collectors, id)
+		}
+	}
+
+	collecting, err := s.walletsByID(ctx, g, collectors)
+	if err != nil {
+		return basket{}, err
+	}
+
+	out := basket{lines: make([]purchaseLine, 0, len(priced)), movements: make([]movement, 0, 3*len(priced))}
+	for _, line := range priced {
+		var collector *Wallet
+		if line.schedule.Charges() {
+			held, known := collecting[line.schedule.WalletID]
+			if !known {
+				return basket{}, fmt.Errorf("%w: %s is not a wallet of this customer", ErrFeeWallet, line.schedule.WalletID)
+			}
+			if converts(payer, held) {
+				return basket{}, fmt.Errorf("%w: the line is %s and the fee would be credited in %s",
+					ErrFeeCurrencyMismatch, payer.Money(line.base), held.Money(0))
+			}
+			collector = &held
+		}
+
+		receiver := wallets[line.receiver]
+		line.movement = len(out.movements)
+		out.movements = append(out.movements, movement{
+			wallet: &receiver, kind: EntryDeposit, amount: line.credited, meta: line.meta,
+		})
+		out.movements = append(out.movements, movement{
+			wallet: &payer, kind: EntryWithdraw, amount: line.paid, force: line.force, meta: line.meta,
+		})
+		if collector != nil {
+			out.movements = append(out.movements, movement{
+				wallet: collector, kind: EntryDeposit, amount: line.fee.Amount,
+			})
+		}
+		out.lines = append(out.lines, line)
+	}
+	return out, nil
+}
+
+// priceLine is one line of a basket, priced and checked but not yet paid for.
+func (s *WalletService) priceLine(ctx context.Context, g security.Grant, payer Wallet, wallets map[string]Wallet, position int, item CartItem) (purchaseLine, error) {
+	receiver, known := wallets[item.receiver()]
+	if !known {
+		return purchaseLine{}, ErrNotFound
+	}
+	if receiver.ID == payer.ID {
+		return purchaseLine{}, ErrPaysItself
+	}
+	if converts(payer, receiver) {
+		return purchaseLine{}, fmt.Errorf("%w: %s and %s", ErrCurrencyMismatch,
+			payer.Money(0), receiver.Money(0))
+	}
+
+	// Whose purchase it is. The money is the payer's either way; what this
+	// decides is who the record says bought the thing, which is what the
+	// application asks about when it wants to know whether to sell it again.
+	owner := payer
+	if item.BeneficiaryWalletID != "" {
+		held, present := wallets[item.BeneficiaryWalletID]
+		if !present {
+			return purchaseLine{}, ErrNotFound
+		}
+		owner = held
+	}
+
+	// The stock, before any money is judged. An application that answers no
+	// here answers before a single balance has been touched.
+	if limited, keeps := item.Product.(LimitedProduct); keeps {
+		if err := limited.CanBuy(ctx, g, owner, item.quantity()); err != nil {
+			return purchaseLine{}, fmt.Errorf("%w: %s: %w", ErrProductStock, item.Product.ProductKey(), err)
+		}
+	}
+
+	price, err := s.priceOf(ctx, g, payer, owner, item)
+	if err != nil {
+		return purchaseLine{}, err
+	}
+	requested, err := price.Times(item.quantity())
+	if err != nil {
+		return purchaseLine{}, err
+	}
+
+	// What the payer is charged less comes off first, because everything after
+	// it is a share of what is being paid rather than of what was asked for.
+	discount, err := s.discount(ctx, g, payer, receiver, requested)
+	if err != nil {
+		return purchaseLine{}, err
+	}
+	base, err := requested.Sub(discount)
+	if err != nil {
+		return purchaseLine{}, err
+	}
+	if base <= 0 {
+		return purchaseLine{}, ErrAmountNotPositive
+	}
+
+	line := purchaseLine{
+		position:      position,
+		payer:         payer.ID,
+		owner:         owner.ID,
+		receiver:      receiver.ID,
+		productKey:    item.Product.ProductKey(),
+		quantity:      item.quantity(),
+		currency:      payer.Currency,
+		decimalPlaces: payer.DecimalPlaces,
+		price:         price,
+		requested:     requested,
+		discount:      discount,
+		base:          base,
+		paid:          base,
+		credited:      base,
+		kind:          PurchasePaid,
+		meta:          item.Meta,
+	}
+	if owner.ID != payer.ID {
+		line.kind = PurchaseGift
+	}
+
+	if s.fees == nil {
+		return line, nil
+	}
+	schedule, err := s.fees.Fee(ctx, g, receiver, payer.Money(base))
+	if err != nil {
+		return purchaseLine{}, err
+	}
+	if !schedule.Charges() {
+		return line, nil
+	}
+	if err := schedule.Validate(); err != nil {
+		return purchaseLine{}, err
+	}
+	if schedule.WalletID == payer.ID || schedule.WalletID == receiver.ID {
+		return purchaseLine{}, fmt.Errorf("%w: it names one of the two wallets the line is between", ErrFeeWallet)
+	}
+	fee, err := schedule.Fee(payer.Money(base))
+	if err != nil {
+		return purchaseLine{}, err
+	}
+	line.schedule = schedule
+	line.fee = fee
+
+	// Who pays the fee is the only thing the schedule changes about the line:
+	// on top of it, or out of what arrives. Either way what leaves is what
+	// arrives plus the fee, exactly.
+	if schedule.Deductible {
+		credited, err := base.Sub(fee.Amount)
+		if err != nil {
+			return purchaseLine{}, err
+		}
+		if credited <= 0 {
+			return purchaseLine{}, fmt.Errorf("%w: %s of %s", ErrFeeExceedsAmount,
+				payer.Money(fee.Amount), payer.Money(base))
+		}
+		line.credited = credited
+		return line, nil
+	}
+	paid, err := base.Add(fee.Amount)
+	if err != nil {
+		return purchaseLine{}, err
+	}
+	line.paid = paid
+	return line, nil
+}
+
+// priceOf is what one of a product costs, read at the payer's scale.
+//
+// A price written on the line wins over the one the product answers, because a
+// caller that says what something costs has already decided; asking the product
+// as well would be asking a question whose answer is thrown away.
+func (s *WalletService) priceOf(ctx context.Context, g security.Grant, payer, owner Wallet, item CartItem) (Amount, error) {
+	if item.PricePerItem != "" {
+		return positiveAmount(item.PricePerItem, payer.DecimalPlaces)
+	}
+	price, err := item.Product.Price(ctx, g, owner)
+	if err != nil {
+		return 0, err
+	}
+	if price <= 0 {
+		return 0, fmt.Errorf("%w: %s costs %s", ErrAmountNotPositive,
+			item.Product.ProductKey(), payer.Money(price))
+	}
+	return price, nil
+}
+
+// walletsByID reads a set of wallets in one statement, keyed by identifier.
+//
+// One statement and not one per identifier: a basket names as many wallets as
+// it has lines, and a read per line is what makes a long basket slow on exactly
+// the customers who buy the most. It is read through the Model with the Grant,
+// so what comes back is this customer's and a wallet that is missing from the
+// answer is a wallet that does not exist here.
+func (s *WalletService) walletsByID(ctx context.Context, g security.Grant, ids []any) (map[string]Wallet, error) {
+	out := make(map[string]Wallet, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := Wallets(s.db).NewQuery().WhereIn("id", ids).Get(ctx, g)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		if row != nil {
+			out[row.ID] = *row
+		}
+	}
+	return out, nil
+}
+
+// Refund gives back some of the lines of a purchase.
+//
+// It moves back exactly what moved, on each side, read off the line's own row:
+// what left the payer goes back to the payer, what reached the seller leaves the
+// seller, and a fee that was taken leaves whoever collected it. Nothing is
+// recomputed -- a schedule that answers differently today would otherwise make
+// a refund of last month's purchase a different number from the purchase.
+//
+// Nothing already written changes. The line that was bought stays on the record
+// exactly as it was bought, and a second row appears beside it naming the one it
+// settles -- which is why a basket half of which was given back cannot be given
+// back whole, and why a statement afterwards reads as what was bought and then
+// what came back.
+//
+// A line is given back once. The second attempt answers ErrAlreadyRefunded, and
+// the refusal is a unique index rather than a check, so two refunds arriving
+// together cannot both be the one that succeeds.
+func (s *WalletService) Refund(ctx context.Context, actor security.Subject, in RefundRequest) (Receipt, error) {
+	if errs := in.Validate(); errs.Any() {
+		return Receipt{}, errs
+	}
+
+	g, err := security.Authorize(ctx, s.policy, actor, WalletRefund, Wallet{})
+	if err != nil {
+		return Receipt{}, err
+	}
+
+	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationRefund); err != nil || found {
+		return receipt, err
+	}
+
+	ids := make([]any, 0, len(in.PurchaseIDs))
+	for _, id := range in.PurchaseIDs {
+		ids = append(ids, id)
+	}
+	rows, err := Purchases(s.db).NewQuery().WhereIn("id", ids).OrderBy("position").Get(ctx, g)
+	if err != nil {
+		return Receipt{}, err
+	}
+	if len(rows) != len(in.PurchaseIDs) {
+		return Receipt{}, ErrNotFound
+	}
+
+	lines := make([]Purchase, 0, len(rows))
+	for _, row := range rows {
+		if row == nil {
+			return Receipt{}, ErrNotFound
+		}
+		if row.Kind == PurchaseRefund {
+			return Receipt{}, ErrNotRefundable
+		}
+		lines = append(lines, *row)
+	}
+	if given, err := s.refunded(ctx, g, lines); err != nil {
+		return Receipt{}, err
+	} else if given {
+		return Receipt{}, ErrAlreadyRefunded
+	}
+
+	priced, err := s.reverseLines(ctx, g, actor, in, lines)
+	if err != nil {
+		return Receipt{}, err
+	}
+
+	receipt, err := s.commit(ctx, g, operation{
+		key:    in.IdempotencyKey,
+		kind:   OperationRefund,
+		reason: in.Reason,
+		meta:   in.Meta,
+		lines:  priced.lines,
+	}, priced.movements)
+	if err != nil && !errors.Is(err, ErrInsufficientFunds) {
+		// The unique index on the line being settled is what refuses a second
+		// refund, and this turns its answer into ours. Read after the failure,
+		// never instead of it: a check that ran before is a check two concurrent
+		// refunds both passed.
+		if given, lookupErr := s.refunded(ctx, g, lines); lookupErr == nil && given {
+			return Receipt{}, ErrAlreadyRefunded
+		}
+	}
+	return receipt, err
+}
+
+// reverseLines turns purchased lines into the movements that give them back,
+// and asks the policy about every wallet they touch.
+//
+// The question is asked per wallet and not once for the request, because the
+// lines of one refund are several people's money and every one of them is
+// moved.
+func (s *WalletService) reverseLines(ctx context.Context, g security.Grant, actor security.Subject, in RefundRequest, lines []Purchase) (basket, error) {
+	named := make([]any, 0, 3*len(lines))
+	seen := make(map[string]bool, 3*len(lines))
+	for _, line := range lines {
+		for _, id := range []string{line.PayerWalletID, line.ReceiverWalletID, line.FeeWalletID} {
+			if id == "" || seen[id] {
+				continue
+			}
+			seen[id] = true
+			named = append(named, id)
+		}
+	}
+	wallets, err := s.walletsByID(ctx, g, named)
+	if err != nil {
+		return basket{}, err
+	}
+	for id := range seen {
+		held, known := wallets[id]
+		if !known {
+			return basket{}, ErrNotFound
+		}
+		if _, err := security.Authorize(ctx, s.policy, actor, WalletRefund, held); err != nil {
+			return basket{}, err
+		}
+		if err := s.allowForce(ctx, actor, in.Force, held); err != nil {
+			return basket{}, err
+		}
+	}
+
+	out := basket{lines: make([]purchaseLine, 0, len(lines)), movements: make([]movement, 0, 3*len(lines))}
+	for position, line := range lines {
+		payer := wallets[line.PayerWalletID]
+		receiver := wallets[line.ReceiverWalletID]
+
+		given := purchaseLine{
+			position:      position,
+			payer:         line.PayerWalletID,
+			owner:         line.OwnerWalletID,
+			receiver:      line.ReceiverWalletID,
+			productKey:    line.ProductKey,
+			quantity:      line.Quantity,
+			currency:      line.Currency,
+			decimalPlaces: line.DecimalPlaces,
+			price:         line.PricePerItem,
+			requested:     line.RequestedAmount,
+			discount:      line.Discount,
+			base:          line.BaseAmount,
+			schedule:      line.Schedule(),
+			fee:           Fee{Amount: line.FeeAmount, RemainderNumerator: line.RemainderNumerator, RemainderDenominator: line.RemainderDenominator},
+			paid:          line.PaidAmount,
+			credited:      line.CreditedAmount,
+			kind:          PurchaseRefund,
+			settles:       line.ID,
+			force:         in.Force,
+			meta:          in.Meta,
+		}
+		given.movement = len(out.movements)
+		out.movements = append(out.movements, movement{
+			wallet: &receiver, kind: EntryWithdraw, amount: line.CreditedAmount, force: in.Force, meta: in.Meta,
+		})
+		out.movements = append(out.movements, movement{
+			wallet: &payer, kind: EntryDeposit, amount: line.PaidAmount, meta: in.Meta,
+		})
+		if line.FeeAmount > 0 && line.FeeWalletID != "" {
+			collector := wallets[line.FeeWalletID]
+			out.movements = append(out.movements, movement{
+				wallet: &collector, kind: EntryWithdraw, amount: line.FeeAmount, force: in.Force,
+			})
+		}
+		out.lines = append(out.lines, given)
+	}
+	return out, nil
+}
+
+// refunded reports whether any of these lines has already been given back.
+func (s *WalletService) refunded(ctx context.Context, g security.Grant, lines []Purchase) (bool, error) {
+	ids := make([]any, 0, len(lines))
+	for _, line := range lines {
+		ids = append(ids, line.ID)
+	}
+	if len(ids) == 0 {
+		return false, nil
+	}
+	return Purchases(s.db).NewQuery().
+		WhereIn("settles_id", ids).
+		Where("kind", "=", string(PurchaseRefund)).
+		Exists(ctx, g)
+}
+
+// Bought answers, for each question, the line that already bought it -- and nil
+// where nothing did.
+//
+// One statement for the whole set rather than one per question. The rows that
+// could answer any of them are read together and matched in memory, so a shop
+// checking forty products against one customer makes one read and not forty --
+// which is the difference between a page that loads and a page that times out on
+// the customers who buy the most.
+//
+// A line that was given back does not answer. The refund is a row of its own
+// naming the line it settles, so what is asked here is "bought and not given
+// back", which is what a shop deciding whether to sell something again means.
+//
+// It is bounded by MaxPurchaseScan, and that bound is real: a question about a
+// wallet with more recent purchases than that, among the wallets named beside
+// it, is answered from what the scan reached.
+func (s *WalletService) Bought(ctx context.Context, actor security.Subject, questions []PurchaseQuery) ([]*Purchase, error) {
+	if len(questions) == 0 {
+		return nil, nil
+	}
+	if len(questions) > MaxPurchaseQuestions {
+		return nil, fmt.Errorf("wallet: %d questions were asked at once, and the most is %d",
+			len(questions), MaxPurchaseQuestions)
+	}
+
+	g, err := security.Authorize(ctx, s.policy, actor, WalletPurchases, Wallet{})
+	if err != nil {
+		return nil, err
+	}
+
+	owners := make([]any, 0, len(questions))
+	receivers := make([]any, 0, len(questions))
+	products := make([]any, 0, len(questions))
+	seen := map[string]bool{}
+	for _, question := range questions {
+		if question.OwnerWalletID == "" || question.ReceiverWalletID == "" || question.ProductKey == "" {
+			return nil, fmt.Errorf("wallet: a question needs an owner, a receiver and a product")
+		}
+		collect(&owners, seen, "o:"+question.OwnerWalletID, question.OwnerWalletID)
+		collect(&receivers, seen, "r:"+question.ReceiverWalletID, question.ReceiverWalletID)
+		collect(&products, seen, "p:"+question.ProductKey, question.ProductKey)
+	}
+
+	// Every wallet whose purchases would be read is asked about, because a read
+	// is a decision like any other: a page of what somebody bought is a page of
+	// what they spend their money on.
+	held, err := s.walletsByID(ctx, g, owners)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range owners {
+		record, known := held[id.(string)]
+		if !known {
+			return nil, ErrNotFound
+		}
+		if _, err := security.Authorize(ctx, s.policy, actor, WalletPurchases, record); err != nil {
+			return nil, err
+		}
+	}
+
+	rows, err := Purchases(s.db).NewQuery().
+		WhereIn("owner_wallet_id", owners).
+		WhereIn("receiver_wallet_id", receivers).
+		WhereIn("product_key", products).
+		OrderByDesc("sequence").
+		OrderByDesc("id").
+		Limit(MaxPurchaseScan).
+		Get(ctx, g)
+	if err != nil {
+		return nil, err
+	}
+
+	// The refunds first, because a line that was given back answers nothing and
+	// the row that says so can be anywhere in the page.
+	given := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		if row != nil && row.Kind == PurchaseRefund {
+			given[row.SettlesID] = true
+		}
+	}
+
+	answers := make([]*Purchase, len(questions))
+	for i, question := range questions {
+		for _, row := range rows {
+			if row == nil || given[row.ID] {
+				continue
+			}
+			if row.OwnerWalletID != question.OwnerWalletID ||
+				row.ReceiverWalletID != question.ReceiverWalletID ||
+				row.ProductKey != question.ProductKey {
+				continue
+			}
+			if row.Kind == PurchasePaid || (question.IncludeGifts && row.Kind == PurchaseGift) {
+				answers[i] = row
+				break
+			}
+		}
+	}
+	return answers, nil
+}
+
+// collect adds a value to a set of query arguments, once.
+func collect(into *[]any, seen map[string]bool, key, value string) {
+	if seen[key] {
+		return
+	}
+	seen[key] = true
+	*into = append(*into, value)
+}
+
+// PurchasesOf returns a page of what one wallet bought, newest first.
+//
+// It is a read, and it asks the policy the same two questions a read of the
+// wallet itself asks: whether this subject reads purchases, and whether they
+// read this wallet's. What somebody buys is at least as private as what they
+// hold, so a path to it that skipped the second question would be the widest
+// read in the package.
+func (s *WalletService) PurchasesOf(ctx context.Context, actor security.Subject, walletID string, page data.Query) ([]*Purchase, error) {
+	g, err := security.Authorize(ctx, s.policy, actor, WalletPurchases, Wallet{})
+	if err != nil {
+		return nil, err
+	}
+
+	owner, err := Wallets(s.db).NewQuery().WhereKey(walletID).First(ctx, g)
+	if err != nil {
+		return nil, err
+	}
+	if owner == nil {
+		return nil, ErrNotFound
+	}
+	if _, err := security.Authorize(ctx, s.policy, actor, WalletPurchases, *owner); err != nil {
+		return nil, err
+	}
+
+	rows := Purchases(s.db)
+	query := rows.NewQuery().Where("owner_wallet_id", "=", owner.ID)
+	if page.Cursor != "" {
+		anchor, err := rows.NewQuery().WhereKey(page.Cursor).Value(ctx, g, "sequence")
+		if err != nil {
+			return nil, err
+		}
+		if anchor == nil {
+			return nil, nil
+		}
+		query = query.Where("sequence", "<", anchor)
+	}
+	return query.OrderByDesc("sequence").OrderByDesc("id").Limit(boundedLimit(page.Limit)).Get(ctx, g)
 }

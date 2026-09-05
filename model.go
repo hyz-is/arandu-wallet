@@ -148,6 +148,16 @@ const (
 	// proposed stays on the record exactly as it was proposed, and what
 	// happened is the row beside it.
 	OperationConfirmation OperationKind = "confirmation"
+	// OperationPurchase paid for a basket: one request, one transaction, and a
+	// movement for every line of it. It is its own kind and not a run of
+	// transfers, because what was bought is a fact about the request and a
+	// statement that could not tell the two apart is a statement where a basket
+	// reads as a person paying a shop six times in one second.
+	OperationPurchase OperationKind = "purchase"
+	// OperationRefund gave back some of the lines of a purchase. It is how a
+	// basket is undone -- line by line, so that a basket half of which was
+	// already given back cannot be given back whole.
+	OperationRefund OperationKind = "refund"
 )
 
 // Operation is one request that moved money, recorded before the money moves.
@@ -1148,6 +1158,14 @@ type Receipt struct {
 	// Charge is what the operation charged beyond the money it moved, and nil
 	// where it charged nothing. Only a payment between two wallets has one.
 	Charge *Charge
+	// Purchases are the lines a basket was made of, in the order they were paid
+	// for, and empty on every operation that bought nothing.
+	//
+	// They are here rather than under Charge because a basket is not one payment
+	// between two wallets: each line has its own price, its own discount, its
+	// own fee and its own pair of wallets, and a single charge row for the lot
+	// would be one number where there are six.
+	Purchases []Purchase
 	// Replayed reports that this operation had already run under the same
 	// idempotency key, and that nothing moved on this call. The money in the
 	// receipt is the money the first call moved, at the rate the first call
@@ -1183,6 +1201,7 @@ type ReceiptResource struct {
 	entries        []EntryResource
 	conversion     *ConversionResource
 	charge         *ChargeResource
+	purchases      []PurchaseResource
 	createdAt      time.Time
 }
 
@@ -1210,6 +1229,11 @@ func NewReceiptResource(receipt Receipt, places map[string]int) ReceiptResource 
 		snapshot := NewChargeResource(*receipt.Charge)
 		charge = &snapshot
 	}
+
+	purchases := make([]PurchaseResource, 0, len(receipt.Purchases))
+	for _, purchase := range receipt.Purchases {
+		purchases = append(purchases, NewPurchaseResource(purchase))
+	}
 	return ReceiptResource{
 		operationID:    receipt.Operation.ID,
 		kind:           receipt.Operation.Kind,
@@ -1222,6 +1246,7 @@ func NewReceiptResource(receipt Receipt, places map[string]int) ReceiptResource 
 		entries:        entries,
 		conversion:     conversion,
 		charge:         charge,
+		purchases:      purchases,
 		createdAt:      receipt.Operation.CreatedAt,
 	}
 }
@@ -1247,6 +1272,11 @@ func (r ReceiptResource) ToArray() map[string]any {
 	if r.charge != nil {
 		charge = r.charge.ToArray()
 	}
+
+	purchases := make([]map[string]any, 0, len(r.purchases))
+	for _, purchase := range r.purchases {
+		purchases = append(purchases, purchase.ToArray())
+	}
 	return map[string]any{
 		"operation_id":    r.operationID,
 		"kind":            string(r.kind),
@@ -1259,6 +1289,7 @@ func (r ReceiptResource) ToArray() map[string]any {
 		"entries":         entries,
 		"conversion":      conversion,
 		"charge":          charge,
+		"purchases":       purchases,
 		"created_at":      r.createdAt.UTC().Format(time.RFC3339),
 	}
 }

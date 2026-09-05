@@ -31,7 +31,7 @@ import (
 // a policy is only as good as what it refuses when the money is really there.
 
 // everyAction is the whole set the policy answers about. A test that listed
-// ten of eleven would pass while the eleventh was open.
+// thirteen of fourteen would pass while the fourteenth was open.
 var everyAction = []security.Action{
 	wallet.WalletView,
 	wallet.WalletList,
@@ -44,6 +44,9 @@ var everyAction = []security.Action{
 	wallet.WalletConfirm,
 	wallet.WalletCredit,
 	wallet.WalletForce,
+	wallet.WalletPay,
+	wallet.WalletRefund,
+	wallet.WalletPurchases,
 }
 
 // operator is the most privileged subject this package knows: somebody the

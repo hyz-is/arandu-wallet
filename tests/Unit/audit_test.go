@@ -184,15 +184,15 @@ func TestEveryServiceMethodAuthorizesBeforeTheModel(t *testing.T) {
 // moving only the construction before Authorize is the mutation this audit
 // exists to reject.
 //
-// All five are named, and that is what makes the audit hold as the package
+// All six are named, and that is what makes the audit hold as the package
 // grows: a use case that reached the ledger, the operations table, the recorded
-// rates or the recorded charges without touching a wallet would otherwise be a
-// method this test read as having no data boundary at all, and would report so
-// instead of failing.
+// rates, the recorded charges or the purchases without touching a wallet would
+// otherwise be a method this test read as having no data boundary at all, and
+// would report so instead of failing.
 func firstModelReach(body *ast.BlockStmt) token.Pos {
 	entries := map[string]bool{
 		"Wallets": true, "Operations": true, "Entries": true,
-		"Conversions": true, "Charges": true,
+		"Conversions": true, "Charges": true, "Purchases": true,
 	}
 	terminals := map[string]bool{
 		"Save": true, "Delete": true, "Restore": true, "Touch": true,
@@ -560,12 +560,13 @@ func TestEveryBalanceStatementCarriesItsOwnGuard(t *testing.T) {
 // is written once and never changed, so what happened stays readable after it is
 // undone.
 //
-// The recorded rates and charges are held to the same rule and for a sharper
-// reason. Each exists so that a movement can be reproduced; a number that could
-// be corrected in place is a number that says what somebody later wished it had
-// been, and the row would still look exactly as trustworthy.
+// The recorded rates, the charges and the purchases are held to the same rule
+// and for a sharper reason. Each exists so that a movement can be reproduced; a
+// number that could be corrected in place is a number that says what somebody
+// later wished it had been, and the row would still look exactly as
+// trustworthy.
 //
-// The schema holds it too -- none of the three tables has an updated_at, so an
+// The schema holds it too -- none of the four tables has an updated_at, so an
 // update through the Model fails on a column that does not exist -- and this is
 // the half that says so before anything runs.
 func TestTheLedgerIsAppendOnly(t *testing.T) {
@@ -576,6 +577,7 @@ func TestTheLedgerIsAppendOnly(t *testing.T) {
 		"Entries":     "the ledger",
 		"Conversions": "the recorded rates",
 		"Charges":     "the recorded charges",
+		"Purchases":   "the record of what was bought",
 	}
 
 	for _, source := range auditedFiles(t) {
