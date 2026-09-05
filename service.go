@@ -1451,6 +1451,12 @@ func (s *WalletService) recordCharge(ctx context.Context, g security.Grant, oper
 // updating, and the database answers how many rows that was. Zero means the
 // condition was false at the moment of the write, which is the only moment that
 // counts.
+//
+// The rows are appended in one statement rather than one each. A balance has to
+// move a wallet at a time, because each carries its own guard and each answers
+// separately; the ledger does not, and a basket of twenty lines that wrote
+// twenty inserts would pay twenty round trips for rows that were all decided
+// before the first of them was sent.
 func (s *WalletService) apply(ctx context.Context, g security.Grant, operationID string, movements []movement) ([]Entry, error) {
 	order := make([]int, len(movements))
 	for i := range order {
@@ -1461,17 +1467,51 @@ func (s *WalletService) apply(ctx context.Context, g security.Grant, operationID
 	})
 
 	entries := make([]Entry, len(movements))
+	rows := make([]map[string]any, 0, len(movements))
 	for _, index := range order {
 		entry, err := s.move(ctx, g, operationID, index, movements[index])
 		if err != nil {
 			return nil, err
 		}
 		entries[index] = entry
+		rows = append(rows, entryRow(entry))
+	}
+	if len(rows) == 0 {
+		return entries, nil
+	}
+	if _, err := Entries(s.db).NewQuery().Insert(ctx, g, rows...); err != nil {
+		return nil, err
 	}
 	return entries, nil
 }
 
-// move applies one movement: the guarded balance update, then the row it wrote.
+// entryRow is one ledger row as the insert writes it.
+//
+// The columns are named here and nowhere else, so the batch that writes twenty
+// of them and the value a receipt answers with are the same fields: a column
+// added to the entity and forgotten here would be a row that stored a default
+// while the receipt reported what the caller asked for.
+func entryRow(entry Entry) map[string]any {
+	return map[string]any{
+		"id":            entry.ID,
+		"operation_id":  entry.OperationID,
+		"wallet_id":     entry.WalletID,
+		"kind":          string(entry.Kind),
+		"sequence":      entry.Sequence,
+		"position":      entry.Position,
+		"amount":        int64(entry.Amount),
+		"balance_after": int64(entry.BalanceAfter),
+		"settled":       entry.Settled,
+		"created_at":    entry.CreatedAt,
+	}
+}
+
+// move applies one movement: the guarded balance update, then the row it
+// produced.
+//
+// It does not write the row. What comes back is the entry the batch above
+// appends, so that the statement which moves a balance and the statement which
+// records that it moved stay one per wallet and one per operation.
 func (s *WalletService) move(ctx context.Context, g security.Grant, operationID string, position int, m movement) (Entry, error) {
 	rows := Wallets(s.db)
 
@@ -1549,9 +1589,6 @@ func (s *WalletService) move(ctx context.Context, g security.Grant, operationID 
 	written.BalanceAfter = after.Balance
 	written.Settled = Flag(!m.pending)
 	written.CreatedAt = time.Now().UTC()
-	if _, err := written.Save(ctx, g); err != nil {
-		return Entry{}, err
-	}
 	return *written, nil
 }
 
