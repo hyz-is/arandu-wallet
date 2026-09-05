@@ -31,9 +31,9 @@ they describe releases of the template and not of this package.
   the share could not divide. `Charges(db)` is its configured Model, and
   `wallet_charges` its table, appended to and never rewritten, one row per
   operation under a unique index.
-- `Receipt.Charge`, `Statement.Charges`, `NewChargeResource`, `ChargeResource`
-  and `charge` on a receipt, so a movement smaller than the request says why
-  beside itself.
+- `Receipt.Charge`, `Statement.Charges`, `NewChargeResource`, `ChargeResource`,
+  `charge` on a receipt and `charges` beside a page of a ledger, so a movement
+  smaller than the request says why beside itself.
 - `ErrFeeShare`, `ErrFeeBounds`, `ErrFeeWallet`, `ErrFeeCurrencyMismatch`,
   `ErrFeeExceedsAmount` and `ErrDiscountNegative`.
 - `20260905_0007_create_wallet_charges`. Running `aru migrate` is required

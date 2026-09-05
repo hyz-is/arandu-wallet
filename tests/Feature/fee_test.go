@@ -727,4 +727,26 @@ func TestAChargedPaymentIsReadableInTheStatement(t *testing.T) {
 	if _, ok := statementOf(t, service, collector.ID).Charges[paid.Operation.ID]; !ok {
 		t.Error("the wallet collecting the fee cannot read what it was paid for")
 	}
+
+	// The response says the same, beside the items rather than inside them: one
+	// charge belongs to one operation, and repeating it on every entry would be
+	// repeating one fact until two copies of it could differ.
+	beside := wallet.NewEntryCollection(statement, "").With()
+	costs, ok := beside["charges"].([]map[string]any)
+	if !ok || len(costs) != 1 {
+		t.Fatalf("a page of the merchant's ledger answers with %v beside its items, want one charge", beside["charges"])
+	}
+	if got := costs[0]["fee_minor"]; got != int64(charge.FeeAmount) {
+		t.Errorf("the page reports a fee of %v, want %d", got, charge.FeeAmount)
+	}
+	if got := costs[0]["operation_id"]; got != paid.Operation.ID {
+		t.Errorf("the page reports the charge of %v, want the payment %s", got, paid.Operation.ID)
+	}
+
+	// A page with nothing charged on it says nothing rather than an empty list.
+	plain := openWallet(t, service, "user-9", "main", 2)
+	deposit(t, service, plain.ID, "opening", "10.00")
+	if _, named := wallet.NewEntryCollection(statementOf(t, service, plain.ID), "").With()["charges"]; named {
+		t.Error("a page with nothing charged on it still answers with charges")
+	}
 }

@@ -1036,6 +1036,7 @@ func (r EntryResource) With() map[string]any { return nil }
 type EntryCollection struct {
 	records     []EntryResource
 	conversions []ConversionResource
+	charges     []ChargeResource
 	cursor      string
 }
 
@@ -1046,10 +1047,10 @@ type EntryCollection struct {
 // what it was part of belongs to the operation. Both travel in the statement,
 // so this is one argument instead of three that could disagree.
 //
-// The rates go beside the items and not inside them. A conversion belongs to an
-// operation, an operation writes an entry on each of two wallets, and repeating
-// the rate on every entry would be repeating one fact until two copies of it
-// could differ.
+// The rates and the charges go beside the items and not inside them. Each
+// belongs to an operation, an operation writes an entry on each of two or three
+// wallets, and repeating one on every entry would be repeating one fact until
+// two copies of it could differ.
 func NewEntryCollection(statement Statement, cursor string) EntryCollection {
 	resources := make([]EntryResource, 0, len(statement.Entries))
 	for _, record := range statement.Entries {
@@ -1059,8 +1060,9 @@ func NewEntryCollection(statement Statement, cursor string) EntryCollection {
 	}
 
 	// In the order the entries name them, so a page reads the same twice.
-	seen := make(map[string]bool, len(statement.Conversions))
+	seen := make(map[string]bool, len(statement.Entries))
 	rates := make([]ConversionResource, 0, len(statement.Conversions))
+	charged := make([]ChargeResource, 0, len(statement.Charges))
 	for _, record := range statement.Entries {
 		if record == nil || seen[record.OperationID] {
 			continue
@@ -1069,8 +1071,11 @@ func NewEntryCollection(statement Statement, cursor string) EntryCollection {
 		if converted, ok := statement.Conversions[record.OperationID]; ok {
 			rates = append(rates, NewConversionResource(converted))
 		}
+		if cost, ok := statement.Charges[record.OperationID]; ok {
+			charged = append(charged, NewChargeResource(cost))
+		}
 	}
-	return EntryCollection{records: resources, conversions: rates, cursor: cursor}
+	return EntryCollection{records: resources, conversions: rates, charges: charged, cursor: cursor}
 }
 
 // ToArray returns the page under a single key.
@@ -1082,8 +1087,9 @@ func (c EntryCollection) ToArray() map[string]any {
 	return map[string]any{"items": items}
 }
 
-// With returns the cursor of the next page and the rates the page's exchanges
-// were made at, and omits either when there is none.
+// With returns the cursor of the next page, the rates the page's exchanges were
+// made at and what its payments were charged, and omits any of them when there
+// is none.
 func (c EntryCollection) With() map[string]any {
 	beside := map[string]any{}
 	if c.cursor != "" {
@@ -1095,6 +1101,13 @@ func (c EntryCollection) With() map[string]any {
 			rates = append(rates, conversion.ToArray())
 		}
 		beside["conversions"] = rates
+	}
+	if len(c.charges) > 0 {
+		costs := make([]map[string]any, 0, len(c.charges))
+		for _, charge := range c.charges {
+			costs = append(costs, charge.ToArray())
+		}
+		beside["charges"] = costs
 	}
 	if len(beside) == 0 {
 		return nil
