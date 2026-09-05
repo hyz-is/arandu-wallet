@@ -11,6 +11,25 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+
+    # The overdraft guard is a conditional UPDATE, and SQLite serialises
+    # writers -- so it cannot tell a guarded statement from a read followed by
+    # a check in Go. Both pass there. Postgres interleaves, and the mutated
+    # form overdraws under it, which is the whole reason this service runs.
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: wallet_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
     steps:
       - uses: actions/checkout@v7
         with:
@@ -47,6 +66,8 @@ jobs:
 
       - name: test
         run: go test -race ./...
+        env:
+          ARANDU_TEST_POSTGRES_DSN: postgres://postgres:postgres@localhost:5432/wallet_test?sslmode=disable
 
       # A v0 release may break, but every break must tell an installer exactly
       # what to replace. Module mode also sees a deleted package or type that a
