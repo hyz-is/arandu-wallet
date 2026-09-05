@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/arandu-io/framework/data"
-	"github.com/arandu-io/framework/security"
 
 	wallet "github.com/hyz-is/arandu-wallet"
 )
@@ -216,52 +215,26 @@ func TestATransferNeedsTwoDifferentWallets(t *testing.T) {
 	}
 }
 
-// rateProvider is a test double for the seam this package declares and does not
-// implement. It converts at a fixed integer ratio, which is enough to prove
-// that the seam is reached, that its answer is what lands in the target wallet,
-// and that an answer in the wrong unit is refused.
-type rateProvider struct {
-	multiplier wallet.Amount
-	currency   wallet.Currency
-	places     int
-}
-
-func (p rateProvider) ConvertTo(_ context.Context, _ security.Grant, from wallet.Money, to wallet.Currency, toDecimalPlaces int) (wallet.Money, error) {
-	currency, places := to, toDecimalPlaces
-	if p.currency != "" {
-		currency = p.currency
-	}
-	if p.places != 0 {
-		places = p.places
-	}
-	return wallet.Money{Amount: from.Amount * p.multiplier, Currency: currency, DecimalPlaces: places}, nil
-}
-
 func TestATransferBetweenCurrenciesNeedsARateProvider(t *testing.T) {
 	t.Parallel()
 
 	handle := database(t)
 	service := wallet.NewWalletService(handle, nil)
 
-	source := openWallet(t, service, "user-1", "main", 2)
-	target, err := service.Open(context.Background(), staff(), wallet.OpenRequest{
-		HolderID: "user-2", Slug: "main", Name: "Theirs", Currency: "USD", DecimalPlaces: 2,
-	})
-	if err != nil {
-		t.Fatalf("opening the second wallet: %v", err)
-	}
+	source := openIn(t, service, "user-1", "main", "BRL", 2)
+	target := openIn(t, service, "user-2", "main", "USD", 2)
 	deposit(t, service, source.ID, "key-1", "10.00")
 
-	_, err = service.Transfer(context.Background(), staff(), wallet.TransferRequest{
+	_, err := service.Transfer(context.Background(), staff(), wallet.TransferRequest{
 		IdempotencyKey: "key-2", FromWalletID: source.ID, ToWalletID: target.ID, Amount: "4.00",
 	})
 	if !errors.Is(err, wallet.ErrCurrencyMismatch) {
 		t.Fatalf("a cross-currency transfer with no provider returned %v, want ErrCurrencyMismatch", err)
 	}
 
-	// With a provider, what arrives is the provider's number and the source
-	// still loses what it was asked to.
-	converted := wallet.NewWalletService(handle, rateProvider{multiplier: 2})
+	// With a provider, the rate is applied to what left and the source still
+	// loses what it was asked to.
+	converted := wallet.NewWalletService(handle, &fixedRate{numerator: 2, denominator: 1})
 	if _, err := converted.Transfer(context.Background(), staff(), wallet.TransferRequest{
 		IdempotencyKey: "key-3", FromWalletID: source.ID, ToWalletID: target.ID, Amount: "4.00",
 	}); err != nil {
@@ -271,46 +244,56 @@ func TestATransferBetweenCurrenciesNeedsARateProvider(t *testing.T) {
 		t.Fatalf("the source holds %d, want 600", got)
 	}
 	if got := balanceOf(t, converted, target.ID); got != 800 {
-		t.Fatalf("the target holds %d, want the provider's 800", got)
+		t.Fatalf("the target holds %d, want 800 at a rate of two", got)
 	}
 }
 
-func TestARateProviderAnsweringInTheWrongUnitIsRefused(t *testing.T) {
+func TestARateQuotedForAnotherPairIsRefused(t *testing.T) {
 	t.Parallel()
 
 	handle := database(t)
-	staffService := wallet.NewWalletService(handle, nil)
-	source := openWallet(t, staffService, "user-1", "main", 2)
-	target, err := staffService.Open(context.Background(), staff(), wallet.OpenRequest{
-		HolderID: "user-2", Slug: "main", Name: "Theirs", Currency: "USD", DecimalPlaces: 2,
-	})
-	if err != nil {
-		t.Fatalf("opening the second wallet: %v", err)
-	}
-	deposit(t, staffService, source.ID, "key-1", "10.00")
+	service := wallet.NewWalletService(handle, nil)
+	source := openIn(t, service, "user-1", "main", "BRL", 2)
+	target := openIn(t, service, "user-2", "main", "USD", 2)
+	deposit(t, service, source.ID, "key-1", "10.00")
 
-	// The provider answers in a currency the target does not hold. Writing that
-	// number would be writing a number that means something else.
-	wrong := wallet.NewWalletService(handle, rateProvider{multiplier: 2, currency: "JPY"})
-	if _, err := wrong.Transfer(context.Background(), staff(), wallet.TransferRequest{
+	// The provider answers about a pair nobody asked about. Applying it would
+	// be applying a number that means something else.
+	wrong := wallet.NewWalletService(handle, misquotedRate{from: "JPY", to: "USD"})
+	_, err := wrong.Transfer(context.Background(), staff(), wallet.TransferRequest{
 		IdempotencyKey: "key-2", FromWalletID: source.ID, ToWalletID: target.ID, Amount: "4.00",
-	}); err == nil {
-		t.Fatal("a rate answered in another currency was written into the wallet")
+	})
+	if !errors.Is(err, wallet.ErrRatePair) {
+		t.Fatalf("a rate for another pair returned %v, want ErrRatePair", err)
 	}
-	if got := balanceOf(t, staffService, target.ID); got != 0 {
+	if got := balanceOf(t, service, target.ID); got != 0 {
 		t.Fatalf("the target holds %d, want 0", got)
 	}
 
-	// And at a scale the target is not counted at, which is the same mistake
-	// with a different name: the digits would move.
-	scaled := wallet.NewWalletService(handle, rateProvider{multiplier: 2, places: 4})
-	if _, err := scaled.Transfer(context.Background(), staff(), wallet.TransferRequest{
+	// And one that does not say when it was quoted, which is a rate nothing
+	// can be reproduced against.
+	undated := wallet.NewWalletService(handle, undatedRate{})
+	_, err = undated.Transfer(context.Background(), staff(), wallet.TransferRequest{
 		IdempotencyKey: "key-3", FromWalletID: source.ID, ToWalletID: target.ID, Amount: "4.00",
-	}); err == nil {
-		t.Fatal("a rate answered at another scale was written into the wallet")
+	})
+	if !errors.Is(err, wallet.ErrRateNotQuoted) {
+		t.Fatalf("an undated rate returned %v, want ErrRateNotQuoted", err)
 	}
-	if got := balanceOf(t, staffService, target.ID); got != 0 {
+	if got := balanceOf(t, service, target.ID); got != 0 {
 		t.Fatalf("the target holds %d, want 0", got)
+	}
+
+	// A provider with no quote refuses, and its refusal is what the caller
+	// sees rather than a rate this package invented.
+	missing := wallet.NewWalletService(handle, unavailableRate{})
+	_, err = missing.Transfer(context.Background(), staff(), wallet.TransferRequest{
+		IdempotencyKey: "key-4", FromWalletID: source.ID, ToWalletID: target.ID, Amount: "4.00",
+	})
+	if !errors.Is(err, errRateUnavailable) {
+		t.Fatalf("a provider with no quote returned %v, want the provider's own error", err)
+	}
+	if got := balanceOf(t, service, source.ID); got != 1000 {
+		t.Fatalf("the source holds %d, want the untouched 1000", got)
 	}
 }
 

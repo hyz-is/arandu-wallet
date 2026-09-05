@@ -48,13 +48,19 @@ type Config struct {
 	// somebody wrote and was told about.
 	PageSize int
 
-	// Rates converts money between wallets that are not counted the same way.
+	// Rates quotes the rate between two currencies, for the transfers that
+	// cross wallets which are not counted the same way.
 	//
 	// Nil is the ordinary case and not a degraded one: an application whose
 	// wallets all hold one currency at one scale never needs a rate, and a
 	// transfer that would need one is refused with ErrCurrencyMismatch rather
 	// than approximated. A rate comes from outside the process, which is why
 	// this is the application's to supply and not this package's to fetch.
+	//
+	// What the provider supplies is the rate and not the converted amount.
+	// Applying it, rounding it and recording it belong to this package, so that
+	// every exchange in the application is rounded the same way and leaves the
+	// same row behind whatever the provider is.
 	Rates RateProvider
 }
 

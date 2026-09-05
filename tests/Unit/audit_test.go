@@ -184,13 +184,14 @@ func TestEveryServiceMethodAuthorizesBeforeTheModel(t *testing.T) {
 // moving only the construction before Authorize is the mutation this audit
 // exists to reject.
 //
-// All three are named, and that is what makes the audit hold as the package
-// grows: a use case that reached the ledger or the operations table without
-// touching a wallet would otherwise be a method this test read as having no
-// data boundary at all, and would report so instead of failing.
+// All four are named, and that is what makes the audit hold as the package
+// grows: a use case that reached the ledger, the operations table or the
+// recorded rates without touching a wallet would otherwise be a method this
+// test read as having no data boundary at all, and would report so instead of
+// failing.
 func firstModelReach(body *ast.BlockStmt) token.Pos {
 	entries := map[string]bool{
-		"Wallets": true, "Operations": true, "Entries": true,
+		"Wallets": true, "Operations": true, "Entries": true, "Conversions": true,
 	}
 	terminals := map[string]bool{
 		"Save": true, "Delete": true, "Restore": true, "Touch": true,
@@ -558,13 +559,22 @@ func TestEveryBalanceStatementCarriesItsOwnGuard(t *testing.T) {
 // is written once and never changed, so what happened stays readable after it is
 // undone.
 //
-// The schema holds it too -- the table has no updated_at, so an update through
-// the Model fails on a column that does not exist -- and this is the half that
-// says so before anything runs.
+// The recorded rates are held to the same rule and for a sharper reason. A
+// conversion exists so that an exchange can be reproduced; a rate that could be
+// corrected in place is a rate that says what somebody later wished it had
+// been, and the row would still look exactly as trustworthy.
+//
+// The schema holds it too -- neither table has an updated_at, so an update
+// through the Model fails on a column that does not exist -- and this is the
+// half that says so before anything runs.
 func TestTheLedgerIsAppendOnly(t *testing.T) {
 	t.Parallel()
 
 	forbidden := map[string]bool{"Update": true, "Delete": true, "ForceDelete": true, "Upsert": true, "Touch": true}
+	appendOnly := map[string]string{
+		"Entries":     "the ledger",
+		"Conversions": "the recorded rates",
+	}
 
 	for _, source := range auditedFiles(t) {
 		ast.Inspect(source.file, func(node ast.Node) bool {
@@ -572,9 +582,11 @@ func TestTheLedgerIsAppendOnly(t *testing.T) {
 			if !ok || !forbidden[calledName(call)] {
 				return true
 			}
-			if chainStartsAt(call, "Entries") {
-				t.Errorf("%s: %s is called on the ledger, which is appended to and never rewritten",
-					source.path, calledName(call))
+			for entry, what := range appendOnly {
+				if chainStartsAt(call, entry) {
+					t.Errorf("%s: %s is called on %s, which is appended to and never rewritten",
+						source.path, calledName(call), what)
+				}
 			}
 			return true
 		})

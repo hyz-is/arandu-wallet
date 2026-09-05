@@ -2,14 +2,22 @@
 //
 // A wallet holds an integer of minor units in one currency; a holder may have
 // several. Money enters and leaves through operations -- deposit, withdrawal,
-// transfer, reversal -- and every operation appends to a ledger that is never
-// rewritten. The balance column is the projection of that ledger and is only
-// ever moved by a statement carrying its own guard, so a withdrawal that would
-// overdraw is refused by the write itself rather than by a comparison made
-// before it.
+// transfer, exchange, reversal -- and every operation appends to a ledger that
+// is never rewritten. The balance column is the projection of that ledger and
+// is only ever moved by a statement carrying its own guard, so a withdrawal
+// that would overdraw is refused by the write itself rather than by a
+// comparison made before it.
+//
+// A transfer between wallets that are not counted the same way is an exchange,
+// which is its own kind of operation and not a transfer with a note on it. The
+// rate is quoted once, applied under one rounding rule, and written down beside
+// the operation with both currencies, both scales, both amounts, the moment it
+// was quoted and the part no minor unit could carry -- so the arithmetic can be
+// done again from the row alone.
 //
 // Every operation carries an idempotency key the caller chose. The same key
-// twice moves money once: the second call answers with the first one's receipt.
+// twice moves money once: the second call answers with the first one's receipt,
+// and for an exchange that means the first one's rate.
 //
 // The files are laid out by role rather than by layer, so the whole package
 // reads top to bottom:
@@ -19,7 +27,7 @@
 //	money.go       -> the amount type, its scale and its arithmetic
 //	model.go       -> the entities, and what they may answer with
 //	policy.go      -> who may do what
-//	rate.go        -> the seam for converting between currencies
+//	rate.go        -> the rate, its arithmetic, and the seam that quotes it
 //	service.go     -> the rules and Model access, after authorization
 //	views.go       -> the files the application takes ownership of
 //
@@ -300,7 +308,7 @@ func (m *Module) entries(ctx *fhttp.Context) error {
 	if len(statement.Entries) == m.cfg.PageSize {
 		cursor = statement.Entries[len(statement.Entries)-1].ID
 	}
-	return ctx.JSON(stdhttp.StatusOK, NewEntryCollection(statement.Entries, statement.Wallet.DecimalPlaces, cursor))
+	return ctx.JSON(stdhttp.StatusOK, NewEntryCollection(statement, cursor))
 }
 
 // deposit puts money into one wallet.
@@ -370,15 +378,20 @@ func (m *Module) reverse(ctx *fhttp.Context) error {
 // caller asked about by sending the key: one says the money moved just now, the
 // other says it moved earlier and this request changed nothing.
 //
-// The amounts are rendered at the scale of the wallet the entries moved, and a
-// receipt with no entries -- which nothing here produces -- falls back to the
-// integer, because a scale guessed at is worse than an integer nobody can
-// misread.
+// Each amount is rendered at the scale of the wallet it moved, looked up once
+// per wallet: an exchange writes two entries counted differently, and one scale
+// for both would print one of them with the point in the wrong place. A wallet
+// that cannot be read falls back to the integer, because a scale guessed at is
+// worse than an integer nobody can misread.
 func (m *Module) receipt(ctx *fhttp.Context, receipt Receipt) error {
-	places := 0
-	if len(receipt.Entries) > 0 {
-		if record, err := m.svc.Find(ctx.Ctx(), m.subject(ctx.Request), receipt.Entries[0].WalletID); err == nil && record != nil {
-			places = record.DecimalPlaces
+	actor := m.subject(ctx.Request)
+	places := make(map[string]int, len(receipt.Entries))
+	for _, entry := range receipt.Entries {
+		if _, known := places[entry.WalletID]; known {
+			continue
+		}
+		if record, err := m.svc.Find(ctx.Ctx(), actor, entry.WalletID); err == nil && record != nil {
+			places[entry.WalletID] = record.DecimalPlaces
 		}
 	}
 	status := stdhttp.StatusCreated
@@ -471,6 +484,17 @@ func (m *Module) answer(ctx *fhttp.Context, err error) error {
 	case errors.Is(err, ErrCurrencyMismatch):
 		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, "those wallets are not counted the same way, and no rate provider is configured")
 		return nil
+
+	// An amount worth less than one minor unit of the target is the caller's
+	// amount and not a fault of the configuration, so it is answered by name.
+	// A rate that is malformed, undated or quoted for another pair is not here
+	// on purpose: those are the configured provider misbehaving, the caller
+	// cannot fix any of them, and answering 422 would tell them their own
+	// request was wrong. They fall through, and the framework reports them as
+	// what they are.
+	case errors.Is(err, ErrConversionUnderflow):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, "that amount is worth less than one minor unit of the receiving wallet")
+		return nil
 	case errors.Is(err, ErrSameWallet):
 		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, "a transfer needs two different wallets")
 		return nil
@@ -499,7 +523,12 @@ func (m *Module) answer(ctx *fhttp.Context, err error) error {
 // They are returned in the order their names sort in, which is the order they
 // apply in: the name carries the order, and nothing else decides it.
 func (m *Module) Migrations() []foundation.Migration {
-	return []foundation.Migration{createWallets{}, createWalletOperations{}, createWalletEntries{}}
+	return []foundation.Migration{
+		createWallets{},
+		createWalletOperations{},
+		createWalletEntries{},
+		createWalletConversions{},
+	}
 }
 
 // The migrations are reversible, and the assertions are here rather than
@@ -510,6 +539,7 @@ var (
 	_ migrations.ReversibleMigration = createWallets{}
 	_ migrations.ReversibleMigration = createWalletOperations{}
 	_ migrations.ReversibleMigration = createWalletEntries{}
+	_ migrations.ReversibleMigration = createWalletConversions{}
 )
 
 // createWallets is the balances table.
@@ -647,4 +677,61 @@ func (createWalletEntries) Up(ctx context.Context, conn migrations.Connection) e
 // Down drops the table, which takes its indexes with it.
 func (createWalletEntries) Down(ctx context.Context, conn migrations.Connection) error {
 	return conn.Schema().DropIfExists(ctx, entriesTable)
+}
+
+// createWalletConversions is the table of rates that were applied.
+type createWalletConversions struct{ migrations.BaseMigration }
+
+// GetName is the migration's identity, and it carries the order.
+func (createWalletConversions) GetName() string { return "20260905_0004_create_wallet_conversions" }
+
+// Up creates the conversions table.
+//
+// Every column is a number or a code, and there is not a floating point one
+// among them. The rate is two big integers because a fraction is what a rate
+// is, the amounts are big integers of minor units like every other amount in
+// this package, and the leftover is two more integers so that what rounding
+// dropped is a value rather than a discrepancy. A decimal column for the rate
+// would arrive in Go as text or as a float, and the float is where an audit
+// stops being able to reproduce the row it is auditing.
+//
+// One conversion per operation, held by a unique index: an operation applies
+// one rate, and a second row against it would be a second answer to what an
+// exchange was worth. The index also carries the read a receipt makes, which is
+// the rate of one operation.
+//
+// There is no updated_at, and its absence is the append-only rule written into
+// the schema, exactly as it is on the ledger: a rate that could be corrected in
+// place is a rate that says what somebody later wished it had been.
+func (createWalletConversions) Up(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Create(ctx, conversionsTable, func(table *schema.Blueprint) {
+		table.String("id").Primary()
+		table.String("tenant_id")
+		table.String("operation_id")
+
+		table.String("from_currency", 12)
+		table.UnsignedSmallInteger("from_decimal_places").Default(2)
+		table.BigInteger("from_amount")
+
+		table.String("to_currency", 12)
+		table.UnsignedSmallInteger("to_decimal_places").Default(2)
+		table.BigInteger("to_amount")
+
+		table.BigInteger("rate_numerator")
+		table.BigInteger("rate_denominator")
+		table.Timestamp("quoted_at")
+
+		table.String("rounding", 16)
+		table.BigInteger("remainder_numerator").Default(0)
+		table.BigInteger("remainder_denominator").Default(1)
+
+		table.Timestamp("created_at")
+
+		table.Unique([]string{"tenant_id", "operation_id"}, "wallet_conversions_operation_uq")
+	})
+}
+
+// Down drops the table, which takes its index with it.
+func (createWalletConversions) Down(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().DropIfExists(ctx, conversionsTable)
 }

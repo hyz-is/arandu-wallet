@@ -243,6 +243,19 @@ type Statement struct {
 	Wallet Wallet
 	// Entries are the movements, oldest first.
 	Entries []*Entry
+	// Operations are the requests the entries on this page were written under,
+	// by operation identifier.
+	//
+	// They travel with the page because a movement does not say what it was:
+	// the same withdrawal is written by a payment, by a reversal and by an
+	// exchange, and a reader who cannot see which is reading a ledger that
+	// hides the difference. An entry names its operation, and this is where
+	// that name resolves.
+	Operations map[string]Operation
+	// Conversions are the rates those operations applied, by operation
+	// identifier. Only an exchange has one, so this map is smaller than
+	// Operations and is empty on a wallet that never converted.
+	Conversions map[string]Conversion
 }
 
 // Open creates a wallet for a holder.
@@ -425,7 +438,69 @@ func (s *WalletService) History(ctx context.Context, actor security.Subject, in 
 	if err != nil {
 		return Statement{}, err
 	}
-	return Statement{Wallet: *holder, Entries: entries}, nil
+
+	operations, conversions, err := s.behind(ctx, g, entries)
+	if err != nil {
+		return Statement{}, err
+	}
+	return Statement{Wallet: *holder, Entries: entries, Operations: operations, Conversions: conversions}, nil
+}
+
+// behind reads the operations a page of entries was written under, and the
+// rates those operations applied.
+//
+// Two statements for the whole page rather than two per entry: a page is up to
+// two hundred rows, and a query per row is the read that makes a statement
+// slow on exactly the accounts that have a history worth reading.
+//
+// Both are read through the Model with the Grant, so both are scoped to the
+// tenant like everything else. A ledger that could be explained by another
+// customer's operations would be a ledger that leaks one.
+func (s *WalletService) behind(ctx context.Context, g security.Grant, entries []*Entry) (map[string]Operation, map[string]Conversion, error) {
+	ids := make([]any, 0, len(entries))
+	seen := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		if entry == nil || seen[entry.OperationID] {
+			continue
+		}
+		seen[entry.OperationID] = true
+		ids = append(ids, entry.OperationID)
+	}
+	if len(ids) == 0 {
+		return map[string]Operation{}, map[string]Conversion{}, nil
+	}
+
+	rows, err := Operations(s.db).NewQuery().WhereIn("id", ids).Get(ctx, g)
+	if err != nil {
+		return nil, nil, err
+	}
+	operations := make(map[string]Operation, len(rows))
+	converting := make([]any, 0, len(rows))
+	for _, row := range rows {
+		if row == nil {
+			continue
+		}
+		operations[row.ID] = *row
+		if row.Kind == OperationExchange {
+			converting = append(converting, row.ID)
+		}
+	}
+
+	conversions := make(map[string]Conversion, len(converting))
+	if len(converting) == 0 {
+		return operations, conversions, nil
+	}
+
+	rates, err := Conversions(s.db).NewQuery().WhereIn("operation_id", converting).Get(ctx, g)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, rate := range rates {
+		if rate != nil {
+			conversions[rate.OperationID] = *rate
+		}
+	}
+	return operations, conversions, nil
 }
 
 // Deposit puts money into a wallet.
@@ -510,7 +585,8 @@ func (s *WalletService) Withdraw(ctx context.Context, actor security.Subject, in
 	}, []movement{{wallet: source, kind: EntryWithdraw, amount: amount}})
 }
 
-// Transfer moves money out of one wallet and into another.
+// Transfer moves money out of one wallet and into another, converting it when
+// the two are not counted the same way.
 //
 // Both movements are one operation and one transaction, so there is no state in
 // which the money has left and not arrived. The authority that is checked is
@@ -518,9 +594,20 @@ func (s *WalletService) Withdraw(ctx context.Context, actor security.Subject, in
 // bounded by the tenant the Grant carries, which is the only set of wallets the
 // statement can reach at all.
 //
-// Two wallets counted the same way move the same number. Two counted
-// differently need a rate, and the rate comes from the RateProvider the
-// application configured -- without one the transfer is refused rather than
+// Two wallets counted the same way move the same number and the operation is
+// recorded as a transfer. Two counted differently -- another currency, or the
+// same currency at another scale -- need a rate, and the operation is recorded
+// as an exchange with the rate it was made at beside it. Which of the two it is
+// comes from the wallets and never from the request: a caller cannot ask for a
+// transfer and be given a conversion, or ask for a conversion between wallets
+// that need none, because neither is a thing the caller decides.
+//
+// This is one path and not two. An Exchange method beside this one would be a
+// second way to move money between two wallets, differing only in a field it
+// wrote -- and the two would drift, because everything true of a transfer is
+// true of an exchange except the rate.
+//
+// Without a configured RateProvider a conversion is refused rather than
 // approximated.
 func (s *WalletService) Transfer(ctx context.Context, actor security.Subject, in TransferRequest) (Receipt, error) {
 	if errs := in.Validate(); errs.Any() {
@@ -530,10 +617,6 @@ func (s *WalletService) Transfer(ctx context.Context, actor security.Subject, in
 	g, err := security.Authorize(ctx, s.policy, actor, WalletTransfer, Wallet{})
 	if err != nil {
 		return Receipt{}, err
-	}
-
-	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationTransfer); err != nil || found {
-		return receipt, err
 	}
 
 	if in.FromWalletID == in.ToWalletID {
@@ -556,22 +639,49 @@ func (s *WalletService) Transfer(ctx context.Context, actor security.Subject, in
 		return Receipt{}, err
 	}
 
+	// The wallets are read before the key is, because the kind an idempotent
+	// replay has to match is the kind these two wallets produce, and that is
+	// not known until they are loaded. Doing it the other way round would look
+	// up an exchange under the name "transfer" and answer that the key belongs
+	// to a different request -- which would make a retried exchange fail on
+	// exactly the second attempt idempotency exists for.
+	kind := OperationTransfer
+	if converts(*source, *target) {
+		kind = OperationExchange
+	}
+	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, kind); err != nil || found {
+		return receipt, err
+	}
+
 	debited, err := positiveAmount(in.Amount, source.DecimalPlaces)
 	if err != nil {
 		return Receipt{}, err
 	}
-	credited, err := s.credited(ctx, g, *source, *target, debited)
+	credited, applied, err := s.convert(ctx, g, *source, *target, debited)
 	if err != nil {
 		return Receipt{}, err
 	}
 
 	return s.commit(ctx, g, operation{
 		key:  in.IdempotencyKey,
-		kind: OperationTransfer,
+		kind: kind,
+		rate: applied,
 	}, []movement{
 		{wallet: source, kind: EntryWithdraw, amount: debited},
 		{wallet: target, kind: EntryDeposit, amount: credited},
 	})
+}
+
+// converts reports that money moving between these two wallets has to go
+// through a rate.
+//
+// A different currency, and also the same currency at a different scale. The
+// second is a conversion too: the digits move, the division does not always
+// come out whole, and what is left over has to be recorded for the same reason
+// it does when the currency changes. Calling it a plain transfer would be
+// calling a rounding a transfer.
+func converts(source, target Wallet) bool {
+	return source.Currency != target.Currency || source.DecimalPlaces != target.DecimalPlaces
 }
 
 // Reverse undoes an operation by appending its opposite.
@@ -589,6 +699,13 @@ func (s *WalletService) Transfer(ctx context.Context, actor security.Subject, in
 // An operation can be undone once. The second attempt answers
 // ErrAlreadyReversed, and the refusal is a unique index rather than a check, so
 // two reversals arriving together cannot both be the one that succeeds.
+//
+// Undoing an exchange moves back exactly what moved, on each side, in the
+// currency it moved in. No rate is asked for and none is recorded: the amounts
+// are read off the entries the exchange wrote, so what left comes back whole
+// and what arrived goes back whole, whatever the pair is worth today.
+// Converting again at a new rate would be a second exchange wearing the name of
+// the first one's undoing, and it would leave one of the two wallets short.
 func (s *WalletService) Reverse(ctx context.Context, actor security.Subject, in ReverseRequest) (Receipt, error) {
 	if errs := in.Validate(); errs.Any() {
 		return Receipt{}, errs
@@ -648,6 +765,21 @@ type operation struct {
 	kind     OperationKind
 	reverses string
 	reason   string
+	rate     *appliedRate
+}
+
+// appliedRate is the conversion an operation performed, and nil where it
+// performed none.
+//
+// It carries the rate as it was quoted, the money that went in and the money
+// that came out, which is everything the recorded row holds. It is one value
+// travelling from the place that asked the provider to the place that writes
+// the row, so there is exactly one rate in the operation and no second lookup
+// between them.
+type appliedRate struct {
+	rate      Rate
+	from      Money
+	converted Converted
 }
 
 // movement is one wallet's share of an operation.
@@ -702,9 +834,22 @@ func (s *WalletService) commit(ctx context.Context, g security.Grant, op operati
 	}
 
 	var entries []Entry
+	var conversion *Conversion
 	err = data.Transaction(ctx, s.db, func(ctx context.Context) error {
 		if _, err := record.Save(ctx, g); err != nil {
 			return err
+		}
+		// The rate goes in with the operation and before the money moves, so
+		// there is no state in which an exchange settled and what it was worth
+		// is missing. It is the same transaction as the entries: a conversion
+		// nobody can read is a movement nobody can explain, and the two either
+		// both exist or neither does.
+		if op.rate != nil {
+			quoted, err := s.record(ctx, g, id, *op.rate)
+			if err != nil {
+				return err
+			}
+			conversion = quoted
 		}
 		written, err := s.apply(ctx, g, id, movements)
 		if err != nil {
@@ -719,7 +864,47 @@ func (s *WalletService) commit(ctx context.Context, g security.Grant, op operati
 		}
 		return Receipt{}, err
 	}
-	return Receipt{Operation: *record, Entries: entries}, nil
+	return Receipt{Operation: *record, Entries: entries, Conversion: conversion}, nil
+}
+
+// record writes the rate an operation converted at, inside the caller's
+// transaction.
+//
+// Every number comes off the value the caller already holds. Nothing here asks
+// the provider again, and there is nowhere it could: the rate arrived as data,
+// and a second lookup would be a second rate in one operation -- which is a
+// receipt that says one thing and a ledger that did another.
+func (s *WalletService) record(ctx context.Context, g security.Grant, operationID string, applied appliedRate) (*Conversion, error) {
+	id, err := data.NewID()
+	if err != nil {
+		return nil, err
+	}
+	instance, err := Conversions(s.db).NewInstance(nil, false)
+	if err != nil {
+		return nil, err
+	}
+
+	written := instance.Entity
+	written.ID = id
+	written.TenantID = data.Tenant(g)
+	written.OperationID = operationID
+	written.FromCurrency = applied.from.Currency
+	written.FromDecimalPlaces = applied.from.DecimalPlaces
+	written.FromAmount = applied.from.Amount
+	written.ToCurrency = applied.converted.Money.Currency
+	written.ToDecimalPlaces = applied.converted.Money.DecimalPlaces
+	written.ToAmount = applied.converted.Money.Amount
+	written.RateNumerator = applied.rate.Numerator
+	written.RateDenominator = applied.rate.Denominator
+	written.QuotedAt = applied.rate.QuotedAt.UTC()
+	written.Rounding = RoundDown
+	written.RemainderNumerator = applied.converted.RemainderNumerator
+	written.RemainderDenominator = applied.converted.RemainderDenominator
+	written.CreatedAt = time.Now().UTC()
+	if _, err := written.Save(ctx, g); err != nil {
+		return nil, err
+	}
+	return written, nil
 }
 
 // apply moves every balance and appends every entry, inside the caller's
@@ -832,6 +1017,11 @@ func (s *WalletService) move(ctx context.Context, g security.Grant, operationID 
 // replay: one key cannot be the name of two different requests, and answering
 // the deposit's receipt to a withdrawal would be answering a question nobody
 // asked.
+//
+// A replayed exchange answers with the rate the first call was quoted, read
+// back off the row rather than asked for again. That is what makes idempotency
+// mean the same thing for a conversion as for anything else: the same key twice
+// converts once, at one rate, and the second answer is the first answer.
 func (s *WalletService) replay(ctx context.Context, g security.Grant, key string, kind OperationKind) (Receipt, bool, error) {
 	record, err := Operations(s.db).NewQuery().Where("idempotency_key", "=", key).First(ctx, g)
 	if err != nil {
@@ -857,7 +1047,19 @@ func (s *WalletService) replay(ctx context.Context, g security.Grant, key string
 			entries = append(entries, *entry)
 		}
 	}
-	return Receipt{Operation: *record, Entries: entries, Replayed: true}, true, nil
+
+	// Only an exchange has one, so only an exchange is asked for one. A read
+	// on every replay would be a statement per deposit that answers nothing.
+	var conversion *Conversion
+	if record.Kind == OperationExchange {
+		conversion, err = Conversions(s.db).NewQuery().
+			Where("operation_id", "=", record.ID).
+			First(ctx, g)
+		if err != nil {
+			return Receipt{}, false, err
+		}
+	}
+	return Receipt{Operation: *record, Entries: entries, Conversion: conversion, Replayed: true}, true, nil
 }
 
 // reversed reports whether an operation has already been undone.
@@ -910,34 +1112,41 @@ func (s *WalletService) mirror(ctx context.Context, g security.Grant, actor secu
 	return movements, nil
 }
 
-// credited is how much arrives in the target wallet.
+// convert is how much arrives in the target wallet, and the rate that decided
+// it.
 //
-// The same number when both wallets count the same thing at the same scale, and
-// the rate provider's answer when they do not. The answer is checked before it
-// is used: a provider that replies in the wrong currency or at the wrong scale
-// is a provider whose number means something other than what this package would
-// write, and writing it anyway is how an exchange rate becomes a rounding error
-// nobody can trace.
-func (s *WalletService) credited(ctx context.Context, g security.Grant, source, target Wallet, debited Amount) (Amount, error) {
-	if source.Currency == target.Currency && source.DecimalPlaces == target.DecimalPlaces {
-		return debited, nil
+// The same number and no rate when both wallets count the same thing at the
+// same scale. Otherwise the provider is asked once, and the rate it answers
+// with is the value everything downstream uses: the multiplication here, the
+// row commit writes, and the receipt the caller reads. There is one call and
+// one variable, which is the whole of "the rate does not change in the middle
+// of the operation" -- a second lookup could answer differently, and then the
+// money that moved and the rate on the record would be two different stories
+// about one payment.
+//
+// The provider is not asked to convert, only to quote. What the rate does to
+// an amount is this package's arithmetic, under this package's one rounding
+// rule, so two conversions of the same amount at the same rate are the same
+// number wherever the rate came from.
+func (s *WalletService) convert(ctx context.Context, g security.Grant, source, target Wallet, debited Amount) (Amount, *appliedRate, error) {
+	if !converts(source, target) {
+		return debited, nil, nil
 	}
 	if s.rates == nil {
-		return 0, ErrCurrencyMismatch
+		return 0, nil, ErrCurrencyMismatch
 	}
 
-	converted, err := s.rates.ConvertTo(ctx, g, source.Money(debited), target.Currency, target.DecimalPlaces)
+	rate, err := s.rates.Rate(ctx, g, source.Currency, target.Currency)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
-	if converted.Currency != target.Currency || converted.DecimalPlaces != target.DecimalPlaces {
-		return 0, fmt.Errorf("wallet: the rate provider answered in %s at %d places and the wallet holds %s at %d",
-			converted.Currency, converted.DecimalPlaces, target.Currency, target.DecimalPlaces)
+
+	from := source.Money(debited)
+	converted, err := rate.Convert(from, target.Currency, target.DecimalPlaces)
+	if err != nil {
+		return 0, nil, err
 	}
-	if converted.Amount <= 0 {
-		return 0, ErrAmountNotPositive
-	}
-	return converted.Amount, nil
+	return converted.Money.Amount, &appliedRate{rate: rate, from: from, converted: converted}, nil
 }
 
 // positiveAmount reads what the caller wrote at the scale of the wallet it is
