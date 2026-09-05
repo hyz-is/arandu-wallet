@@ -447,3 +447,110 @@ func TestARolledBackTransferLeavesNothingBehind(t *testing.T) {
 		t.Fatalf("the target holds %d, want 100", got)
 	}
 }
+
+// TestConcurrentExchangesUnderOneKeySettleAtOneRate is the idempotency
+// property with a rate in it, and it needs an engine that really interleaves.
+//
+// Forty callers send one key at once. All of them find no operation, because
+// none has committed; all of them are free to ask the provider, and the
+// provider here answers a different rate to each. One of them wins the unique
+// index and the other thirty-nine roll back with nothing written and go and
+// read the winner's receipt.
+//
+// What has to be true afterwards is not only that the money moved once. It is
+// that every caller was told the same rate, that the rate they were told is the
+// rate the ledger settled at, and that the thirty-nine quotes nobody used left
+// nothing behind -- a second conversion row, or a credit computed from a quote
+// whose row lost.
+func TestConcurrentExchangesUnderOneKeySettleAtOneRate(t *testing.T) {
+	t.Parallel()
+
+	rates := &driftingRate{}
+	service := wallet.NewWalletService(postgres(t), rates)
+	source := openIn(t, service, "user-1", "main", "USD", 2)
+	target := openIn(t, service, "user-2", "main", "BRL", 2)
+	deposit(t, service, source.ID, "opening", "100.00")
+
+	const callers = 40
+
+	var (
+		start   sync.WaitGroup
+		done    sync.WaitGroup
+		mu      sync.Mutex
+		written int
+		answers []wallet.Conversion
+		failed  []error
+	)
+	start.Add(1)
+	done.Add(callers)
+
+	for range callers {
+		go func() {
+			defer done.Done()
+			start.Wait()
+
+			receipt, err := service.Transfer(context.Background(), staff(), wallet.TransferRequest{
+				IdempotencyKey: "one-key", FromWalletID: source.ID, ToWalletID: target.ID, Amount: "10.00",
+			})
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case err != nil:
+				failed = append(failed, err)
+			default:
+				if !receipt.Replayed {
+					written++
+				}
+				if receipt.Conversion != nil {
+					answers = append(answers, *receipt.Conversion)
+				}
+			}
+		}()
+	}
+	start.Done()
+	done.Wait()
+
+	for _, err := range failed {
+		t.Errorf("a call under a shared key failed: %v", err)
+	}
+	if written != 1 {
+		t.Errorf("%d of %d callers reported that they moved the money, want exactly 1", written, callers)
+	}
+	if len(answers) != callers {
+		t.Fatalf("%d of %d callers were told a rate, want all of them", len(answers), callers)
+	}
+
+	// Every caller was told the same conversion, down to the moment it was
+	// quoted. A caller that was answered with its own losing quote would show
+	// up here, and its money would not be in the wallet.
+	settled := answers[0]
+	for _, answer := range answers[1:] {
+		if answer.OperationID != settled.OperationID ||
+			answer.RateNumerator != settled.RateNumerator ||
+			answer.RateDenominator != settled.RateDenominator ||
+			answer.ToAmount != settled.ToAmount {
+			t.Fatalf("one caller was told %s crediting %d and another %s crediting %d",
+				answer.Rate(), answer.ToAmount, settled.Rate(), settled.ToAmount)
+		}
+	}
+
+	// And the ledger settled at exactly that rate, on both sides.
+	if got := balanceOf(t, service, source.ID); got != 9000 {
+		t.Errorf("the source holds %d after %d identical requests, want 9000", got, callers)
+	}
+	if got := balanceOf(t, service, target.ID); got != settled.ToAmount {
+		t.Errorf("the target holds %d and the recorded conversion credited %d", got, settled.ToAmount)
+	}
+	for _, id := range []string{source.ID, target.ID} {
+		if got, want := ledgerOf(t, service, id), balanceOf(t, service, id); got != want {
+			t.Errorf("the ledger of %s sums to %d and its balance is %d", id, got, want)
+		}
+	}
+
+	// One conversion row for one operation, whatever the losers quoted.
+	statement := statementOf(t, service, target.ID)
+	if got := len(statement.Conversions); got != 1 {
+		t.Fatalf("the target's statement carries %d rates after %d identical requests, want 1", got, callers)
+	}
+	assertConversionReproduces(t, statement.Conversions[settled.OperationID])
+}
