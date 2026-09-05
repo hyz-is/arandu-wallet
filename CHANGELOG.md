@@ -10,10 +10,69 @@ a release is corrected by another release and never by moving a tag.
 
 ## [Unreleased]
 
-Nothing has been released under this module path yet. The versions below are the
-history of the package template this repository was configured from, carried
-over with every other file it holds; they describe releases of the template and
-not of this package.
+The versions below `0.1.0` are the history of the package template this
+repository was configured from, carried over with every other file it holds;
+they describe releases of the template and not of this package.
+
+### Added
+
+- `OperationExchange`, the kind an operation is recorded under when it moved
+  money between wallets that are not counted the same way. It is decided from
+  the two wallets and never from the request, so a statement tells an exchange
+  from a transfer without anybody having to remember which was which.
+- `Conversion`, the record of a rate as it was applied: both currencies, both
+  scales, both amounts, the exact fraction, the moment it was quoted, the
+  rounding rule, and the part no minor unit could carry. `Conversions(db)` is
+  its configured Model, and `wallet_conversions` its table, appended to and
+  never rewritten, one row per operation under a unique index.
+- `Rate`, an exchange rate as the exact fraction `Numerator/Denominator` with
+  the pair it converts and the moment it was quoted, plus `Rate.Validate`,
+  `Rate.Convert` and `Rate.String`.
+- `Converted`, what a rate makes of an amount: the money that arrives and the
+  remainder no minor unit could carry, with `Converted.Exact`.
+- `Rounding` and `RoundDown`, the one rule this package rounds a conversion
+  under. The exact value is truncated toward zero, so a conversion never credits
+  more than the rate justifies; what is left is smaller than one minor unit and
+  is written on the conversion as an exact fraction rather than dropped.
+- `MaxRateDenominator`, the bound that lets a remainder be recorded in an
+  `int64`.
+- `ErrRateNotPositive`, `ErrRateDenominator`, `ErrRateNotQuoted`, `ErrRatePair`
+  and `ErrConversionUnderflow`.
+- `Receipt.Conversion`, the rate an operation applied, and nil where it applied
+  none. A replayed receipt carries the rate the first call was quoted.
+- `Statement.Operations` and `Statement.Conversions`, so a page of a ledger says
+  what each movement was part of and at what rate.
+- `NewConversionResource` and `ConversionResource`, the response form of a
+  recorded rate.
+- `20260905_0004_create_wallet_conversions`. Running `aru migrate` is required
+  before an exchange can settle.
+
+### Changed
+
+- `RateProvider` answers with a rate instead of a converted amount:
+  `ConvertTo(ctx, g, Money, Currency, int) (Money, error)` became
+  `Rate(ctx, g, from, to Currency) (Rate, error)`. Applying the rate, rounding
+  it and recording it belong to this package now, so every exchange in an
+  application is rounded the same way and leaves the same row behind whatever
+  the provider is. A provider that returned the amount left no rate to record.
+- `NewEntryResource` takes the kind of the operation the entry was written
+  under: `NewEntryResource(Entry, int)` became
+  `NewEntryResource(Entry, int, OperationKind)`.
+- `NewEntryCollection` takes the statement instead of the entries and a scale:
+  `NewEntryCollection([]*Entry, int, string)` became
+  `NewEntryCollection(Statement, string)`.
+- `NewReceiptResource` takes a scale per wallet instead of one for the whole
+  receipt: `NewReceiptResource(Receipt, int)` became
+  `NewReceiptResource(Receipt, map[string]int)`. An exchange writes two entries
+  counted differently, and one scale for both moves the decimal point on one of
+  them.
+- `(*WalletService).Transfer` reads the two wallets before it looks up the
+  idempotency key, because the kind a replay has to match is the kind the two
+  wallets produce.
+- `ErrCurrencyMismatch` now covers the same currency at a different scale, and
+  its message says so.
+- An entry answers with `operation_kind`, a receipt with `conversion`, and a
+  page of a ledger with `conversions` beside its items.
 
 ## [0.4.0] - 2026-09-05
 

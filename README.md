@@ -1,6 +1,6 @@
 # Arandu Wallet
 
-An Arandu package. It registers its own routes, owns its own table, and decides
+An Arandu package. It registers its own routes, owns its own tables, and decides
 for itself who may reach either.
 
 ## Install
@@ -47,8 +47,39 @@ Then, once, before the application serves:
 aru migrate
 ```
 
-This package owns a table, which is why the migration step is not optional and
-why `arandu.mod.toml` says `migrations = true`.
+This package owns four tables -- the wallets, the operations, the ledger and the
+recorded rates -- which is why the migration step is not optional and why
+`arandu.mod.toml` says `migrations = true`.
+
+## Quote a rate, if your wallets are not all counted the same way
+
+A transfer between two wallets that hold different currencies, or the same
+currency at different scales, is an exchange. It needs a rate, and a rate comes
+from outside the process, so this package does not fetch one: `arandu.mod.toml`
+says `network = false` and means it.
+
+Leave `Config.Rates` nil and every such transfer is refused with
+`ErrCurrencyMismatch`. That is the ordinary case, not a degraded one -- an
+application whose wallets all hold one currency never needs a rate.
+
+To allow them, supply the provider you trust:
+
+```go
+type RateProvider interface {
+	Rate(ctx context.Context, g security.Grant, from, to Currency) (Rate, error)
+}
+```
+
+It answers with the rate, not with a converted amount. Applying it, rounding it
+and recording it belong to this package, so every exchange in the application is
+rounded the same way and leaves the same row behind whatever the provider is.
+A `Rate` is the exact fraction `Numerator/Denominator` -- 5.4321 is
+`54321/10000` -- because a rate held as a float is already a different rate than
+the one somebody quoted.
+
+The `Grant` comes first because a rate can be a tenant's own. A provider that
+cannot tell whose rate it is asked for is a provider that answers with somebody
+else's.
 
 ## Publish the views
 
