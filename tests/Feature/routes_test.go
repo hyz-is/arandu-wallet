@@ -87,6 +87,8 @@ func TestAVisitorWithNoSessionReachesNothing(t *testing.T) {
 		{http.MethodPost, wallet.DefaultPrefix + "/wallet-1/withdrawals", "amount=1.00"},
 		{http.MethodPost, wallet.DefaultPrefix + "/wallet-1/transfers", "to_wallet_id=wallet-2&amount=1.00"},
 		{http.MethodPost, wallet.DefaultPrefix + "/operations/operation-1/reversals", "reason=chargeback"},
+		{http.MethodPost, wallet.DefaultPrefix + "/operations/operation-1/confirmations", ""},
+		{http.MethodPut, wallet.DefaultPrefix + "/wallet-1/credit", "limit=10.00"},
 	} {
 		rec := answer(t, router, request.method, request.target, request.body)
 		if rec.Code != http.StatusForbidden {

@@ -144,8 +144,15 @@ needed it.
 | method | path | name |
 | --- | --- | --- |
 | `GET` | `/wallet` | `wallet.index` |
-| `GET` | `/wallet/{id}` | `wallet.show` |
 | `POST` | `/wallet` | `wallet.store` |
+| `GET` | `/wallet/{id}` | `wallet.show` |
+| `GET` | `/wallet/{id}/entries` | `wallet.entries` |
+| `PUT` | `/wallet/{id}/credit` | `wallet.credit` |
+| `POST` | `/wallet/{id}/deposits` | `wallet.deposit` |
+| `POST` | `/wallet/{id}/withdrawals` | `wallet.withdraw` |
+| `POST` | `/wallet/{id}/transfers` | `wallet.transfer` |
+| `POST` | `/wallet/operations/{operation}/reversals` | `wallet.reverse` |
+| `POST` | `/wallet/operations/{operation}/confirmations` | `wallet.confirm` |
 
 Every one of them is refused until the policy is opened. That is the state the
 package ships in, and it is deliberate.
