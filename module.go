@@ -1,14 +1,25 @@
-// Package wallet is an Arandu module: one entity, one policy that decides
-// about it, one service that owns its Model-first data path, and the routes that
-// reach them.
+// Package wallet keeps balances and the ledger that explains them.
+//
+// A wallet holds an integer of minor units in one currency; a holder may have
+// several. Money enters and leaves through operations -- deposit, withdrawal,
+// transfer, reversal -- and every operation appends to a ledger that is never
+// rewritten. The balance column is the projection of that ledger and is only
+// ever moved by a statement carrying its own guard, so a withdrawal that would
+// overdraw is refused by the write itself rather than by a comparison made
+// before it.
+//
+// Every operation carries an idempotency key the caller chose. The same key
+// twice moves money once: the second call answers with the first one's receipt.
 //
 // The files are laid out by role rather than by layer, so the whole package
 // reads top to bottom:
 //
 //	module.go      -> registration, routes, handlers and migrations
 //	config.go      -> what the application passes in
-//	model.go       -> the entity, and what it may answer with
+//	money.go       -> the amount type, its scale and its arithmetic
+//	model.go       -> the entities, and what they may answer with
 //	policy.go      -> who may do what
+//	rate.go        -> the seam for converting between currencies
 //	service.go     -> the rules and Model access, after authorization
 //	views.go       -> the files the application takes ownership of
 //
@@ -22,6 +33,7 @@ import (
 	"errors"
 	"fmt"
 	stdhttp "net/http"
+	"strconv"
 	"strings"
 
 	"github.com/arandu-io/framework/data"
@@ -34,12 +46,20 @@ import (
 	"github.com/arandu-io/hesape/view"
 )
 
+// IdempotencyHeader is where a caller writes the name of its request.
+//
+// A header rather than a body field, because the key belongs to the delivery of
+// the request and not to what it asks for: a retry is the same body sent again,
+// and the thing that says "this is that same request" has to be readable
+// without parsing the body twice.
+const IdempotencyHeader = "Idempotency-Key"
+
 // Module is what the application registers.
 //
 // It implements foundation.Module, which is Name and Routes and nothing else --
 // that pair is the whole public contract between a package and the framework.
 //
-// It also implements foundation.Migratable, because it owns a table, and
+// It also implements foundation.Migratable, because it owns tables, and
 // foundation.Publishable, because it hands view sources to the project. The
 // other optional interfaces are declared beside Module in the framework and are
 // opted into the same way, by implementing them: Bootable to prepare state at
@@ -74,7 +94,7 @@ func New(cfg Config, db *data.DB, sessions *security.SessionStore) (*Module, err
 		return nil, err
 	}
 	if db == nil {
-		return nil, errors.New("wallet: New needs a database handle: this package owns a table, and there is no in-memory mode that would let it start without one")
+		return nil, errors.New("wallet: New needs a database handle: this package owns its tables, and there is no in-memory mode that would let it start without one")
 	}
 	if sessions == nil {
 		return nil, errors.New("wallet: New needs a session store: it is where the subject comes from, and a request with no subject cannot be authorized")
@@ -82,7 +102,7 @@ func New(cfg Config, db *data.DB, sessions *security.SessionStore) (*Module, err
 	cfg = cfg.withDefaults()
 	return &Module{
 		cfg:      cfg,
-		svc:      NewWalletService(db),
+		svc:      NewWalletService(db, cfg.Rates),
 		sessions: sessions,
 	}, nil
 }
@@ -98,10 +118,42 @@ func (m *Module) Name() string { return "wallet" }
 // They are named, so a URL is built from a name rather than written out a
 // second time somewhere else -- two spellings of one address disagree, and the
 // failure when they do is a link to a 404.
+//
+// Reading and moving money are different addresses and different methods. A
+// deposit is a POST to a collection of deposits rather than a PATCH of a
+// balance, because the thing being created is the movement: it has an
+// identifier, it is in the ledger afterwards, and it can be undone by name.
+// The method and the address of each one come from routePatterns, which is
+// also the list Config.Validate proves the configured prefix can carry. Only
+// the handler is written here, so the two cannot describe different sets of
+// routes.
 func (m *Module) Routes(r *fhttp.Router) {
-	r.Action(stdhttp.MethodGet, m.cfg.Prefix, m.index).Name("wallet.index")
-	r.Action(stdhttp.MethodGet, m.cfg.Prefix+"/{id}", m.show).Name("wallet.show")
-	r.Action(stdhttp.MethodPost, m.cfg.Prefix, m.store).Name("wallet.store")
+	m.register(r, "wallet.index", m.index)
+	m.register(r, "wallet.store", m.store)
+	m.register(r, "wallet.show", m.show)
+	m.register(r, "wallet.entries", m.entries)
+	m.register(r, "wallet.deposit", m.deposit)
+	m.register(r, "wallet.withdraw", m.withdraw)
+	m.register(r, "wallet.transfer", m.transfer)
+	m.register(r, "wallet.reverse", m.reverse)
+}
+
+// register mounts the named route, reading its method and its address from
+// routePatterns.
+//
+// A name that is not in that list registers nothing, rather than panicking at
+// boot or inventing an address: it is a mistake inside this package and not a
+// wiring mistake an installer made, so the place it has to be caught is the
+// suite, where TestTheModuleRegistersItsRoutesUnderItsPrefix reads the whole
+// table back and counts.
+func (m *Module) register(r *fhttp.Router, name string, handler func(*fhttp.Context) error) {
+	for _, route := range routePatterns {
+		if route.name != name {
+			continue
+		}
+		r.Action(route.method, m.cfg.Prefix+route.suffix, handler).Name(name)
+		return
+	}
 }
 
 // PublishCommand is what an application runs to take ownership of the views
@@ -173,15 +225,18 @@ func (m *Module) Boot(context.Context) error {
 // reached data directly would skip the service's policy boundary, and the
 // layout makes that visible rather than relying on review.
 
-// index answers a page of records.
+// index answers a page of wallets.
 func (m *Module) index(ctx *fhttp.Context) error {
-	query := data.Query{
-		Sort:   ctx.Query("sort"),
-		Cursor: ctx.Query("cursor"),
-		Limit:  m.cfg.PageSize,
+	in := ListRequest{
+		Query: data.Query{
+			Sort:   ctx.Query("sort"),
+			Cursor: ctx.Query("cursor"),
+			Limit:  m.cfg.PageSize,
+		},
+		HolderID: ctx.Query("holder_id"),
 	}
 
-	records, err := m.svc.List(ctx.Ctx(), m.subject(ctx.Request), query)
+	records, err := m.svc.List(ctx.Ctx(), m.subject(ctx.Request), in)
 	if err != nil {
 		return m.answer(ctx, err)
 	}
@@ -196,7 +251,7 @@ func (m *Module) index(ctx *fhttp.Context) error {
 	return ctx.JSON(stdhttp.StatusOK, collectionFromPointers(records, cursor))
 }
 
-// show answers one record.
+// show answers one wallet.
 func (m *Module) show(ctx *fhttp.Context) error {
 	record, err := m.svc.Find(ctx.Ctx(), m.subject(ctx.Request), ctx.Param("id"))
 	if err != nil {
@@ -205,15 +260,132 @@ func (m *Module) show(ctx *fhttp.Context) error {
 	return ctx.JSON(stdhttp.StatusOK, resourceFromPointer(record))
 }
 
-// store creates one record.
+// store opens one wallet.
 func (m *Module) store(ctx *fhttp.Context) error {
-	in := CreateRequest{Name: ctx.Input("name")}
+	places, err := decimalPlaces(ctx.Input("decimal_places"))
+	if err != nil {
+		return m.answer(ctx, err)
+	}
+	in := OpenRequest{
+		HolderID:      ctx.Input("holder_id"),
+		Slug:          ctx.Input("slug"),
+		Name:          ctx.Input("name"),
+		Currency:      Currency(ctx.Input("currency")),
+		DecimalPlaces: places,
+	}
 
-	record, err := m.svc.Create(ctx.Ctx(), m.subject(ctx.Request), in)
+	record, err := m.svc.Open(ctx.Ctx(), m.subject(ctx.Request), in)
 	if err != nil {
 		return m.answer(ctx, err)
 	}
 	return ctx.JSON(stdhttp.StatusCreated, resourceFromPointer(record))
+}
+
+// entries answers a page of one wallet's ledger.
+func (m *Module) entries(ctx *fhttp.Context) error {
+	in := HistoryRequest{
+		WalletID: ctx.Param("id"),
+		Query: data.Query{
+			Cursor: ctx.Query("cursor"),
+			Limit:  m.cfg.PageSize,
+		},
+	}
+
+	statement, err := m.svc.History(ctx.Ctx(), m.subject(ctx.Request), in)
+	if err != nil {
+		return m.answer(ctx, err)
+	}
+
+	cursor := ""
+	if len(statement.Entries) == m.cfg.PageSize {
+		cursor = statement.Entries[len(statement.Entries)-1].ID
+	}
+	return ctx.JSON(stdhttp.StatusOK, NewEntryCollection(statement.Entries, statement.Wallet.DecimalPlaces, cursor))
+}
+
+// deposit puts money into one wallet.
+func (m *Module) deposit(ctx *fhttp.Context) error {
+	in := DepositRequest{
+		IdempotencyKey: ctx.Header(IdempotencyHeader),
+		WalletID:       ctx.Param("id"),
+		Amount:         ctx.Input("amount"),
+	}
+
+	receipt, err := m.svc.Deposit(ctx.Ctx(), m.subject(ctx.Request), in)
+	if err != nil {
+		return m.answer(ctx, err)
+	}
+	return m.receipt(ctx, receipt)
+}
+
+// withdraw takes money out of one wallet.
+func (m *Module) withdraw(ctx *fhttp.Context) error {
+	in := WithdrawRequest{
+		IdempotencyKey: ctx.Header(IdempotencyHeader),
+		WalletID:       ctx.Param("id"),
+		Amount:         ctx.Input("amount"),
+	}
+
+	receipt, err := m.svc.Withdraw(ctx.Ctx(), m.subject(ctx.Request), in)
+	if err != nil {
+		return m.answer(ctx, err)
+	}
+	return m.receipt(ctx, receipt)
+}
+
+// transfer moves money from the wallet in the path into the one in the body.
+func (m *Module) transfer(ctx *fhttp.Context) error {
+	in := TransferRequest{
+		IdempotencyKey: ctx.Header(IdempotencyHeader),
+		FromWalletID:   ctx.Param("id"),
+		ToWalletID:     ctx.Input("to_wallet_id"),
+		Amount:         ctx.Input("amount"),
+	}
+
+	receipt, err := m.svc.Transfer(ctx.Ctx(), m.subject(ctx.Request), in)
+	if err != nil {
+		return m.answer(ctx, err)
+	}
+	return m.receipt(ctx, receipt)
+}
+
+// reverse undoes one operation.
+func (m *Module) reverse(ctx *fhttp.Context) error {
+	in := ReverseRequest{
+		IdempotencyKey: ctx.Header(IdempotencyHeader),
+		OperationID:    ctx.Param("operation"),
+		Reason:         ctx.Input("reason"),
+	}
+
+	receipt, err := m.svc.Reverse(ctx.Ctx(), m.subject(ctx.Request), in)
+	if err != nil {
+		return m.answer(ctx, err)
+	}
+	return m.receipt(ctx, receipt)
+}
+
+// receipt answers a movement of money.
+//
+// A replay answers 200 and a first run answers 201, which is the difference the
+// caller asked about by sending the key: one says the money moved just now, the
+// other says it moved earlier and this request changed nothing.
+//
+// The amounts are rendered at the scale of the wallet the entries moved, and a
+// receipt with no entries -- which nothing here produces -- falls back to the
+// integer, because a scale guessed at is worse than an integer nobody can
+// misread.
+func (m *Module) receipt(ctx *fhttp.Context, receipt Receipt) error {
+	places := 0
+	if len(receipt.Entries) > 0 {
+		if record, err := m.svc.Find(ctx.Ctx(), m.subject(ctx.Request), receipt.Entries[0].WalletID); err == nil && record != nil {
+			places = record.DecimalPlaces
+		}
+	}
+	status := stdhttp.StatusCreated
+	if receipt.Replayed {
+		status = stdhttp.StatusOK
+	}
+	return ctx.JSON(status, NewReceiptResource(receipt, places))
 }
 
 // subject reads who is acting from the session, and from nowhere else.
@@ -222,8 +394,8 @@ func (m *Module) store(ctx *fhttp.Context) error {
 // subject. The difference matters: an empty subject is refused before the
 // policy is consulted, because it is almost always a session that failed to
 // load, and a policy asked about nobody answers about nobody. A guest reaches
-// the policy and is refused there, by a rule somebody wrote -- or allowed,
-// where the package means to serve a reader who never signed in.
+// the policy and is refused there, by a rule somebody wrote -- and here that
+// rule refuses, because there is no money a visitor with no session owns.
 //
 // The tenant of that guest is the application's, from configuration. It is the
 // one place a tenant does not come from a Grant, and it is because there is no
@@ -236,18 +408,41 @@ func (m *Module) subject(r *stdhttp.Request) security.Subject {
 	return sub
 }
 
+// decimalPlaces reads the scale a wallet is being opened at.
+//
+// An empty field is two places, which is what most currencies are counted in.
+// Anything that is not a number is refused rather than read as zero: a wallet
+// opened at the wrong scale reinterprets every amount ever written to it, and
+// the scale cannot be changed afterwards.
+func decimalPlaces(text string) (int, error) {
+	if strings.TrimSpace(text) == "" {
+		return 2, nil
+	}
+	places, err := strconv.Atoi(strings.TrimSpace(text))
+	if err != nil {
+		errs := validation.Errors{}
+		errs.Add("decimal_places", "has to be a whole number")
+		return 0, errs
+	}
+	return places, nil
+}
+
 // answer turns what the service refused into something the client can act on.
 //
-// Three refusals have an answer, and everything else does not. An error this
-// package did not expect is returned rather than swallowed: the framework turns
-// it into the error page in development and a 500 in production, which is the
-// honest outcome. Answering 200 with an empty body is the failure nobody
-// debugs.
+// A refusal about who is asking is answered with a status and no detail:
+// telling the client why a policy said no is telling them what exists and what
+// does not, one request at a time.
 //
-// A refusal is answered with a status and no detail. Telling the client why a
-// policy said no is telling them what exists and what does not, one request at
-// a time; the reason is in the log, where the person operating the system reads
-// it and the person probing it does not.
+// A refusal about the money is answered by name, and that is deliberate. The
+// caller has already been authorized on the wallet in question, so "the balance
+// is not enough" tells them nothing they could not read from it -- and a
+// payment that fails without saying why is a payment somebody retries until it
+// works or until the support queue explains it.
+//
+// An error this package did not expect is returned rather than swallowed: the
+// framework turns it into the error page in development and a 500 in
+// production, which is the honest outcome. Answering 200 with an empty body is
+// the failure nobody debugs.
 func (m *Module) answer(ctx *fhttp.Context, err error) error {
 	switch {
 	case errors.Is(err, security.ErrForbidden):
@@ -255,6 +450,37 @@ func (m *Module) answer(ctx *fhttp.Context, err error) error {
 		return nil
 	case errors.Is(err, ErrNotFound):
 		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusNotFound, "not found")
+		return nil
+
+	// The state of a record that already exists is a conflict: the request was
+	// well formed and the answer is that it has already been settled one way.
+	case errors.Is(err, ErrWalletExists):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusConflict, "that holder already has a wallet with this slug")
+		return nil
+	case errors.Is(err, ErrAlreadyReversed):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusConflict, "that operation has already been reversed")
+		return nil
+	case errors.Is(err, ErrOperationConflict):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusConflict, "that idempotency key belongs to a different request")
+		return nil
+
+	// The request cannot be carried out against the money as it stands.
+	case errors.Is(err, ErrInsufficientFunds):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, "the balance is not enough")
+		return nil
+	case errors.Is(err, ErrCurrencyMismatch):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, "those wallets are not counted the same way, and no rate provider is configured")
+		return nil
+	case errors.Is(err, ErrSameWallet):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, "a transfer needs two different wallets")
+		return nil
+	case errors.Is(err, ErrNotReversible):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, "a reversal cannot itself be reversed")
+		return nil
+	case errors.Is(err, ErrAmountNotPositive), errors.Is(err, ErrAmountScale),
+		errors.Is(err, ErrAmountSyntax), errors.Is(err, ErrAmountOverflow),
+		errors.Is(err, ErrDecimalPlaces):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, err.Error())
 		return nil
 	}
 
@@ -273,40 +499,59 @@ func (m *Module) answer(ctx *fhttp.Context, err error) error {
 // They are returned in the order their names sort in, which is the order they
 // apply in: the name carries the order, and nothing else decides it.
 func (m *Module) Migrations() []foundation.Migration {
-	return []foundation.Migration{createWallets{}}
+	return []foundation.Migration{createWallets{}, createWalletOperations{}, createWalletEntries{}}
 }
 
-// The migration is reversible, and the assertion is here rather than discovered
-// at rollback: the migrator tests for Down with a type assertion, so a Down
-// with the wrong signature would leave a rollback that silently does nothing.
-var _ migrations.ReversibleMigration = createWallets{}
+// The migrations are reversible, and the assertions are here rather than
+// discovered at rollback: the migrator tests for Down with a type assertion, so
+// a Down with the wrong signature would leave a rollback that silently does
+// nothing.
+var (
+	_ migrations.ReversibleMigration = createWallets{}
+	_ migrations.ReversibleMigration = createWalletOperations{}
+	_ migrations.ReversibleMigration = createWalletEntries{}
+)
 
-// createWallets is the table this module owns, and the index its listing
-// reads by.
+// createWallets is the balances table.
 type createWallets struct{ migrations.BaseMigration }
 
 // GetName is the migration's identity, and it carries the order. It is fixed
 // once the package is published: changing what an applied name means leaves the
 // change missing everywhere it already ran, and nothing says so.
-func (createWallets) GetName() string { return "20260823_0001_create_wallets" }
+func (createWallets) GetName() string { return "20260905_0001_create_wallets" }
 
-// Up creates the table and the index the keyset pagination scans.
+// Up creates the wallets table.
+//
+// The balance is a big integer and not a decimal, and that is the decision this
+// whole package rests on: minor units counted in an int64, so that arithmetic
+// is exact, comparison is exact, and the guard on a withdrawal is a comparison
+// the database can make without a numeric library. A decimal column would be
+// exact too and would arrive in Go as text or as a float, which is where the
+// exactness is lost.
 //
 // The Blueprint spells each column for the engine the migration is running on,
 // which is what lets one application develop on a file and deploy on Postgres
-// without a second schema. That used to be written out as SQL here, with a
-// comment explaining that an identifier column is VARCHAR rather than TEXT
-// because it takes part in a key and MySQL refuses TEXT in one without a prefix
-// length -- which is the grammar's job, done by hand in every migration that
-// remembered to.
+// without a second schema.
 //
-// The timestamp has no database default: the value comes from Go.
+// The timestamps have no database default: the values come from Go.
 func (createWallets) Up(ctx context.Context, conn migrations.Connection) error {
-	return conn.Schema().Create(ctx, "wallets", func(table *schema.Blueprint) {
+	return conn.Schema().Create(ctx, walletsTable, func(table *schema.Blueprint) {
 		table.String("id").Primary()
 		table.String("tenant_id")
+		table.String("holder_id")
+		table.String("slug")
 		table.String("name")
+		table.String("currency", 12)
+		table.UnsignedSmallInteger("decimal_places").Default(2)
+		table.BigInteger("balance").Default(0)
+		table.BigInteger("last_sequence").Default(0)
 		table.Timestamp("created_at")
+		table.Timestamp("updated_at")
+
+		// One wallet per holder per slug, per tenant. It is a unique index and
+		// not a check in Go, because a check in Go is a check two concurrent
+		// requests both pass.
+		table.Unique([]string{"tenant_id", "holder_id", "slug"}, "wallets_tenant_holder_slug_uq")
 
 		// The index matches the ORDER BY of the listing, tenant first. Without
 		// it every page is a scan of every customer's rows.
@@ -314,7 +559,92 @@ func (createWallets) Up(ctx context.Context, conn migrations.Connection) error {
 	})
 }
 
-// Down drops the table, which takes its index with it.
+// Down drops the table, which takes its indexes with it.
 func (createWallets) Down(ctx context.Context, conn migrations.Connection) error {
-	return conn.Schema().DropIfExists(ctx, "wallets")
+	return conn.Schema().DropIfExists(ctx, walletsTable)
+}
+
+// createWalletOperations is the table of requests that moved money.
+type createWalletOperations struct{ migrations.BaseMigration }
+
+// GetName is the migration's identity, and it carries the order.
+func (createWalletOperations) GetName() string { return "20260905_0002_create_wallet_operations" }
+
+// Up creates the operations table and the two unique indexes that are the whole
+// of this package's protection against a request being carried out twice.
+//
+// The first is the idempotency key: one key, one operation, per tenant.
+//
+// The second is the operation being settled, which every row carries -- its own
+// identifier where it settles nothing, and the identifier of the operation it
+// undoes where it is a reversal. The kind is in the index with it, and it has
+// to be: without it a reversal naming its original would collide with the
+// original's own row, which holds the same identifier for settling itself. With
+// it, the index says that one operation is reversed at most once, and says it
+// in the database rather than in a check that two concurrent reversals would
+// both walk past.
+func (createWalletOperations) Up(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Create(ctx, operationsTable, func(table *schema.Blueprint) {
+		table.String("id").Primary()
+		table.String("tenant_id")
+		table.String("idempotency_key", 128)
+		table.String("kind", 16)
+		table.String("reverses_id")
+		table.String("reason", 255).Default("")
+		table.Timestamp("created_at")
+
+		table.Unique([]string{"tenant_id", "idempotency_key"}, "wallet_operations_key_uq")
+		table.Unique([]string{"tenant_id", "kind", "reverses_id"}, "wallet_operations_reverses_uq")
+	})
+}
+
+// Down drops the table, which takes its indexes with it.
+func (createWalletOperations) Down(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().DropIfExists(ctx, operationsTable)
+}
+
+// createWalletEntries is the ledger.
+type createWalletEntries struct{ migrations.BaseMigration }
+
+// GetName is the migration's identity, and it carries the order.
+func (createWalletEntries) GetName() string { return "20260905_0003_create_wallet_entries" }
+
+// Up creates the entries table.
+//
+// There is no updated_at, and its absence is the append-only rule written into
+// the schema: an update through the Model would try to stamp a column that does
+// not exist and fail, so a change to a ledger row is not something review has
+// to catch.
+//
+// The order of a statement is the sequence and not the timestamp. Two entries
+// written inside one tick of the clock are two rows a timestamp cannot order,
+// and the engines do not even agree on how much of a tick they keep -- so the
+// column a statement is read by is one this package writes and the database
+// holds unique.
+func (createWalletEntries) Up(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Create(ctx, entriesTable, func(table *schema.Blueprint) {
+		table.String("id").Primary()
+		table.String("tenant_id")
+		table.String("operation_id")
+		table.String("wallet_id")
+		table.String("kind", 16)
+		table.BigInteger("sequence")
+		table.UnsignedSmallInteger("position").Default(0)
+		table.BigInteger("amount")
+		table.BigInteger("balance_after")
+		table.Timestamp("created_at")
+
+		// The index matches the ORDER BY of a statement -- one wallet's rows in
+		// the order they were written -- and it is unique, which is the second
+		// half of the ledger's own check on itself: the balance column has to
+		// equal the last entry, and no two entries may claim one position.
+		table.Unique([]string{"tenant_id", "wallet_id", "sequence"}, "wallet_entries_wallet_sequence_uq")
+		// And the one a receipt reads: every entry of one operation.
+		table.Index([]string{"tenant_id", "operation_id"}, "wallet_entries_operation_idx")
+	})
+}
+
+// Down drops the table, which takes its indexes with it.
+func (createWalletEntries) Down(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().DropIfExists(ctx, entriesTable)
 }

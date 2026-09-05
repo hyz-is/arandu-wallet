@@ -52,11 +52,15 @@ func mount(t *testing.T, cfg wallet.Config) *fhttp.Router {
 	return router
 }
 
-// answer makes one request against the router and returns the recorder.
+// answer makes one request against the router and returns the recorder. Every
+// movement of money carries an idempotency key, so the header goes on every
+// request rather than on the three that need it: a request refused for the want
+// of a key would be a 422 that proves nothing about the policy.
 func answer(t *testing.T, router *fhttp.Router, method, target string, body string) *httptest.ResponseRecorder {
 	t.Helper()
 
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	req.Header.Set(wallet.IdempotencyHeader, "key-1")
 	if body != "" {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
@@ -76,8 +80,13 @@ func TestAVisitorWithNoSessionReachesNothing(t *testing.T) {
 		body   string
 	}{
 		{http.MethodGet, wallet.DefaultPrefix, ""},
-		{http.MethodGet, wallet.DefaultPrefix + "/record-1", ""},
-		{http.MethodPost, wallet.DefaultPrefix, "name=one"},
+		{http.MethodGet, wallet.DefaultPrefix + "/wallet-1", ""},
+		{http.MethodGet, wallet.DefaultPrefix + "/wallet-1/entries", ""},
+		{http.MethodPost, wallet.DefaultPrefix, "holder_id=user-1&slug=main&name=Main&currency=BRL"},
+		{http.MethodPost, wallet.DefaultPrefix + "/wallet-1/deposits", "amount=1.00"},
+		{http.MethodPost, wallet.DefaultPrefix + "/wallet-1/withdrawals", "amount=1.00"},
+		{http.MethodPost, wallet.DefaultPrefix + "/wallet-1/transfers", "to_wallet_id=wallet-2&amount=1.00"},
+		{http.MethodPost, wallet.DefaultPrefix + "/operations/operation-1/reversals", "reason=chargeback"},
 	} {
 		rec := answer(t, router, request.method, request.target, request.body)
 		if rec.Code != http.StatusForbidden {
@@ -94,9 +103,18 @@ func TestARejectedInputIsAnsweredBeforeTheDatabase(t *testing.T) {
 	// The input is validated before anything is authorized, so this is the one
 	// refusal that arrives as 422 rather than 403 -- and it still never reaches
 	// a statement.
-	rec := answer(t, router, http.MethodPost, wallet.DefaultPrefix, "name=")
+	rec := answer(t, router, http.MethodPost, wallet.DefaultPrefix, "holder_id=&slug=&name=&currency=")
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("an empty name answered %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+		t.Fatalf("an empty wallet answered %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+
+	// A scale that is not a number is refused the same way, and before the
+	// policy: a wallet opened at the wrong scale reinterprets every amount ever
+	// written to it.
+	rec = answer(t, router, http.MethodPost, wallet.DefaultPrefix,
+		"holder_id=user-1&slug=main&name=Main&currency=BRL&decimal_places=two")
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("a scale that is not a number answered %d, want %d", rec.Code, http.StatusUnprocessableEntity)
 	}
 }
 
@@ -105,7 +123,7 @@ func TestTheModuleRegistersItsRoutesUnderItsPrefix(t *testing.T) {
 
 	router := mount(t, wallet.Config{Tenant: "acme", Prefix: "/widgets"})
 
-	got := make([]string, 0, 3)
+	got := make([]string, 0, 8)
 	for _, route := range router.Routes() {
 		if route.Module != "wallet" {
 			t.Errorf("the route %s %s is not tagged with the module name: %q", route.Method, route.Pattern, route.Module)
@@ -114,7 +132,20 @@ func TestTheModuleRegistersItsRoutesUnderItsPrefix(t *testing.T) {
 	}
 	sort.Strings(got)
 
-	want := []string{"GET /widgets", "GET /widgets/{id}", "POST /widgets"}
+	// The whole surface, spelled out. Module.Routes attaches a handler to each
+	// address by name and registers nothing for a name it has no handler for,
+	// so a route that lost its handler disappears from this list rather than
+	// answering with a panic.
+	want := []string{
+		"GET /widgets",
+		"GET /widgets/{id}",
+		"GET /widgets/{id}/entries",
+		"POST /widgets",
+		"POST /widgets/operations/{operation}/reversals",
+		"POST /widgets/{id}/deposits",
+		"POST /widgets/{id}/transfers",
+		"POST /widgets/{id}/withdrawals",
+	}
 	if len(got) != len(want) {
 		t.Fatalf("registered %v, want %v", got, want)
 	}

@@ -47,6 +47,15 @@ type Config struct {
 	// clamped: a number somebody wrote and did not get is worse than a number
 	// somebody wrote and was told about.
 	PageSize int
+
+	// Rates converts money between wallets that are not counted the same way.
+	//
+	// Nil is the ordinary case and not a degraded one: an application whose
+	// wallets all hold one currency at one scale never needs a rate, and a
+	// transfer that would need one is refused with ErrCurrencyMismatch rather
+	// than approximated. A rate comes from outside the process, which is why
+	// this is the application's to supply and not this package's to fetch.
+	Rates RateProvider
 }
 
 // Validate reports what the configuration cannot be used with.
@@ -90,10 +99,37 @@ func validateRoutePrefix(prefix string) (err error) {
 
 	handler := http.NotFoundHandler()
 	mux := http.NewServeMux()
-	mux.Handle(http.MethodGet+" "+prefix, handler)
-	mux.Handle(http.MethodGet+" "+prefix+"/{id}", handler)
-	mux.Handle(http.MethodPost+" "+prefix, handler)
+	for _, pattern := range routePatterns {
+		mux.Handle(pattern.method+" "+prefix+pattern.suffix, handler)
+	}
 	return nil
+}
+
+// routePattern is one address this module registers, without the prefix and
+// without the handler.
+type routePattern struct {
+	method string
+	suffix string
+	name   string
+}
+
+// routePatterns is every address this module answers, and it is the only list
+// of them.
+//
+// It lives here because this is the file that has to prove a configured prefix
+// can carry all of them, and Module.Routes reads it too, attaching a handler by
+// name. Two lists would be two things to keep in step, and the one that fell
+// behind would be the one nobody checked -- a prefix accepted at boot for a set
+// of routes that is not the set registered.
+var routePatterns = []routePattern{
+	{http.MethodGet, "", "wallet.index"},
+	{http.MethodPost, "", "wallet.store"},
+	{http.MethodGet, "/{id}", "wallet.show"},
+	{http.MethodGet, "/{id}/entries", "wallet.entries"},
+	{http.MethodPost, "/{id}/deposits", "wallet.deposit"},
+	{http.MethodPost, "/{id}/withdrawals", "wallet.withdraw"},
+	{http.MethodPost, "/{id}/transfers", "wallet.transfer"},
+	{http.MethodPost, "/operations/{operation}/reversals", "wallet.reverse"},
 }
 
 // withDefaults returns the configuration with the optional fields filled in.

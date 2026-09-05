@@ -13,29 +13,51 @@ import (
 // They carry the entity in the name because an application registers many
 // packages, and the name of an action shows up in logs and in audit trails
 // where "view" on its own says nothing about what was viewed.
+//
+// Money is split finer than read and write. A person who may see a balance is
+// not thereby a person who may spend it, and the one who may spend their own is
+// not the one who may undo somebody else's payment -- so viewing, depositing,
+// withdrawing, transferring and reversing are five decisions and not one.
 const (
-	// WalletView is reading one record.
+	// WalletView is reading one wallet, balance included.
 	WalletView security.Action = "wallet.view"
-	// WalletList is paging through the records.
+	// WalletList is paging through wallets.
 	WalletList security.Action = "wallet.list"
-	// WalletCreate is adding one.
+	// WalletCreate is opening one.
 	WalletCreate security.Action = "wallet.create"
-	// WalletUpdate is changing one.
-	WalletUpdate security.Action = "wallet.update"
-	// WalletDelete is removing one.
-	WalletDelete security.Action = "wallet.delete"
+	// WalletHistory is reading the ledger of one wallet.
+	WalletHistory security.Action = "wallet.history"
+	// WalletDeposit is putting money into one.
+	WalletDeposit security.Action = "wallet.deposit"
+	// WalletWithdraw is taking money out of one.
+	WalletWithdraw security.Action = "wallet.withdraw"
+	// WalletTransfer is moving money out of one and into another.
+	WalletTransfer security.Action = "wallet.transfer"
+	// WalletReverse is undoing an operation.
+	WalletReverse security.Action = "wallet.reverse"
 )
+
+// OperatorRole is the role an application grants to the people who run its
+// money: support staff, finance, whoever is trusted to move funds that are not
+// their own and to undo what was already done.
+//
+// One role and not several. A package that shipped a hierarchy of roles would
+// be a package deciding an application's organisation chart, and the rules
+// below need exactly one distinction -- the holder, and somebody acting on the
+// holder's behalf.
+const OperatorRole = "wallet.operator"
 
 // WalletPolicy is the only authority over who does what with a Wallet.
 //
-// IT DENIES EVERYTHING, and that is the state to start from rather than a
-// placeholder to delete. A policy shipped with a branch that allows every
-// action is a hole in every application that installs the package, and the hole
-// looks like working code until somebody reads it.
+// It denies unless a rule below says otherwise, and the rules are written
+// around two subjects: the holder, who may see and move their own money, and
+// the operator, who may act across the tenant. Everything else -- a guest, a
+// subject from another tenant, a signed-in person reaching for somebody else's
+// wallet -- falls through to the refusal at the end.
 //
-// There is deliberately no such branch to remove. Open one action at a time,
-// inside the custom block below, saying who may take it and on which record --
-// what is not written there stays closed, including every action added later.
+// Reversal is deliberately not the holder's. Undoing a payment is a decision
+// about a movement that already settled, and letting the person who received it
+// take it back is a hole with a name.
 type WalletPolicy struct{}
 
 // Compile-time proof that the policy answers about this entity and no other. A
@@ -47,6 +69,11 @@ var _ security.Policy[Wallet] = WalletPolicy{}
 //
 // It is the only place that decides. The service reaches the Model only after
 // Authorize turns this method's nil result into a Grant.
+//
+// The record is the empty Wallet where the question is "may this subject do
+// this kind of thing at all", and the loaded row where it is "may they do it to
+// this money". Both are asked, in that order, and the second is what a rule
+// about ownership answers.
 func (WalletPolicy) Can(ctx context.Context, s security.Subject, a security.Action, record Wallet) error {
 	// Tenant isolation comes first and applies to every action. Without it every
 	// check below would be pointless in a multi-tenant system: a rule that
@@ -60,21 +87,66 @@ func (WalletPolicy) Can(ctx context.Context, s security.Subject, a security.Acti
 	}
 
 	// arandu:begin custom
-	// The rules of this package go here, one action at a time. A rule that
-	// depends on the record and not only on the role is written the same way:
+	// A declared anonymous reader is answered here rather than left to fall
+	// through, because falling through is what every rule below would do and
+	// the reason would be invisible. There is no money a visitor with no
+	// session owns.
+	if s.IsGuest() {
+		return fmt.Errorf("a guest has no wallet")
+	}
+
+	// The operator acts across the tenant. The tenant check above already ran,
+	// so this is wide inside one customer and reaches no further.
 	//
-	//	if a == WalletView && (s.ID == record.ID || s.HasRole("admin")) {
-	//		return nil
-	//	}
+	// The actions are enumerated rather than allowed wholesale, so that an
+	// action nobody has written a rule for is refused to everybody, including
+	// here. A branch that answered "yes" to whatever it was asked would make
+	// the next action somebody adds live the moment it is named.
+	if s.HasRole(OperatorRole) {
+		switch a {
+		case WalletView, WalletList, WalletCreate, WalletHistory,
+			WalletDeposit, WalletWithdraw, WalletTransfer, WalletReverse:
+			return nil
+		}
+	}
+
+	// The probe: "may this subject do this kind of thing at all". It is not the
+	// decision, and the decision is the call the service makes afterwards with
+	// the row it loaded -- which is where the rule below about the holder
+	// finally has a holder to compare against.
 	//
-	// A guest is a reader the caller declared anonymous on purpose, and is the
-	// only subject that arrives without an id. Answer it explicitly or it falls
-	// through to the refusal below, which is the safe direction:
+	// Listing is answered here and only here, because there is no single row to
+	// ask about. What comes back is narrowed by the statement instead: a
+	// listing that had to read a customer's rows in order to decide it may not
+	// read them has already read them, so the service adds the holder predicate
+	// for a subject who is not an operator.
 	//
-	//	if a == WalletView && s.IsGuest() && record.Published {
-	//		return nil
-	//	}
+	// Reversal is absent from the list, so it stops here for everybody who is
+	// not an operator.
+	if isProbe(record) {
+		switch a {
+		case WalletList, WalletView, WalletHistory, WalletDeposit, WalletWithdraw, WalletTransfer:
+			return nil
+		}
+		return fmt.Errorf("no rule allows %s on wallet", a)
+	}
+
+	// The holder, on a row that has one. This is the call that decides.
+	if s.ID != "" && s.ID == record.HolderID {
+		switch a {
+		case WalletView, WalletHistory, WalletCreate, WalletDeposit, WalletWithdraw, WalletTransfer:
+			return nil
+		}
+	}
 	// arandu:end custom
 
 	return fmt.Errorf("no rule allows %s on wallet", a)
 }
+
+// isProbe reports that the question is about the kind of thing rather than
+// about a particular wallet.
+//
+// A wallet with neither an identifier nor a holder names nobody's money. A
+// candidate on its way to being created is not one of these -- it carries the
+// holder it is being opened for, which is what the rule about creation reads.
+func isProbe(record Wallet) bool { return record.ID == "" && record.HolderID == "" }

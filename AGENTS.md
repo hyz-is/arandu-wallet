@@ -62,17 +62,26 @@ this one must prove about itself it proves in its own suite or nowhere.
 
 | | measured with |
 | --- | --- |
-| 6 Go files, one per role, all in one package at the root | `grep -l '^package wallet' *.go` |
-| 6 test files, 37 tests | `find tests -name '*_test.go'` · `go test -count=1 ./... -v \| grep -c '^--- PASS'` |
-| 3 routes | `grep -c 'r.Action' module.go` |
-| 5 actions the policy answers about | `grep -cE '^\t[A-Za-z]+ security.Action = ' policy.go` |
-| 2 direct dependencies, both under `arandu-io` | `go list -m -f '{{if and (not .Indirect) (not .Main)}}{{.Path}} {{.Version}}{{end}}' all` |
+| 8 Go files, one per role, all in one package at the root | `grep -l '^package wallet' *.go` |
+| 12 test files, 79 passing tests and subtests, and 7 more when `ARANDU_TEST_POSTGRES_DSN` names a server | `find tests -name '*_test.go'` · `go test -count=1 ./... -v \| grep -c '^--- PASS'` |
+| 8 routes | `grep -c 'm.register(r,' module.go` |
+| 8 actions the policy answers about | `grep -cE '^\t[A-Za-z]+ security.Action = ' policy.go` |
+| 4 direct dependencies, all under `arandu-io` | `go list -m -f '{{if and (not .Indirect) (not .Main)}}{{.Path}} {{.Version}}{{end}}' all` |
+
+Two of those four are database connectors, imported by the test suite and by
+nothing the compiler links into an application: SQLite for the suite that runs
+anywhere, PostgreSQL for the one that needs transactions which really
+interleave. A test-only import of a module is pruned out of an installer's build
+list, so what a project that installs this package compiles is still the
+framework and Hesape.
 
 The layout is by role rather than by layer, so the package reads top to bottom:
 
 ```
 module.go      registration, routes, handlers and migrations
 config.go      what the application passes in
+money.go       the amount type, its scale and its arithmetic
+rate.go        the seam for converting between currencies
 model.go       the entity, and what it may answer with
 policy.go      who may do what
 service.go     the rules and authorized Model access

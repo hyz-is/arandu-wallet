@@ -179,10 +179,19 @@ func TestEveryServiceMethodAuthorizesBeforeTheModel(t *testing.T) {
 	}
 }
 
-// firstModelReach is where a Service first constructs the configured Model or
-// calls a promoted write terminal. Wallets itself counts: moving only its
-// construction before Authorize is the mutation this audit exists to reject.
+// firstModelReach is where a Service first constructs one of the configured
+// Models or calls a promoted write terminal. The constructors themselves count:
+// moving only the construction before Authorize is the mutation this audit
+// exists to reject.
+//
+// All three are named, and that is what makes the audit hold as the package
+// grows: a use case that reached the ledger or the operations table without
+// touching a wallet would otherwise be a method this test read as having no
+// data boundary at all, and would report so instead of failing.
 func firstModelReach(body *ast.BlockStmt) token.Pos {
+	entries := map[string]bool{
+		"Wallets": true, "Operations": true, "Entries": true,
+	}
 	terminals := map[string]bool{
 		"Save": true, "Delete": true, "Restore": true, "Touch": true,
 	}
@@ -193,7 +202,7 @@ func firstModelReach(body *ast.BlockStmt) token.Pos {
 			return true
 		}
 		name := calledName(call)
-		if name != "Wallets" && !terminals[name] {
+		if !entries[name] && !terminals[name] {
 			return true
 		}
 		if found == token.NoPos || call.Pos() < found {
@@ -497,4 +506,122 @@ func qualifiedName(call *ast.CallExpr, standard map[string]string) string {
 		return name + "." + selector.Sel.Name
 	}
 	return owner.Name + "." + selector.Sel.Name
+}
+
+// The two properties below are about money rather than about authorization, and
+// they are here for the same reason the others are: they are visible in the
+// syntax, and a mutation that removed either of them passed every behavioural
+// test this package runs against SQLite.
+
+// TestEveryBalanceStatementCarriesItsOwnGuard holds the decision that makes
+// concurrent spending safe: the balance is never read, judged in Go and written
+// back. The judgement is a predicate on the update, so a balance that changed
+// between the read and the write changes the answer.
+//
+// It was written after the mutation that proves it is worth having. Replacing
+// the predicate with a read and an if left every SQLite test passing, because
+// SQLite serializes writers; on PostgreSQL the same code let twenty-six
+// withdrawals of one unit through against a balance of twenty. Syntax catches
+// it wherever the suite runs.
+func TestEveryBalanceStatementCarriesItsOwnGuard(t *testing.T) {
+	t.Parallel()
+
+	audited := 0
+	for _, source := range auditedFiles(t) {
+		ast.Inspect(source.file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			name := calledName(call)
+			if name != "Increment" && name != "Decrement" {
+				return true
+			}
+			// Increment(ctx, g, column, amount, extra): the column is third.
+			if len(call.Args) < 3 || !isStringLiteral(call.Args[2], "balance") {
+				return true
+			}
+			audited++
+			if !chainGuards(call, "balance") {
+				t.Errorf("%s: a statement moves the balance without a where on the balance, so it decides on a value somebody read a moment earlier",
+					source.path)
+			}
+			return true
+		})
+	}
+	if audited == 0 {
+		t.Fatal("no balance statement was found, so this test proved nothing")
+	}
+}
+
+// TestTheLedgerIsAppendOnly holds the other half of the same decision: an entry
+// is written once and never changed, so what happened stays readable after it is
+// undone.
+//
+// The schema holds it too -- the table has no updated_at, so an update through
+// the Model fails on a column that does not exist -- and this is the half that
+// says so before anything runs.
+func TestTheLedgerIsAppendOnly(t *testing.T) {
+	t.Parallel()
+
+	forbidden := map[string]bool{"Update": true, "Delete": true, "ForceDelete": true, "Upsert": true, "Touch": true}
+
+	for _, source := range auditedFiles(t) {
+		ast.Inspect(source.file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok || !forbidden[calledName(call)] {
+				return true
+			}
+			if chainStartsAt(call, "Entries") {
+				t.Errorf("%s: %s is called on the ledger, which is appended to and never rewritten",
+					source.path, calledName(call))
+			}
+			return true
+		})
+	}
+}
+
+// isStringLiteral reports whether an expression is exactly this string.
+func isStringLiteral(expression ast.Expr, want string) bool {
+	literal, ok := expression.(*ast.BasicLit)
+	return ok && literal.Kind == token.STRING && literal.Value == `"`+want+`"`
+}
+
+// chainGuards reports whether a builder chain ending in this call passes
+// through a Where on the given column.
+func chainGuards(call *ast.CallExpr, column string) bool {
+	for node := receiverOf(call); node != nil; node = receiverOf(node) {
+		if calledName(node) != "Where" || len(node.Args) == 0 {
+			continue
+		}
+		if isStringLiteral(node.Args[0], column) {
+			return true
+		}
+	}
+	return false
+}
+
+// chainStartsAt reports whether a builder chain ending in this call was started
+// by a call of this name.
+func chainStartsAt(call *ast.CallExpr, name string) bool {
+	for node := receiverOf(call); node != nil; node = receiverOf(node) {
+		if calledName(node) == name {
+			return true
+		}
+	}
+	return false
+}
+
+// receiverOf is the call a method was called on, and nil where the receiver is
+// not itself a call.
+func receiverOf(call *ast.CallExpr) *ast.CallExpr {
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return nil
+	}
+	inner, ok := selector.X.(*ast.CallExpr)
+	if !ok {
+		return nil
+	}
+	return inner
 }

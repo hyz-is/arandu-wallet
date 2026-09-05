@@ -8,7 +8,21 @@ import (
 	"github.com/arandu-io/hesape/database/model"
 )
 
-// Wallet is the entity this package owns.
+// The tables this package owns. They are named here rather than repeated at
+// each call, because a table named in two places is a table one of them will
+// rename alone.
+const (
+	walletsTable    = "wallets"
+	operationsTable = "wallet_operations"
+	entriesTable    = "wallet_entries"
+)
+
+// Wallet is a balance held for somebody, in one currency.
+//
+// A holder may have several: the pair of HolderID and Slug is what names one,
+// so "user-1"/"main" and "user-1"/"bonus" are two balances that never mix. The
+// currency and the scale are fixed when the wallet is opened, because changing
+// either would reinterpret every amount already written under it.
 //
 // It embeds the model, so a row returned by a query carries the connection and
 // can be saved again. Build new rows through Wallets: a struct literal has no
@@ -26,11 +40,50 @@ type Wallet struct {
 	// tenant.
 	TenantID string `db:"tenant_id"`
 
-	// Name is what a person calls this record.
+	// HolderID is whose money this is. It is an identifier the application
+	// owns -- a user, an organisation, a merchant -- and this package never
+	// resolves it: what a holder is belongs to the application, and a package
+	// that assumed it was a user would be wrong in every application where it
+	// is not.
+	HolderID string `db:"holder_id"`
+
+	// Slug names which of the holder's wallets this is.
+	Slug string `db:"slug"`
+
+	// Name is what a person calls this wallet.
 	Name string `db:"name"`
 
-	// CreatedAt is when the row was written, in UTC.
+	// Currency is what the balance counts.
+	Currency Currency `db:"currency"`
+
+	// DecimalPlaces is how many minor units make one major unit of Currency.
+	// It is the scale every amount on this wallet is written at, and it is
+	// fixed for the life of the wallet.
+	DecimalPlaces int `db:"decimal_places"`
+
+	// Balance is the projection of the ledger, in minor units.
+	//
+	// The entries are the truth and this column is what they add up to. It
+	// exists so that a balance is one row rather than a sum over a history
+	// that only grows, and it is only ever moved by a statement that carries
+	// its own guard -- never by a value read, adjusted in Go and written back.
+	Balance Amount `db:"balance"`
+
+	// LastSequence is the position of the newest entry on this wallet.
+	//
+	// It moves in the same statement as the balance, so the number an entry is
+	// written with is one nothing else can be holding. It exists because a
+	// statement is read in order and a timestamp cannot supply one: two entries
+	// written inside the same tick of the clock are two rows an ORDER BY over
+	// time cannot tell apart, and a running balance in the wrong order is a
+	// statement that does not add up as somebody reads down it.
+	LastSequence int64 `db:"last_sequence"`
+
+	// CreatedAt is when the wallet was opened, in UTC.
 	CreatedAt time.Time `db:"created_at"`
+
+	// UpdatedAt is when the balance last moved, in UTC.
+	UpdatedAt time.Time `db:"updated_at"`
 }
 
 // Wallets returns the configured model for the wallets table.
@@ -38,15 +91,226 @@ type Wallet struct {
 // The primary key is application-generated text, so it does not increment.
 // The tenant scope remains on the model's tenant_id default.
 func Wallets(db *data.DB) *model.Model[Wallet] {
-	m := model.NewModel[Wallet]("wallets", db, db.GetQueryGrammar(), db.GetPostProcessor())
+	m := model.NewModel[Wallet](walletsTable, db, db.GetQueryGrammar(), db.GetPostProcessor())
 	m.KeyType = "string"
 	m.Incrementing = false
 	return m
 }
 
-// ErrNotFound is returned when no row matches, including when the row exists
-// in another tenant. The two cases are deliberately indistinguishable.
-var ErrNotFound = errors.New("wallet: record not found")
+// Money returns an amount read at this wallet's currency and scale.
+func (w Wallet) Money(amount Amount) Money {
+	return Money{Amount: amount, Currency: w.Currency, DecimalPlaces: w.DecimalPlaces}
+}
+
+// OperationKind is what an operation did.
+type OperationKind string
+
+// The kinds an operation can be. An operation is one request that moved money,
+// and the kind is what it was asked to do rather than what its entries look
+// like: a transfer and a reversal of a deposit both write a withdrawal, and
+// telling them apart afterwards is what a statement is for.
+const (
+	// OperationDeposit put money into one wallet.
+	OperationDeposit OperationKind = "deposit"
+	// OperationWithdraw took money out of one wallet.
+	OperationWithdraw OperationKind = "withdraw"
+	// OperationTransfer moved money between two wallets.
+	OperationTransfer OperationKind = "transfer"
+	// OperationReversal undid an earlier operation.
+	OperationReversal OperationKind = "reversal"
+)
+
+// Operation is one request that moved money, recorded before the money moves.
+//
+// It is what makes a retry safe. The row carries the caller's idempotency key
+// under a unique index, so a second request with the same key cannot insert a
+// second operation -- the database refuses it, rather than a read deciding that
+// it probably has not run yet.
+type Operation struct {
+	model.Model[Operation]
+
+	// ID is the identifier, generated by the application.
+	ID string `db:"id"`
+
+	// TenantID is the customer the row belongs to, written from the Grant.
+	TenantID string `db:"tenant_id"`
+
+	// IdempotencyKey is what the caller sent to name this request. It is
+	// unique per tenant, so the same key is the same operation whatever it was
+	// asked to do.
+	IdempotencyKey string `db:"idempotency_key"`
+
+	// Kind is what the operation was asked to do.
+	Kind OperationKind `db:"kind"`
+
+	// ReversesID is the operation this one settles.
+	//
+	// A reversal holds the id of the operation it undoes. Everything else
+	// holds its own id, which is what lets one unique index over the kind and
+	// this column carry the whole rule: an operation is reversed at most once,
+	// and a row that reverses nothing collides with nothing -- not even with
+	// the reversal that names it, because the two differ in kind. Read it with
+	// Reverses, which answers with the empty string where this row reverses
+	// nothing.
+	ReversesID string `db:"reverses_id"`
+
+	// Reason is what the caller said about a reversal, and is empty on
+	// everything else.
+	Reason string `db:"reason"`
+
+	// CreatedAt is when the operation was recorded, in UTC.
+	CreatedAt time.Time `db:"created_at"`
+}
+
+// Operations returns the configured model for the operations table.
+func Operations(db *data.DB) *model.Model[Operation] {
+	m := model.NewModel[Operation](operationsTable, db, db.GetQueryGrammar(), db.GetPostProcessor())
+	m.KeyType = "string"
+	m.Incrementing = false
+	return m
+}
+
+// Reverses is the operation this one undoes, and the empty string when it
+// undoes nothing.
+func (o Operation) Reverses() string {
+	if o.Kind != OperationReversal || o.ReversesID == o.ID {
+		return ""
+	}
+	return o.ReversesID
+}
+
+// EntryKind is the direction of one movement.
+type EntryKind string
+
+// The two directions money moves on a wallet. They are read from the wallet's
+// side: a deposit raises the balance and a withdrawal lowers it, whether the
+// operation around them was a transfer, a reversal or a deposit of its own.
+const (
+	// EntryDeposit raised the balance.
+	EntryDeposit EntryKind = "deposit"
+	// EntryWithdraw lowered it.
+	EntryWithdraw EntryKind = "withdraw"
+)
+
+// Entry is one movement of money on one wallet, and the ledger is the sum of
+// them.
+//
+// Rows are appended and never changed. A movement that turned out to be wrong
+// is undone by appending the opposite movement under an operation that names
+// the one it reverses, so what happened stays readable after it is undone --
+// which a status column that is rewritten in place cannot do.
+type Entry struct {
+	model.Model[Entry]
+
+	// ID is the identifier, generated by the application.
+	ID string `db:"id"`
+
+	// TenantID is the customer the row belongs to, written from the Grant.
+	TenantID string `db:"tenant_id"`
+
+	// OperationID is the request this movement was part of. A transfer writes
+	// two entries under one operation.
+	OperationID string `db:"operation_id"`
+
+	// WalletID is the wallet that moved.
+	WalletID string `db:"wallet_id"`
+
+	// Kind is the direction.
+	Kind EntryKind `db:"kind"`
+
+	// Sequence is this entry's position in its wallet's ledger, counting from
+	// one and never repeating. It is what a statement is ordered and paged by,
+	// and a unique index holds it: two entries at one position would be a
+	// ledger that lost a write without saying so.
+	Sequence int64 `db:"sequence"`
+
+	// Position is this entry's place within its own operation, counting from
+	// zero. A transfer writes the wallet that pays at zero and the wallet that
+	// is paid at one, so a receipt reads the same way when it is produced and
+	// when it is replayed.
+	Position int `db:"position"`
+
+	// Amount is how much moved, in the wallet's minor units, and it is always
+	// positive: the direction is Kind's to carry, so that a sum over the
+	// history cannot be made to mean the opposite of what it says by a sign
+	// somebody wrote into an amount.
+	Amount Amount `db:"amount"`
+
+	// BalanceAfter is what the wallet held once this movement was applied.
+	//
+	// Written because a statement a person reads is a running balance, and
+	// recomputing one means replaying every earlier row. It is also what makes
+	// the ledger check itself: the last entry of a wallet has to equal the
+	// wallet's balance column.
+	BalanceAfter Amount `db:"balance_after"`
+
+	// CreatedAt is when the movement was written, in UTC.
+	CreatedAt time.Time `db:"created_at"`
+}
+
+// Entries returns the configured model for the entries table.
+func Entries(db *data.DB) *model.Model[Entry] {
+	m := model.NewModel[Entry](entriesTable, db, db.GetQueryGrammar(), db.GetPostProcessor())
+	m.KeyType = "string"
+	m.Incrementing = false
+	return m
+}
+
+// Signed is the movement as it adds to a balance: positive for a deposit,
+// negative for a withdrawal.
+//
+// It is how a sum over a history is taken, and it is a method rather than a
+// column so that the sign exists in exactly one place.
+func (e Entry) Signed() Amount {
+	if e.Kind == EntryWithdraw {
+		return -e.Amount
+	}
+	return e.Amount
+}
+
+// The refusals this package answers with. Each one is a different thing for the
+// caller to do, which is why they are separate values rather than one error
+// with a message.
+var (
+	// ErrNotFound is returned when no row matches, including when the row
+	// exists in another tenant. The two cases are deliberately
+	// indistinguishable.
+	ErrNotFound = errors.New("wallet: record not found")
+
+	// ErrInsufficientFunds is returned when a withdrawal would take a balance
+	// below zero. It is the answer of the statement that would have moved the
+	// money, not of a check that ran before it.
+	ErrInsufficientFunds = errors.New("wallet: the balance is not enough for this withdrawal")
+
+	// ErrCurrencyMismatch is returned when a transfer names two wallets that
+	// count different things. Moving between them needs a rate, and a rate
+	// comes from a RateProvider the application supplies.
+	ErrCurrencyMismatch = errors.New("wallet: the two wallets hold different currencies, which needs a rate")
+
+	// ErrSameWallet is returned when a transfer names one wallet twice. It
+	// would be a pair of entries that cancel, which is a statement that says
+	// something happened when nothing did.
+	ErrSameWallet = errors.New("wallet: a transfer needs two different wallets")
+
+	// ErrAlreadyReversed is returned when an operation has already been
+	// undone. The refusal comes from a unique index, so two concurrent
+	// reversals of one operation cannot both succeed.
+	ErrAlreadyReversed = errors.New("wallet: this operation has already been reversed")
+
+	// ErrNotReversible is returned when the operation named is itself a
+	// reversal. Undoing an undo is a new operation with its own reason, not a
+	// second reversal of the same movement.
+	ErrNotReversible = errors.New("wallet: a reversal cannot itself be reversed")
+
+	// ErrWalletExists is returned when the holder already has a wallet under
+	// this slug.
+	ErrWalletExists = errors.New("wallet: this holder already has a wallet with that slug")
+
+	// ErrOperationConflict is returned when an idempotency key names a request
+	// that asked for something else. Two different requests under one key
+	// cannot both be that key's answer, so neither is guessed at.
+	ErrOperationConflict = errors.New("wallet: that idempotency key belongs to a different request")
+)
 
 // Resource is the list of fields one Wallet is allowed to answer with.
 //
@@ -55,33 +319,54 @@ var ErrNotFound = errors.New("wallet: record not found")
 // adds later without ever opening the handler -- and TenantID is exactly such a
 // field: it names another customer's identifier and belongs in no response.
 type Resource struct {
-	id        string
-	name      string
-	createdAt time.Time
+	id            string
+	holderID      string
+	slug          string
+	name          string
+	currency      Currency
+	decimalPlaces int
+	balance       Amount
+	createdAt     time.Time
 }
 
-// NewResource snapshots one record for the response.
+// NewResource snapshots one wallet for the response.
 func NewResource(record Wallet) Resource {
-	return newResource(record.ID, record.Name, record.CreatedAt)
+	return Resource{
+		id:            record.ID,
+		holderID:      record.HolderID,
+		slug:          record.Slug,
+		name:          record.Name,
+		currency:      record.Currency,
+		decimalPlaces: record.DecimalPlaces,
+		balance:       record.Balance,
+		createdAt:     record.CreatedAt,
+	}
 }
 
 func resourceFromPointer(record *Wallet) Resource {
 	if record == nil {
 		return Resource{}
 	}
-	return newResource(record.ID, record.Name, record.CreatedAt)
-}
-
-func newResource(id, name string, createdAt time.Time) Resource {
-	return Resource{id: id, name: name, createdAt: createdAt}
+	return NewResource(*record)
 }
 
 // ToArray returns the fields that may leave, by name.
+//
+// The balance leaves twice: once as the integer the ledger is kept in, and once
+// as the decimal a person reads. A client that computes anything reads
+// balance_minor, one that prints reads balance, and neither has to know the
+// scale to do its half -- which is there anyway, for the one that does.
 func (r Resource) ToArray() map[string]any {
 	return map[string]any{
-		"id":         r.id,
-		"name":       r.name,
-		"created_at": r.createdAt.UTC().Format(time.RFC3339),
+		"id":             r.id,
+		"holder_id":      r.holderID,
+		"slug":           r.slug,
+		"name":           r.name,
+		"currency":       string(r.currency),
+		"decimal_places": r.decimalPlaces,
+		"balance_minor":  int64(r.balance),
+		"balance":        r.balance.Format(r.decimalPlaces),
+		"created_at":     r.createdAt.UTC().Format(time.RFC3339),
 	}
 }
 
@@ -90,7 +375,7 @@ func (r Resource) ToArray() map[string]any {
 // answering nil.
 func (r Resource) With() map[string]any { return nil }
 
-// Collection is a page of records as one response.
+// Collection is a page of wallets as one response.
 type Collection struct {
 	records []Resource
 	// cursor is what the next page asks for, empty when this page is the last
@@ -99,7 +384,7 @@ type Collection struct {
 	cursor string
 }
 
-// NewCollection wraps a page of records for the response. The cursor is what
+// NewCollection wraps a page of wallets for the response. The cursor is what
 // the next request passes back, and is empty when there is no next page.
 func NewCollection(records []Wallet, cursor string) Collection {
 	resources := make([]Resource, 0, len(records))
@@ -116,7 +401,7 @@ func collectionFromPointers(records []*Wallet, cursor string) Collection {
 	resources := make([]Resource, 0, len(records))
 	for _, record := range records {
 		if record != nil {
-			resources = append(resources, resourceFromPointer(record))
+			resources = append(resources, NewResource(*record))
 		}
 	}
 	return Collection{records: resources, cursor: cursor}
@@ -139,3 +424,148 @@ func (c Collection) With() map[string]any {
 	}
 	return map[string]any{"next_cursor": c.cursor}
 }
+
+// EntryResource is the list of fields one ledger entry may answer with.
+type EntryResource struct {
+	id            string
+	operationID   string
+	walletID      string
+	kind          EntryKind
+	amount        Amount
+	balanceAfter  Amount
+	decimalPlaces int
+	createdAt     time.Time
+}
+
+// NewEntryResource snapshots one entry for the response, read at the scale of
+// the wallet it moved.
+func NewEntryResource(record Entry, decimalPlaces int) EntryResource {
+	return EntryResource{
+		id:            record.ID,
+		operationID:   record.OperationID,
+		walletID:      record.WalletID,
+		kind:          record.Kind,
+		amount:        record.Amount,
+		balanceAfter:  record.BalanceAfter,
+		decimalPlaces: decimalPlaces,
+		createdAt:     record.CreatedAt,
+	}
+}
+
+// ToArray returns the fields that may leave, by name.
+func (r EntryResource) ToArray() map[string]any {
+	return map[string]any{
+		"id":                  r.id,
+		"operation_id":        r.operationID,
+		"wallet_id":           r.walletID,
+		"kind":                string(r.kind),
+		"amount_minor":        int64(r.amount),
+		"amount":              r.amount.Format(r.decimalPlaces),
+		"balance_after_minor": int64(r.balanceAfter),
+		"balance_after":       r.balanceAfter.Format(r.decimalPlaces),
+		"created_at":          r.createdAt.UTC().Format(time.RFC3339),
+	}
+}
+
+// With returns what goes beside the fields, and nothing does.
+func (r EntryResource) With() map[string]any { return nil }
+
+// EntryCollection is a page of ledger entries as one response.
+type EntryCollection struct {
+	records []EntryResource
+	cursor  string
+}
+
+// NewEntryCollection wraps a page of entries for the response, read at the
+// scale of the wallet they moved.
+func NewEntryCollection(records []*Entry, decimalPlaces int, cursor string) EntryCollection {
+	resources := make([]EntryResource, 0, len(records))
+	for _, record := range records {
+		if record != nil {
+			resources = append(resources, NewEntryResource(*record, decimalPlaces))
+		}
+	}
+	return EntryCollection{records: resources, cursor: cursor}
+}
+
+// ToArray returns the page under a single key.
+func (c EntryCollection) ToArray() map[string]any {
+	items := make([]map[string]any, 0, len(c.records))
+	for _, record := range c.records {
+		items = append(items, record.ToArray())
+	}
+	return map[string]any{"items": items}
+}
+
+// With returns the cursor of the next page, and nothing when there is none.
+func (c EntryCollection) With() map[string]any {
+	if c.cursor == "" {
+		return nil
+	}
+	return map[string]any{"next_cursor": c.cursor}
+}
+
+// Receipt is what a movement of money answers with.
+//
+// It carries the operation and every entry the operation wrote, so a transfer
+// answers about both wallets in one value and a caller never has to ask a
+// second question to learn what its own request did.
+type Receipt struct {
+	// Operation is the request that was recorded.
+	Operation Operation
+	// Entries are the movements it wrote, in the order they were applied.
+	Entries []Entry
+	// Replayed reports that this operation had already run under the same
+	// idempotency key, and that nothing moved on this call. The money in the
+	// receipt is the money the first call moved.
+	Replayed bool
+}
+
+// ReceiptResource is what a receipt may answer with.
+type ReceiptResource struct {
+	operationID    string
+	kind           OperationKind
+	idempotencyKey string
+	reverses       string
+	replayed       bool
+	entries        []EntryResource
+	createdAt      time.Time
+}
+
+// NewReceiptResource snapshots a receipt for the response. The scale is the one
+// the entries were written at.
+func NewReceiptResource(receipt Receipt, decimalPlaces int) ReceiptResource {
+	entries := make([]EntryResource, 0, len(receipt.Entries))
+	for _, entry := range receipt.Entries {
+		entries = append(entries, NewEntryResource(entry, decimalPlaces))
+	}
+	return ReceiptResource{
+		operationID:    receipt.Operation.ID,
+		kind:           receipt.Operation.Kind,
+		idempotencyKey: receipt.Operation.IdempotencyKey,
+		reverses:       receipt.Operation.Reverses(),
+		replayed:       receipt.Replayed,
+		entries:        entries,
+		createdAt:      receipt.Operation.CreatedAt,
+	}
+}
+
+// ToArray returns the fields that may leave, by name.
+func (r ReceiptResource) ToArray() map[string]any {
+	entries := make([]map[string]any, 0, len(r.entries))
+	for _, entry := range r.entries {
+		entries = append(entries, entry.ToArray())
+	}
+	return map[string]any{
+		"operation_id":    r.operationID,
+		"kind":            string(r.kind),
+		"idempotency_key": r.idempotencyKey,
+		"reverses":        r.reverses,
+		"replayed":        r.replayed,
+		"entries":         entries,
+		"created_at":      r.createdAt.UTC().Format(time.RFC3339),
+	}
+}
+
+// With returns what goes beside the fields, and nothing does.
+func (r ReceiptResource) With() map[string]any { return nil }

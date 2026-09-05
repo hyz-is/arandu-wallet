@@ -10,6 +10,11 @@ a release is corrected by another release and never by moving a tag.
 
 ## [Unreleased]
 
+Nothing has been released under this module path yet. The versions below are the
+history of the package template this repository was configured from, carried
+over with every other file it holds; they describe releases of the template and
+not of this package.
+
 ## [0.4.0] - 2026-09-05
 
 ### Added

@@ -13,10 +13,10 @@ import (
 	wallet "github.com/hyz-is/arandu-wallet"
 )
 
-// The four properties this package exists to keep are checked here, and they
-// are checked against the code rather than described in a document:
+// The properties this package exists to keep are checked here, and they are
+// checked against the code rather than described in a document:
 //
-//  1. the policy denies every action, and has no branch that allows one;
+//  1. an action nobody wrote a rule for is refused, to everybody;
 //  2. the service authorizes before constructing or executing a Model query;
 //  3. the tenant comes from the Grant;
 //  4. nothing reaches the database without passing through the first two.
@@ -26,25 +26,63 @@ import (
 // loudly -- which makes "the refusal happened before the Model" a fact the
 // suite proves rather than a comment. The structural twin in audit_test.go
 // keeps that order visible on every service method, including an allowed path.
+//
+// What the rules do allow is proved in tests/Feature, against a real database:
+// a policy is only as good as what it refuses when the money is really there.
 
 // everyAction is the whole set the policy answers about. A test that listed
-// four of five would pass while the fifth was open.
+// seven of eight would pass while the eighth was open.
 var everyAction = []security.Action{
 	wallet.WalletView,
 	wallet.WalletList,
 	wallet.WalletCreate,
-	wallet.WalletUpdate,
-	wallet.WalletDelete,
+	wallet.WalletHistory,
+	wallet.WalletDeposit,
+	wallet.WalletWithdraw,
+	wallet.WalletTransfer,
+	wallet.WalletReverse,
 }
 
-// administrator is the most privileged subject an application can produce. It
-// is the one to test the default with: a policy that refuses an administrator
-// refuses everyone.
-func administrator() security.Subject {
-	return security.Subject{ID: "user-1", Tenant: "acme", Roles: []string{"admin"}, Verified: true}
+// operator is the most privileged subject this package knows: somebody the
+// application trusts to move money that is not their own.
+func operator() security.Subject {
+	return security.Subject{ID: "staff-1", Tenant: "acme", Roles: []string{wallet.OperatorRole}, Verified: true}
 }
 
-func TestThePolicyDeniesEveryActionByDefault(t *testing.T) {
+// holder is the person whose money it is.
+func holder() security.Subject {
+	return security.Subject{ID: "user-1", Tenant: "acme", Verified: true}
+}
+
+// stranger is signed in, in the same tenant, and holds nothing here.
+func stranger() security.Subject {
+	return security.Subject{ID: "user-2", Tenant: "acme", Verified: true}
+}
+
+// theirWallet is a stored wallet belonging to holder().
+func theirWallet() wallet.Wallet {
+	return wallet.Wallet{ID: "wallet-1", TenantID: "acme", HolderID: "user-1", Slug: "main", Currency: "BRL", DecimalPlaces: 2}
+}
+
+func TestAnActionWithNoRuleIsDeniedToEverybody(t *testing.T) {
+	t.Parallel()
+
+	// Not one of the eight. The policy has to refuse it whoever is asking,
+	// including the operator: an action that is allowed the moment somebody
+	// names it is an action nobody decided about.
+	unwritten := security.Action("wallet.confiscate")
+
+	for _, subject := range []security.Subject{operator(), holder(), stranger()} {
+		for _, record := range []wallet.Wallet{{}, theirWallet()} {
+			_, err := security.Authorize(context.Background(), wallet.WalletPolicy{}, subject, unwritten, record)
+			if !errors.Is(err, security.ErrForbidden) {
+				t.Fatalf("%s was allowed %s: got %v, want ErrForbidden", subject.ID, unwritten, err)
+			}
+		}
+	}
+}
+
+func TestThePolicyDeniesAStrangerEveryActionOnSomebodyElsesWallet(t *testing.T) {
 	t.Parallel()
 
 	for _, action := range everyAction {
@@ -52,26 +90,46 @@ func TestThePolicyDeniesEveryActionByDefault(t *testing.T) {
 			t.Parallel()
 
 			_, err := security.Authorize(context.Background(), wallet.WalletPolicy{},
-				administrator(), action, wallet.Wallet{})
+				stranger(), action, theirWallet())
 			if !errors.Is(err, security.ErrForbidden) {
-				t.Fatalf("an unopened policy allowed %s: got %v, want ErrForbidden", action, err)
+				t.Fatalf("a stranger was allowed %s on another holder's wallet: got %v, want ErrForbidden", action, err)
 			}
 		})
+	}
+}
+
+func TestOnlyAnOperatorMayReverse(t *testing.T) {
+	t.Parallel()
+
+	// The holder may move their own money and may not undo a movement that has
+	// already settled. Letting the person who received a payment take it back
+	// is the hole this separation exists to close.
+	if _, err := security.Authorize(context.Background(), wallet.WalletPolicy{},
+		holder(), wallet.WalletReverse, theirWallet()); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("the holder was allowed to reverse: got %v, want ErrForbidden", err)
+	}
+	if _, err := security.Authorize(context.Background(), wallet.WalletPolicy{},
+		holder(), wallet.WalletReverse, wallet.Wallet{}); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("the holder passed the probe for a reversal: got %v, want ErrForbidden", err)
+	}
+	if _, err := security.Authorize(context.Background(), wallet.WalletPolicy{},
+		operator(), wallet.WalletReverse, theirWallet()); err != nil {
+		t.Fatalf("an operator was refused a reversal: %v", err)
 	}
 }
 
 func TestThePolicyDeniesARecordOfAnotherTenant(t *testing.T) {
 	t.Parallel()
 
-	other := wallet.Wallet{ID: "record-1", TenantID: "globex", Name: "theirs"}
+	theirs := wallet.Wallet{ID: "wallet-9", TenantID: "globex", HolderID: "staff-1"}
 
-	err := wallet.WalletPolicy{}.Can(context.Background(),
-		administrator(), wallet.WalletView, other)
+	// The subject is the operator, and is even the holder of the record by
+	// identifier: the tenant check runs before every rule below it, so neither
+	// helps.
+	err := wallet.WalletPolicy{}.Can(context.Background(), operator(), wallet.WalletView, theirs)
 	if err == nil {
 		t.Fatal("the policy allowed a record belonging to another tenant")
 	}
-	// The message is asserted because the tenant check is the one refusal that
-	// has to survive somebody opening the actions below it.
 	if !strings.Contains(err.Error(), "another tenant") {
 		t.Fatalf("the refusal did not name the tenant: %v", err)
 	}
@@ -81,10 +139,12 @@ func TestThePolicyDeniesAGuest(t *testing.T) {
 	t.Parallel()
 
 	for _, action := range everyAction {
-		_, err := security.Authorize(context.Background(), wallet.WalletPolicy{},
-			security.Guest("acme"), action, wallet.Wallet{})
-		if !errors.Is(err, security.ErrForbidden) {
-			t.Fatalf("a guest was allowed %s: got %v, want ErrForbidden", action, err)
+		for _, record := range []wallet.Wallet{{}, theirWallet()} {
+			_, err := security.Authorize(context.Background(), wallet.WalletPolicy{},
+				security.Guest("acme"), action, record)
+			if !errors.Is(err, security.ErrForbidden) {
+				t.Fatalf("a guest was allowed %s: got %v, want ErrForbidden", action, err)
+			}
 		}
 	}
 }
@@ -102,6 +162,24 @@ func TestAuthorizeRefusesASubjectThatIsNobody(t *testing.T) {
 	}
 }
 
+func TestTheProbeIsNotTheDecision(t *testing.T) {
+	t.Parallel()
+
+	// The probe -- a wallet with neither an identifier nor a holder -- asks
+	// whether this kind of thing is allowed at all, and the holder passes it.
+	// It has to, or no read could ever load the row the real decision is made
+	// about. What must not pass is the same subject against somebody else's
+	// row.
+	if _, err := security.Authorize(context.Background(), wallet.WalletPolicy{},
+		stranger(), wallet.WalletWithdraw, wallet.Wallet{}); err != nil {
+		t.Fatalf("the probe refused a signed-in subject, so no wallet could ever be loaded to decide about: %v", err)
+	}
+	if _, err := security.Authorize(context.Background(), wallet.WalletPolicy{},
+		stranger(), wallet.WalletWithdraw, theirWallet()); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("the decision on the loaded row allowed a stranger to withdraw: got %v, want ErrForbidden", err)
+	}
+}
+
 // nilHandle is a handle over no database.
 //
 // Any statement issued through it panics, which is what makes these tests
@@ -115,35 +193,100 @@ func TestTheServiceRefusesBeforeReachingTheModel(t *testing.T) {
 	// A nil handle makes even construction of Wallets panic at
 	// GetQueryGrammar. This catches moving the configured Model entry point --
 	// not only its terminal -- ahead of authorization.
-	service := wallet.NewWalletService(nil)
+	//
+	// The requests are valid ones, so that what is measured is the policy and
+	// not the validator: an invalid request would be refused before anything
+	// was authorized and would prove nothing about the order.
+	service := wallet.NewWalletService(nil, nil)
 	ctx := context.Background()
+	actor := security.Guest("acme")
 
-	if _, err := service.Find(ctx, administrator(), "record-1"); !errors.Is(err, security.ErrForbidden) {
-		t.Fatalf("Find reached the Model before the policy refusal: %v", err)
+	refusals := map[string]func() error{
+		"Find": func() error {
+			_, err := service.Find(ctx, actor, "wallet-1")
+			return err
+		},
+		"List": func() error {
+			_, err := service.List(ctx, actor, wallet.ListRequest{})
+			return err
+		},
+		"Open": func() error {
+			_, err := service.Open(ctx, actor, wallet.OpenRequest{
+				HolderID: "user-1", Slug: "main", Name: "Main", Currency: "BRL", DecimalPlaces: 2})
+			return err
+		},
+		"History": func() error {
+			_, err := service.History(ctx, actor, wallet.HistoryRequest{WalletID: "wallet-1"})
+			return err
+		},
+		"Deposit": func() error {
+			_, err := service.Deposit(ctx, actor, wallet.DepositRequest{
+				IdempotencyKey: "key-1", WalletID: "wallet-1", Amount: "1.00"})
+			return err
+		},
+		"Withdraw": func() error {
+			_, err := service.Withdraw(ctx, actor, wallet.WithdrawRequest{
+				IdempotencyKey: "key-1", WalletID: "wallet-1", Amount: "1.00"})
+			return err
+		},
+		"Transfer": func() error {
+			_, err := service.Transfer(ctx, actor, wallet.TransferRequest{
+				IdempotencyKey: "key-1", FromWalletID: "wallet-1", ToWalletID: "wallet-2", Amount: "1.00"})
+			return err
+		},
+		"Reverse": func() error {
+			_, err := service.Reverse(ctx, actor, wallet.ReverseRequest{
+				IdempotencyKey: "key-1", OperationID: "operation-1", Reason: "asked"})
+			return err
+		},
 	}
-	if _, err := service.List(ctx, administrator(), data.Query{}); !errors.Is(err, security.ErrForbidden) {
-		t.Fatalf("List reached the Model before the policy refusal: %v", err)
-	}
-	if _, err := service.Create(ctx, administrator(), wallet.CreateRequest{Name: "one"}); !errors.Is(err, security.ErrForbidden) {
-		t.Fatalf("Create reached the Model before the policy refusal: %v", err)
+
+	for name, call := range refusals {
+		if err := call(); !errors.Is(err, security.ErrForbidden) {
+			t.Errorf("%s reached the Model before the policy refusal: %v", name, err)
+		}
 	}
 }
 
-func TestWalletsReturnsAWiredTenantScopedModel(t *testing.T) {
+func TestEveryModelIsWiredAndTenantScoped(t *testing.T) {
 	t.Parallel()
 
-	rows := wallet.Wallets(nilHandle())
-	if rows.GetTable() != "wallets" {
-		t.Fatalf("Wallets table = %q, want wallets", rows.GetTable())
-	}
-	if rows.KeyType != "string" || rows.Incrementing {
-		t.Fatalf("Wallets key is type %q, incrementing %t; want application-generated text", rows.KeyType, rows.Incrementing)
-	}
-	if rows.TenantColumn != "tenant_id" {
-		t.Fatalf("Wallets tenant column = %q, want tenant_id", rows.TenantColumn)
-	}
-	if model.ModelOf(rows.Entity) != rows {
-		t.Fatal("Wallets returned an entity whose embedded Model is not wired to it")
+	handle := nilHandle()
+	for table, rows := range map[string]struct {
+		key      string
+		keyType  string
+		incr     bool
+		tenant   string
+		entityOK bool
+	}{
+		"wallets": {
+			key: wallet.Wallets(handle).GetTable(), keyType: wallet.Wallets(handle).KeyType,
+			incr: wallet.Wallets(handle).Incrementing, tenant: wallet.Wallets(handle).TenantColumn,
+			entityOK: model.ModelOf(wallet.Wallets(handle).Entity) != nil,
+		},
+		"wallet_operations": {
+			key: wallet.Operations(handle).GetTable(), keyType: wallet.Operations(handle).KeyType,
+			incr: wallet.Operations(handle).Incrementing, tenant: wallet.Operations(handle).TenantColumn,
+			entityOK: model.ModelOf(wallet.Operations(handle).Entity) != nil,
+		},
+		"wallet_entries": {
+			key: wallet.Entries(handle).GetTable(), keyType: wallet.Entries(handle).KeyType,
+			incr: wallet.Entries(handle).Incrementing, tenant: wallet.Entries(handle).TenantColumn,
+			entityOK: model.ModelOf(wallet.Entries(handle).Entity) != nil,
+		},
+	} {
+		if rows.key != table {
+			t.Errorf("a model answers for table %q, want %q", rows.key, table)
+		}
+		if rows.keyType != "string" || rows.incr {
+			t.Errorf("%s has key type %q, incrementing %t; want application-generated text", table, rows.keyType, rows.incr)
+		}
+		if rows.tenant != "tenant_id" {
+			t.Errorf("%s has tenant column %q, want tenant_id", table, rows.tenant)
+		}
+		if !rows.entityOK {
+			t.Errorf("%s returned an entity whose embedded Model is not wired to it", table)
+		}
 	}
 }
 
@@ -152,7 +295,7 @@ func TestASystemGrantWithoutATenantReachesNothing(t *testing.T) {
 
 	// A system grant with no tenant names no customer. The Model refuses it
 	// while preparing the query, before the nil handle can issue a statement.
-	_, err := wallet.Wallets(nilHandle()).NewQuery().WhereKey("record-1").First(
+	_, err := wallet.Wallets(nilHandle()).NewQuery().WhereKey("wallet-1").First(
 		context.Background(), security.SystemGrant(wallet.WalletView, ""))
 	if !errors.Is(err, model.ErrNoTenant) {
 		t.Fatalf("a system grant with no tenant returned %v, want ErrNoTenant", err)
@@ -175,17 +318,39 @@ func TestTheTenantComesFromTheGrant(t *testing.T) {
 	}
 }
 
-func TestTheRequestValidatesItsInput(t *testing.T) {
+func TestEveryRequestValidatesItsInput(t *testing.T) {
 	t.Parallel()
 
-	if errs := (wallet.CreateRequest{}).Validate(); !errs.Any() {
-		t.Fatal("an empty request validated")
+	if errs := (wallet.OpenRequest{}).Validate(); !errs.Any() {
+		t.Error("an empty OpenRequest validated")
 	}
-	if errs := (wallet.CreateRequest{Name: strings.Repeat("a", 121)}).Validate(); !errs.Any() {
-		t.Fatal("a name past the maximum validated")
+	if errs := (wallet.OpenRequest{HolderID: "user-1", Slug: "main", Name: "Main", Currency: "BRL", DecimalPlaces: 10}).Validate(); !errs.Any() {
+		t.Error("a scale past the maximum validated")
 	}
-	if errs := (wallet.CreateRequest{Name: "one"}).Validate(); errs.Any() {
-		t.Fatalf("a valid request was rejected: %v", errs)
+	if errs := (wallet.OpenRequest{HolderID: "user-1", Slug: "main", Name: "Main", Currency: "BRL", DecimalPlaces: 2}).Validate(); errs.Any() {
+		t.Errorf("a valid OpenRequest was rejected: %v", errs)
+	}
+
+	// Every movement of money needs a key from the caller. Without one there is
+	// no way to tell a retry from a second payment, so the request is refused
+	// rather than treated as a first attempt.
+	if errs := (wallet.DepositRequest{WalletID: "wallet-1", Amount: "1.00"}).Validate(); !errs.Any() {
+		t.Error("a deposit with no idempotency key validated")
+	}
+	if errs := (wallet.WithdrawRequest{WalletID: "wallet-1", Amount: "1.00"}).Validate(); !errs.Any() {
+		t.Error("a withdrawal with no idempotency key validated")
+	}
+	if errs := (wallet.TransferRequest{FromWalletID: "wallet-1", ToWalletID: "wallet-2", Amount: "1.00"}).Validate(); !errs.Any() {
+		t.Error("a transfer with no idempotency key validated")
+	}
+	if errs := (wallet.TransferRequest{IdempotencyKey: "key-1", FromWalletID: "wallet-1", Amount: "1.00"}).Validate(); !errs.Any() {
+		t.Error("a transfer with no destination validated")
+	}
+	if errs := (wallet.ReverseRequest{IdempotencyKey: "key-1", OperationID: "operation-1"}).Validate(); !errs.Any() {
+		t.Error("a reversal with no reason validated")
+	}
+	if errs := (wallet.ReverseRequest{IdempotencyKey: "key-1", OperationID: "operation-1", Reason: "chargeback"}).Validate(); errs.Any() {
+		t.Errorf("a valid ReverseRequest was rejected: %v", errs)
 	}
 }
 
