@@ -16,6 +16,63 @@ they describe releases of the template and not of this package.
 
 ### Added
 
+- `Cart`, `CartItem`, `Product` and `LimitedProduct`: a basket of lines the
+  application prices, paid for in one operation and one transaction. What is for
+  sale is the application's, through an interface this package declares and never
+  implements -- a key for the record, a wallet for the money and a price for this
+  buyer, with a stock a catalogue answers separately and is asked about before a
+  single balance is touched.
+- `(*WalletService).Pay`, `PayRequest`, `OperationPurchase` and `WalletPay`. A
+  line bought for somebody else is a gift: the money still leaves the payer and
+  arrives at the seller, and the record says the beneficiary bought it.
+- `(*WalletService).Refund`, `RefundRequest`, `OperationRefund` and
+  `WalletRefund`. A basket is undone line by line and never whole, so a basket
+  half of which was already given back cannot be given back twice; reversing a
+  purchase answers `ErrPurchaseOperation`.
+- `Purchase`, `PurchaseKind`, `PurchaseQuery`, `Purchases(db)`,
+  `PurchaseResource` and `PurchaseCollection`, and the `wallet_purchases` table:
+  the record of who bought what from whom and the receipt of one line at once.
+  Every number the arithmetic used is a column, which is what lets a refund move
+  back exactly what moved by reading one row. Appended to and never rewritten.
+- `(*WalletService).Bought` and `WalletPurchases`: one statement answers a whole
+  page of "has this already been bought", refunds excluded, bounded by
+  `MaxPurchaseScan`. `(*WalletService).PurchasesOf` is the page of one wallet's
+  own lines.
+- `Meta`, what the application attaches to a movement, on `Operation` and on
+  `Entry` and on every request. Names to text, because a JSON number read back in
+  Go is a float and a float is what this package keeps away from money.
+- `Leg` and `TransferRequest.Withdrawal`/`TransferRequest.Deposit`: the two sides
+  of a payment carry their own metadata and their own settlement, so money held
+  until delivery and delivery on credit are both expressible.
+- `Listener`, `Event`, `EventKind` and `Config.Listeners`: whoever asked is told
+  what the money did, after the write has committed and never inside it. A
+  movement the database threw away is never announced.
+- `Commands`, `Deps` and `CommandPrefix`: `wallet:wallets`, `wallet:statement`,
+  `wallet:purchases` and `wallet:audit`. Every one of them reads, and the last
+  reports what a ledger adds up to without ever repairing it.
+- `(*WalletService).Reconcile` and `Reconciliation`: what a ledger sums to beside
+  what the balance column says, so an application can ask from a health check
+  what an operator asks from a terminal.
+- A catalogue of sentences in `en` and `pt-BR`, embedded and never published,
+  with `Labels`, `Lines`, `Locales`, `TranslationGroup`, `FallbackLocale` and
+  `Config.Translator`.
+- Three screens -- `ViewIndex`, `ViewStatement` and `ViewOperations` -- with
+  `IndexPageData`, `StatementPageData`, `OperationsPageData`, `WalletRow`,
+  `EntryRow`, `ConversionRow`, `ChargeRow`, `PurchaseRow` and `FormState`. Each
+  route answers JSON to a client that asks for it and a page to a browser.
+- `Amount.Times`, `Receipt.Purchases`, `MaxCartLines`, `MaxItemQuantity`,
+  `MaxMetaBytes`, `MaxMetaKeys`, `MaxPurchaseScan`, `MaxPurchaseQuestions`,
+  `ErrCartEmpty`, `ErrCartTooLarge`, `ErrItemQuantity`, `ErrProductWallet`,
+  `ErrProductStock`, `ErrPaysItself`, `ErrAlreadyRefunded`, `ErrNotRefundable`,
+  `ErrPurchaseOperation`, `ErrMetaTooLarge`, `ErrMetaTooManyKeys` and
+  `ErrMetaUnreadable`.
+- `(*Module).Service`, the use cases the module holds, for the handler an
+  application writes beside the routes. Paying for a basket has no route here,
+  because a basket names products and a product is the application's type.
+- `GET <prefix>/{id}/purchases` and `POST <prefix>/purchases/refunds`.
+- `20260905_0008_add_wallet_metadata` and
+  `20260905_0009_create_wallet_purchases`. Running `aru migrate` is required
+  before this version serves.
 - `FeeSchedule`, what a wallet charges to be paid: an exact fraction of the
   payment with a floor, a ceiling, who pays it and the wallet it is credited to.
   `FeeSchedule.Fee` applies it under the exchange's arithmetic -- integers
@@ -218,6 +275,16 @@ they describe releases of the template and not of this package.
   Service after authorization.
 
 ### Changed
+
+- `Config.CSRF` is required: every screen this module draws moves money, and a
+  page with no token is a page whose forms the application refuses.
+- `TransferRequest.Pending` is replaced by `TransferRequest.Withdrawal` and
+  `TransferRequest.Deposit`, each a `Leg`. The transfer route reads
+  `withdrawal_pending` and `deposit_pending` in place of `pending`.
+- `NewWalletService` takes listeners as a trailing variadic parameter, so every
+  existing call compiles unchanged.
+- A whole operation's ledger rows are appended in one statement rather than one
+  each. Nothing about what is written changed.
 
 - The minimum Framework version is now `v0.41.0`, with Hesape `v0.19.1`.
 - `NewWalletService` now accepts `*data.DB` instead of

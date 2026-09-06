@@ -29,6 +29,7 @@ The construction, in `Build`, after the session store exists and before
 ```go
 	walletModule, err := wallet.New(wallet.Config{
 		Tenant: cfg.Auth.Tenant,
+		CSRF:   cfg.CSRF,
 	}, db, sessions)
 	if err != nil {
 		return App{}, err
@@ -47,9 +48,10 @@ Then, once, before the application serves:
 aru migrate
 ```
 
-This package owns five tables -- the wallets, the operations, the ledger, the
-recorded rates and the recorded charges -- which is why the migration step is
-not optional and why `arandu.mod.toml` says `migrations = true`.
+This package owns six tables -- the wallets, the operations, the ledger, the
+recorded rates, the recorded charges and the purchases -- which is why the
+migration step is not optional and why `arandu.mod.toml` says
+`migrations = true`.
 
 ## Quote a rate, if your wallets are not all counted the same way
 
@@ -134,6 +136,9 @@ boot rather than answering the first request that reaches one of them with a
 | `Rates` | no | quotes the rate between two currencies. Nil refuses every transfer that would need one. |
 | `Fees` | no | answers with what a wallet charges to be paid. Nil charges nothing. |
 | `Discounts` | no | answers with what one payer is charged less. Nil discounts nothing. |
+| `CSRF` | yes | issues the token every form on the screens carries. Every screen here moves money. |
+| `Translator` | no | your own catalogue, asked before the one this package ships. |
+| `Listeners` | no | told what the money did, after the write has committed. |
 
 `New` returns an error rather than starting half-wired, so a setting that
 cannot work fails where it is written instead of on the first request that
@@ -151,11 +156,88 @@ needed it.
 | `POST` | `/wallet/{id}/deposits` | `wallet.deposit` |
 | `POST` | `/wallet/{id}/withdrawals` | `wallet.withdraw` |
 | `POST` | `/wallet/{id}/transfers` | `wallet.transfer` |
+| `GET` | `/wallet/{id}/purchases` | `wallet.purchases` |
 | `POST` | `/wallet/operations/{operation}/reversals` | `wallet.reverse` |
 | `POST` | `/wallet/operations/{operation}/confirmations` | `wallet.confirm` |
+| `POST` | `/wallet/purchases/refunds` | `wallet.refund` |
 
 Every one of them is refused until the policy is opened. That is the state the
 package ships in, and it is deliberate.
+
+Each `GET` answers JSON to a client that asks for it and a page to a browser, so
+there is one address per thing rather than one for people and one for programs.
+
+Paying for a basket has no route. A basket names products, and a product is your
+type: what is for sale, what it costs this customer and how many are left are
+three questions this package has never been able to answer. `Pay` is a Go call
+you make from the handler that owns your catalogue.
+
+## Sell something
+
+What is for sale is yours, through an interface this package declares and never
+implements:
+
+```go
+type Book struct{ ... }
+
+func (b *Book) ProductKey() string       { return b.sku }
+func (b *Book) ReceiverWalletID() string { return b.shopWalletID }
+func (b *Book) Price(ctx context.Context, g security.Grant, buyer wallet.Wallet) (wallet.Amount, error) {
+	return b.price, nil
+}
+```
+
+A catalogue that keeps a stock answers `LimitedProduct.CanBuy` as well, and it is
+asked before a single balance is touched.
+
+```go
+receipt, err := svc.Pay(ctx, actor, wallet.PayRequest{
+	IdempotencyKey: key,
+	PayerWalletID:  buyer.ID,
+	Cart: wallet.NewCart(
+		wallet.CartItem{Product: book, Quantity: 2},
+		wallet.CartItem{Product: pen, BeneficiaryWalletID: friend.ID},
+	),
+})
+```
+
+Every line is one movement out of the payer, one into the wallet that sells it
+and one into whoever collects the fee, all in one operation and one transaction.
+A line bought for somebody else is a gift: the money still leaves the payer, and
+the record says the beneficiary bought it -- which is what `Bought` reads
+afterwards, one statement for a whole page of questions.
+
+A basket is undone line by line, with `Refund`, so a basket half of which was
+already given back cannot be given back whole.
+
+## Be told what the money did
+
+```go
+	Listeners: []wallet.Listener{func(ctx context.Context, e wallet.Event) {
+		log.Printf("%s %s on %s", e.Kind, e.Amount.Format(e.DecimalPlaces), e.WalletID)
+	}},
+```
+
+A listener is called after the write has committed, never inside it. A basket
+that runs out of money on its last line announces nothing at all, though every
+earlier line really moved a balance for as long as the transaction lasted.
+
+There is no dispatcher and no queue here: an application that wants the work off
+the request hands it to whatever it already uses.
+
+## Give an operator something to run
+
+```go
+	commands, err := wallet.Commands(wallet.Deps{
+		Service:  walletModule.Service(),
+		Operator: func(tenant string) security.Subject { return app.Operator(tenant) },
+	})
+```
+
+`wallet:wallets`, `wallet:statement`, `wallet:purchases` and `wallet:audit`.
+Every one of them reads, and the last one reports what a ledger adds up to
+without ever repairing it. Who a command runs as is yours to answer: a package
+that minted a subject for itself would be a package that authorizes itself.
 
 ## Open the policy
 
@@ -200,10 +282,22 @@ config.go      what the application passes in
 money.go       the amount type, its scale and its arithmetic
 rate.go        the rate, its arithmetic, and the seam that quotes it
 fee.go         the fee, its arithmetic, and the seams that price a payment
+meta.go        what the application attaches to a movement
+cart.go        the basket, and the seams that say what is for sale
 model.go       the entities, and what they may answer with
+purchase.go    the record of what was bought, and its own read model
 policy.go      who may do what
 service.go     the rules and authorized Model access
-views.go       the files the application takes ownership of
+event.go       what a listener is told, once the write has committed
+commands.go    what an operator runs from a terminal
+translation.go the sentences the screens say
+views.go       the screens, and the files the application takes ownership of
+```
+
+See it run, against SQLite in a temporary directory, with nothing to configure:
+
+```bash
+go run -tags example ./example
 ```
 
 ## What is already correct, and has to stay that way

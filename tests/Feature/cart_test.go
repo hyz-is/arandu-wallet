@@ -212,10 +212,14 @@ func TestAProductThatRanOutIsRefusedBeforeAnyMoneyMoves(t *testing.T) {
 		),
 	})
 	if !errors.Is(err, wallet.ErrProductStock) {
-		t.Fatalf("a basket asking for more than there is answered %v, want ErrProductStock", err)
+		// Reported and not fatal, so that the balances below are read as well:
+		// a refusal that never happened and money that moved are two halves of
+		// the same defect, and seeing both is what says the check runs before
+		// the money and not beside it.
+		t.Errorf("a basket asking for more than there is answered %v, want ErrProductStock", err)
 	}
 	if scarce.asked == 0 {
-		t.Fatal("the stock was never consulted")
+		t.Error("the stock was never consulted")
 	}
 
 	// Nothing moved, on either side, and the first line of the basket did not
@@ -433,7 +437,11 @@ func TestOneBadLineLeavesNoHalfOfABasketWritten(t *testing.T) {
 		),
 	})
 	if !errors.Is(err, wallet.ErrInsufficientFunds) {
-		t.Fatalf("a basket past the balance answered %v, want ErrInsufficientFunds", err)
+		// Reported and not fatal, so that everything below is read as well. A
+		// basket that answered success and a basket that half happened are the
+		// same defect seen from two sides, and the second is the one that costs
+		// somebody money.
+		t.Errorf("a basket past the balance answered %v, want ErrInsufficientFunds", err)
 	}
 
 	if got := balanceOf(t, service, buyer.ID); got != 3000 {

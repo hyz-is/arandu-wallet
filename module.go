@@ -135,6 +135,20 @@ func New(cfg Config, db *data.DB, sessions *security.SessionStore) (*Module, err
 	}, nil
 }
 
+// Service is the use cases this module holds, for the code an application
+// writes beside the routes.
+//
+// One of it, holding one database handle, so a balance moved from a command, a
+// checkout of the application's own and a request are the same rows decided by
+// the same policy. It is exported because paying for a basket has no route
+// here: a basket names products, a product is the application's type, and the
+// handler that owns the catalogue is the one that calls Pay.
+//
+// It is the service and never the handle. What comes back still authorizes
+// before it reaches a table, which is the difference between handing out a use
+// case and handing out the database.
+func (m *Module) Service() *WalletService { return m.svc }
+
 // Name is the module identifier: a lowercase slug, stable, no spaces.
 //
 // It is what `aru route:list` groups by and what the route names are prefixed with,

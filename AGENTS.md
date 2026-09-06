@@ -17,11 +17,19 @@ Nothing is finished until all four exit zero.
 
 ```sh
 export GOWORK=off
-gofmt -l $(find . -name '*.go' -not -path '*/testdata/*' -not -name '*.kyse.go')
+gofmt -l $(find . -name '*.go' -not -path '*/testdata/*' -not -name '*.kyse.go' -not -path './.views-compile-check/*')
 go build ./...
 go vet ./...
 go test -race ./...
 ```
+
+The third filter is the staging directory `tests/Unit/published_views_compile_test.go`
+writes and removes. It exists because the go command skips any directory named
+`vendor` at any depth, and that is where the view compiler writes -- so
+`go build ./...` never sees a generated view, and a type error in one would
+surface when somebody opened the page and nowhere earlier. The test copies the
+tree to a path with no such segment and compiles it there. It skips when nothing
+has been built, so `aru view:build` is what makes that gate say anything.
 
 `GOWORK=off` is not borrowed from somewhere else, and here it is not a
 preference either. This checkout may sit beside a Go workspace that lists the
@@ -62,18 +70,24 @@ this one must prove about itself it proves in its own suite or nowhere.
 
 | | measured with |
 | --- | --- |
-| 9 Go files, one per role, all in one package at the root | `grep -l '^package wallet' *.go` |
-| 18 test files, 161 passing tests and subtests, and 8 more when `ARANDU_TEST_POSTGRES_DSN` names a server | `find tests -name '*_test.go'` · `go test -count=1 ./... -v \| grep -cE '^( *)--- PASS'` |
-| 10 routes | `grep -c 'm.register(r,' module.go` |
-| 11 actions the policy answers about | `grep -cE '^\t[A-Za-z]+ security.Action = ' policy.go` |
-| 4 direct dependencies, all under `arandu-io` | `go list -m -f '{{if and (not .Indirect) (not .Main)}}{{.Path}} {{.Version}}{{end}}' all` |
+| 15 Go files, one per role, all in one package at the root | `grep -l '^package wallet' *.go` |
+| 25 test files, 197 passing tests and subtests, and 8 more when `ARANDU_TEST_POSTGRES_DSN` names a server | `find tests -name '*_test.go'` · `go test -count=1 ./... -v \| grep -cE '^( *)--- PASS'` |
+| 12 routes | `grep -c 'm.register(r,' module.go` |
+| 14 actions the policy answers about | `grep -cE '^\t[A-Za-z]+ security.Action = ' policy.go` |
+| 5 direct dependencies, all under `arandu-io` | `go list -m -f '{{if and (not .Indirect) (not .Main)}}{{.Path}} {{.Version}}{{end}}' all` |
 
-Two of those four are database connectors, imported by the test suite and by
+Two of those five are database connectors, imported by the test suite and by
 nothing the compiler links into an application: SQLite for the suite that runs
 anywhere, PostgreSQL for the one that needs transactions which really
 interleave. A test-only import of a module is pruned out of an installer's build
 list, so what a project that installs this package compiles is still the
 framework and Hesape.
+
+The fifth is `kyse`, and the compiler here never reads it either: the component
+library is imported by the `.kyse.go` sources, which a build tag keeps out of
+every build this repository runs. It is in `go.mod` because the suite compiles
+the generated views, and the generated views are what an application links after
+it publishes them.
 
 The layout is by role rather than by layer, so the package reads top to bottom:
 
@@ -83,15 +97,21 @@ config.go      what the application passes in
 money.go       the amount type, its scale and its arithmetic
 rate.go        the rate, its arithmetic, and the seam that quotes it
 fee.go         the fee, its arithmetic, and the seams that price a payment
+meta.go        what the application attaches to a movement
+cart.go        the basket, and the seams that say what is for sale
 model.go       the entities, and what they may answer with
+purchase.go    the record of what was bought, and its own read model
 policy.go      who may do what
 service.go     the rules and authorized Model access
-views.go       the files the application takes ownership of
+event.go       what a listener is told, once the write has committed
+commands.go    what an operator runs from a terminal
+translation.go the sentences the screens say
+views.go       the screens, and the files the application takes ownership of
 ```
 
-`Wallets(db)`, `Operations(db)`, `Entries(db)`, `Conversions(db)` and
-`Charges(db)` configure the five tables, each with a string primary key and the
-default
+`Wallets(db)`, `Operations(db)`, `Entries(db)`, `Conversions(db)`, `Charges(db)`
+and `Purchases(db)` configure the six tables, each with a string primary key and
+the default
 `tenant_id` scope. Its terminals return `*Wallet`/`[]*Wallet`; keep those
 pointers intact because copying an embedded Model leaves its `Entity` pointer
 aimed at the original allocation. `Resource` and `Collection` are the deliberate

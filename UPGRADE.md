@@ -2,6 +2,68 @@
 
 ## Unreleased
 
+### Give the module a token issuer
+
+`Config.CSRF` is required. Every screen this module draws moves money, so a page
+rendered without a token is a page whose forms the application refuses -- and
+finding that out from a button that does nothing is worse than finding it out at
+boot.
+
+```go
+// Before.
+module, err := wallet.New(wallet.Config{Tenant: "acme"}, db, sessions)
+
+// After.
+module, err := wallet.New(wallet.Config{
+	Tenant: "acme",
+	CSRF:   security.NewCSRF(appKey, time.Hour),
+}, db, sessions)
+```
+
+### Say which side of a transfer waits
+
+`TransferRequest.Pending` is gone, and the two sides answer separately. A payment
+where what leaves counts now and what arrives waits is money held until somebody
+says it may be delivered; the other way round is a delivery on credit. Neither is
+expressible by one flag over the pair, and a shorthand beside the two would be a
+second way to say what one of them already says.
+
+```go
+// Before.
+in := wallet.TransferRequest{..., Pending: true}
+
+// After.
+in := wallet.TransferRequest{...,
+	Withdrawal: wallet.Leg{Pending: true},
+	Deposit:    wallet.Leg{Pending: true},
+}
+```
+
+Over HTTP the transfer route reads `withdrawal_pending` and `deposit_pending`
+instead of `pending`. The deposit and withdrawal routes are unchanged: a movement
+with one side has nothing to say separately about it.
+
+### Nothing else has to change for the listeners
+
+`NewWalletService` gained a variadic parameter, so every existing call compiles
+as it stands:
+
+```go
+// Before, and still correct.
+service := wallet.NewWalletService(db, rates, fees, discounts)
+
+// After, for an application that wants to be told what the money did.
+service := wallet.NewWalletService(db, rates, fees, discounts, audit.Record)
+```
+
+### Run the two new migrations
+
+`20260905_0008_add_wallet_metadata` and `20260905_0009_create_wallet_purchases`
+have to be applied with `aru migrate` before this version serves. The first adds
+a `meta` column to the operations table and to the ledger, defaulting to the
+empty string, so every row written before it keeps exactly what it meant. The
+second creates the table a purchase is recorded in, which nothing older wrote.
+
 ### Hand the service its two new seams
 
 `NewWalletService` takes what prices a payment beside what quotes a rate. An
