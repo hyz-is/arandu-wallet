@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"math"
@@ -13,7 +14,9 @@ import (
 	"github.com/arandu-io/framework/data"
 	"github.com/arandu-io/framework/security"
 	"github.com/arandu-io/framework/validation"
+	"github.com/arandu-io/hesape/database"
 	"github.com/arandu-io/hesape/database/model"
+	"github.com/arandu-io/hesape/database/query/grammars"
 )
 
 // Pagination bounds for the listings. A request that asks for everything gets
@@ -1847,11 +1850,11 @@ type movement struct {
 // The amount goes into the SQL rather than into a placeholder because it stands
 // beside a column on the right of a comparison. It is an int64 this package
 // parsed, never text a caller wrote.
-func withdrawalFloor(amount Amount, force bool) string {
+func withdrawalFloor(amount Amount, force bool, q quoter) string {
 	if force {
 		return strconv.FormatInt(math.MinInt64+int64(amount), 10)
 	}
-	return strconv.FormatInt(int64(amount), 10) + ` - "credit_limit"`
+	return strconv.FormatInt(int64(amount), 10) + " - " + q("credit_limit")
 }
 
 // maxCommitAttempts is how many times one movement is sent again after the
@@ -1931,8 +1934,8 @@ func pause(ctx context.Context, wait time.Duration) error {
 // supported reports whether this package has been run against the engine a
 // handle speaks.
 //
-// PostgreSQL and SQLite, and the list is what the suite covers rather than what
-// the SQL would compile on. Every statement here is written through the Model
+// PostgreSQL, MySQL and SQLite, and the list is what the suite covers rather
+// than what the SQL would compile on. Every statement here is written through the Model
 // and would run on more engines than these two. What does not travel with it is
 // the reading of the guard: what an update sees of a row another transaction is
 // changing is the engine's answer, nothing that compiles checks it, and an
@@ -1940,41 +1943,10 @@ func pause(ctx context.Context, wait time.Duration) error {
 // nobody here has read.
 func supported(dialect data.Dialect) error {
 	switch dialect {
-	case data.DialectPostgres, data.DialectSQLite:
+	case data.DialectPostgres, data.DialectSQLite, data.DialectMySQL:
 		return nil
 	}
 	return fmt.Errorf("%w: got %q", ErrUnsupportedDialect, dialect)
-}
-
-// isolate names the isolation level of a transaction this package opened.
-//
-// The guard on a balance is a predicate on the update, and what that predicate
-// is evaluated against, while another transaction is changing the same row, is
-// the isolation level's answer. Unstated it is the engine's default -- which is
-// not the same on every engine and is a setting an operator can change for a
-// whole cluster -- so the level the guard was written against is named here
-// instead of assumed.
-//
-// Read committed, and not something stricter. At this level the update
-// re-evaluates its predicate against the row as the other transaction left it,
-// which is exactly what "the balance has to still be enough at the moment of
-// the write" means. A stricter level does not make the guard more correct: it
-// makes the second transaction abort where it would have re-decided, which is a
-// conflict to send again rather than an answer.
-//
-// It runs as the first statement of the transaction, because that is the only
-// place an engine takes it, and it is skipped where this package joined a
-// transaction the application had already opened: the level of that one is the
-// application's, and changing it from inside would be this package deciding
-// about statements it cannot see.
-func (s *WalletService) isolate(ctx context.Context) error {
-	if s.db.Dialect() != data.DialectPostgres {
-		return nil
-	}
-	if _, err := s.db.ExecContext(ctx, "SET TRANSACTION ISOLATION LEVEL READ COMMITTED"); err != nil {
-		return fmt.Errorf("wallet: naming the isolation level of the transaction: %w", err)
-	}
-	return nil
 }
 
 // commit records the operation and applies its movements, all or nothing, and
@@ -2037,11 +2009,6 @@ func (s *WalletService) commit(ctx context.Context, g security.Grant, op operati
 
 // attempt records the operation and applies its movements once.
 func (s *WalletService) attempt(ctx context.Context, g security.Grant, op operation, movements []movement) (Receipt, error) {
-	// Whether this call is the one opening the transaction, asked before it is
-	// opened. An application that already had one is joined rather than
-	// interrupted, and the level it chose stays its own.
-	opening := !data.InTransaction(ctx, s.db)
-
 	id, err := data.NewID()
 	if err != nil {
 		return Receipt{}, err
@@ -2072,12 +2039,7 @@ func (s *WalletService) attempt(ctx context.Context, g security.Grant, op operat
 	var conversion *Conversion
 	var charge *Charge
 	var purchases []Purchase
-	err = data.Transaction(ctx, s.db, func(ctx context.Context) error {
-		if opening {
-			if err := s.isolate(ctx); err != nil {
-				return err
-			}
-		}
+	err = database.TransactionAt(ctx, s.db, sql.LevelReadCommitted, func(ctx context.Context) error {
 		if _, err := record.Save(ctx, g); err != nil {
 			return err
 		}
@@ -2466,7 +2428,8 @@ func entryRow(entry Entry) map[string]any {
 // this statement does not go through the Model: a row of another customer has
 // to be unreachable by this write for the same reason it is unreachable by
 // every other one.
-func moveStatement(m movement, tenant string) (string, []any) {
+func moveStatement(m movement, tenant string, dialect data.Dialect) (string, []any) {
+	q := quoterFor(dialect)
 	var set, guard string
 	switch {
 	case m.adjust:
@@ -2479,9 +2442,10 @@ func moveStatement(m movement, tenant string) (string, []any) {
 		// that got in between leaves this matching no row, and the whole
 		// transaction rolls back rather than writing an adjustment computed
 		// from numbers that have changed.
-		set = `"last_sequence" = "last_sequence" + 1, "frozen" = 0`
-		guard = fmt.Sprintf(`"frozen" = 1 and "closed" = 0 and "balance" = %d and "last_sequence" = %d`,
-			int64(m.wallet.Balance), m.wallet.LastSequence)
+		set = q("last_sequence") + " = " + q("last_sequence") + " + 1, " + q("frozen") + " = 0"
+		guard = fmt.Sprintf("%s = 1 and %s = 0 and %s = %d and %s = %d",
+			q("frozen"), q("closed"), q("balance"), int64(m.wallet.Balance),
+			q("last_sequence"), m.wallet.LastSequence)
 	case m.pending:
 		// A movement that has not settled moves no balance, so its statement
 		// touches none. It still takes a position in the ledger, because the
@@ -2489,29 +2453,33 @@ func moveStatement(m movement, tenant string) (string, []any) {
 		// in order -- and the position has to be one nothing else can be
 		// holding, which is why it comes from the statement rather than from a
 		// number read here.
-		set = `"last_sequence" = "last_sequence" + 1`
-		guard = servableGuard
+		set = q("last_sequence") + " = " + q("last_sequence") + " + 1"
+		guard = servableGuard(q)
 	case m.kind == EntryWithdraw:
 		// The balance has to still be enough at the moment of the write, and
 		// what "enough" is comes off the same row in the same statement: the
 		// amount less the wallet's own credit limit, named rather than read,
 		// because a limit fetched a moment earlier is a limit two concurrent
 		// withdrawals both spend.
-		set = fmt.Sprintf(`"balance" = "balance" - %d, "last_sequence" = "last_sequence" + 1`, int64(m.amount))
-		guard = servableGuard + ` and "balance" >= ` + withdrawalFloor(m.amount, m.force)
+		set = fmt.Sprintf("%s = %s - %d, %s = %s + 1",
+			q("balance"), q("balance"), int64(m.amount), q("last_sequence"), q("last_sequence"))
+		guard = servableGuard(q) + " and " + q("balance") + " >= " + withdrawalFloor(m.amount, m.force, q)
 	case m.kind == EntryDeposit:
 		// And it has to still have room, or the column wraps into a negative
 		// balance that no rule in this package would ever have allowed.
-		set = fmt.Sprintf(`"balance" = "balance" + %d, "last_sequence" = "last_sequence" + 1`, int64(m.amount))
-		guard = servableGuard + fmt.Sprintf(` and "balance" <= %d`, int64(m.amount.Ceiling()))
+		set = fmt.Sprintf("%s = %s + %d, %s = %s + 1",
+			q("balance"), q("balance"), int64(m.amount), q("last_sequence"), q("last_sequence"))
+		guard = servableGuard(q) + fmt.Sprintf(" and %s <= %d", q("balance"), int64(m.amount.Ceiling()))
 	default:
 		return "", nil
 	}
 
-	return `update "` + walletsTable + `" set ` + set +
-			` where "id" = ? and "tenant_id" = ? and ` + guard +
-			` returning "balance", "credit_limit", "last_sequence", "frozen", "closed"`,
-		[]any{m.wallet.ID, tenant}
+	statement := "update " + q(walletsTable) + " set " + set +
+		" where " + q("id") + " = ? and " + q("tenant_id") + " = ? and " + guard
+	if reportsTheRowItWrote(dialect) {
+		statement += " returning " + movedColumns(q)
+	}
+	return statement, []any{m.wallet.ID, tenant}
 }
 
 // servableGuard is the gate on money as a statement spells it, and it has
@@ -2547,7 +2515,48 @@ func moveStatement(m movement, tenant string) (string, []any) {
 // like a third reason is nearly always the application's own: an application
 // that wants to stop a wallet for a reason of its own writes that rule in its
 // own policy, where it can also say who may lift it.
-const servableGuard = `"frozen" = 0 and "closed" = 0`
+func servableGuard(q quoter) string {
+	return q("frozen") + " = 0 and " + q("closed") + " = 0"
+}
+
+// quoter spells an identifier the way one engine takes it.
+//
+// It is the grammar of the connection, not a rule written here: PostgreSQL and
+// SQLite take double quotes, MySQL takes backticks unless an operator turned on
+// ANSI_QUOTES, and choosing between them in this package would be a second
+// place that decides how a column is named. quoterFor asks hesape.
+type quoter func(column string) string
+
+// quoterFor is the identifier grammar of a dialect.
+//
+// The default is the one the rest of this package is written against, and it is
+// reached only by a dialect New already refused, so it is a spelling rather than
+// a decision.
+func quoterFor(dialect data.Dialect) quoter {
+	var wrap func(any) string
+	switch dialect {
+	case data.DialectMySQL:
+		wrap = grammars.NewMySQLGrammar().Wrap
+	case data.DialectPostgres:
+		wrap = grammars.NewPostgresGrammar().Wrap
+	default:
+		wrap = grammars.NewSQLiteGrammar().Wrap
+	}
+	return func(column string) string { return wrap(column) }
+}
+
+// reportsTheRowItWrote reports whether an engine can answer an update with the
+// row it left.
+//
+// PostgreSQL and SQLite have a returning clause; MySQL has none, and no version
+// of it is going to grow one. Where it is absent the caller reads the row back
+// inside the same transaction, which is safe for a reason that is specific and
+// worth stating: an update that matched a row holds an exclusive lock on it
+// until the transaction ends, so the select that follows cannot see anybody
+// else's change. What it costs is the round trip the clause exists to save.
+func reportsTheRowItWrote(dialect data.Dialect) bool {
+	return dialect != data.DialectMySQL
+}
 
 // moved is what a balance statement answers with: the row as it left it.
 //
@@ -2570,7 +2579,7 @@ type moved struct {
 // apply appends, so that the statement which moves a balance stays one per
 // wallet and the rows it produced go in one per operation.
 func (s *WalletService) move(ctx context.Context, g security.Grant, operationID string, position int, m movement) (Entry, error) {
-	statement, bindings := moveStatement(m, data.Tenant(g))
+	statement, bindings := moveStatement(m, data.Tenant(g), s.db.Dialect())
 	if statement == "" {
 		return Entry{}, fmt.Errorf("wallet: %q is not a direction money moves in", m.kind)
 	}
@@ -2613,6 +2622,10 @@ func (s *WalletService) move(ctx context.Context, g security.Grant, operationID 
 // the caller decides on: a guard that was false at the instant of the write
 // matches nothing, and that is an answer rather than a failure.
 func (s *WalletService) moving(ctx context.Context, statement string, bindings []any) (moved, bool, error) {
+	if !reportsTheRowItWrote(s.db.Dialect()) {
+		return s.movingInTwo(ctx, statement, bindings)
+	}
+
 	rows, err := s.db.QueryContext(ctx, statement, bindings...)
 	if err != nil {
 		return moved{}, false, err
@@ -2627,6 +2640,68 @@ func (s *WalletService) moving(ctx context.Context, statement string, bindings [
 		return moved{}, false, err
 	}
 	return after, true, rows.Err()
+}
+
+// movingInTwo is moving where the engine cannot answer an update with the row.
+//
+// MySQL has no returning clause, so the same question takes two statements: the
+// update decides, and a select reads what it left.
+//
+// # Why the second statement reads what the first wrote, and not something else
+//
+// The two run inside one transaction, and an update that matched a row holds an
+// exclusive lock on it until that transaction ends. Nobody else can change the
+// row between them, and nobody else can read the half-written state either. The
+// select is therefore reading the row as this update left it, which is the same
+// guarantee the returning clause gives in one statement -- at the cost of the
+// round trip it exists to save.
+//
+// The guard is untouched by any of this. It is still a predicate on the update,
+// still evaluated at the instant of the write, and a false one still matches no
+// row -- which is read here from the count the engine reports rather than from
+// anything fetched afterwards. There is no read-then-check on this path: the
+// only thing read afterwards is what the write already decided.
+//
+// A statement that matched nothing is not followed by a select, because there is
+// no lock and nothing to say. The caller turns that into a sentence by asking
+// the wallet, exactly as it does on the engines with the clause.
+func (s *WalletService) movingInTwo(ctx context.Context, statement string, bindings []any) (moved, bool, error) {
+	result, err := s.db.ExecContext(ctx, statement, bindings...)
+	if err != nil {
+		return moved{}, false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return moved{}, false, fmt.Errorf("wallet: reading how many rows the balance statement matched: %w", err)
+	}
+	if affected == 0 {
+		return moved{}, false, nil
+	}
+
+	q := quoterFor(s.db.Dialect())
+	// The identifier and the tenant, in the order moveStatement binds them.
+	var after moved
+	err = s.db.QueryRowContext(ctx,
+		"select "+movedColumns(q)+" from "+q(walletsTable)+
+			" where "+q("id")+" = ? and "+q("tenant_id")+" = ?",
+		bindings...,
+	).Scan(&after.balance, &after.creditLimit, &after.sequence, &after.frozen, &after.closed)
+	if err != nil {
+		return moved{}, false, err
+	}
+	return after, true, nil
+}
+
+// movedColumns is what a balance statement answers with, in the order moved is
+// scanned in.
+//
+// One spelling for the two paths: the returning clause names them, and so does
+// the select that stands in for it where there is no clause. Two lists would be
+// two orders to keep in step, and the failure of that is a balance read into the
+// credit limit.
+func movedColumns(q quoter) string {
+	return q("balance") + ", " + q("credit_limit") + ", " +
+		q("last_sequence") + ", " + q("frozen") + ", " + q("closed")
 }
 
 // whyNothingMoved says which condition of a balance statement was false.

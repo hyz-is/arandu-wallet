@@ -11,6 +11,60 @@ changed at each of its own versions is below.
 
 Nothing yet.
 
+## v0.5.0
+
+### MySQL is supported
+
+`New` refused it, and the refusal was wrong: `hesape` supports the engine, and
+this framework's own rule treats PostgreSQL, MySQL and SQLite as one repository
+behind one interface rather than as three modes. Nothing in an application
+changes to take this release on PostgreSQL or SQLite.
+
+An application on MySQL upgrades to `v0.5.0` and runs `aru migrate` from
+scratch: two of the migrations could not have applied there before this, so a
+MySQL installation of an earlier version does not exist.
+
+### Existing schemas are unchanged, and new ones are narrower
+
+Three migrations declare narrower columns than they did. An installation that
+already applied them does not run them again and keeps the columns it has; a new
+installation gets the narrower ones. Nothing about either behaves differently,
+because the bounds are ones this package already enforced in Go before the
+statement was built:
+
+- `meta` on `wallet_operations`, `wallet_entries` and `wallets` is bounded at
+  `MaxMetaBytes` (4096) rather than unbounded. `ErrMetaTooLarge` already refused
+  anything larger.
+- The identifier columns are declared at 64 characters, and the two application
+  keys -- `idempotency_key` and `product_key` -- at 191. An identifier here is a
+  version 4 UUID as text, which is thirty-six characters.
+
+To bring an existing PostgreSQL schema in line, which is optional:
+
+```sql
+alter table wallet_operations alter column meta type varchar(4096);
+alter table wallet_entries    alter column meta type varchar(4096);
+alter table wallets           alter column meta type varchar(4096);
+```
+
+### The isolation level moved to where the transaction opens
+
+It was a `SET TRANSACTION ISOLATION LEVEL READ COMMITTED` as the first statement
+inside the transaction. It is `TransactionAt` now, which hands the level to
+`BeginTx`. Applications see no difference; what changes is that MySQL is
+expressible at all, since it refuses a `SET` once a transaction is in progress.
+
+An application that opened its own transaction and let this package join it is
+unaffected: the joined transaction keeps the level it was opened at, exactly as
+before.
+
+### Upgrade the two floors
+
+```sh
+go get github.com/arandu-io/hesape@v0.26.0
+go get github.com/arandu-io/framework@v0.46.1
+```
+
 ## v0.4.1
 
 Nothing to change in an application. This release corrects what the previous

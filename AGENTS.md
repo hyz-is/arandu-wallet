@@ -263,7 +263,7 @@ repository; the fifth property is what the answer has to be when a row says
 | a retry when the engine reports a conflict | yes | classified around `commit` by SQLSTATE, and `ErrConcurrencyConflict` when the attempts run out |
 | a balance repaired after it stops matching its ledger | yes | `Reconcile` reports and freezes the wallet; `Rebuild` closes the difference by appending one settled entry and touching no balance |
 | an isolation level the guard can be read against | yes | read committed, named as the first statement of every transaction this package opens |
-| an engine this package has not been run against | refused | `New` answers `ErrUnsupportedDialect`; the suite covers PostgreSQL and SQLite, and nothing claims MySQL |
+| an engine this package has not been run against | refused | `New` answers `ErrUnsupportedDialect`; the suite covers PostgreSQL, MySQL and SQLite, against real servers for the first two |
 | statement, ledger, running balance | yes | `History`, `Statement`, `Entry.BalanceAfter` |
 | told what the money did, after it did it | yes | `Listener` |
 | lookup by holder and slug, and a name for the default one | yes | `FindBySlug`, `DefaultSlug`, and `GET {prefix}/holders/{holder}/{slug}`. It opens nothing: a read that created what it did not find would guess a currency and a scale |

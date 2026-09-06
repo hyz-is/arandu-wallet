@@ -16,6 +16,53 @@ name here. They are gone.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-06
+
+### Added
+
+- MySQL. `New` accepted PostgreSQL and SQLite and refused everything else,
+  including the engine `hesape` supports and the framework's own rule treats as
+  an adapter rather than a mode. It is the third engine now, and the tests that
+  say so run against a real server: the guard on a balance, the guard with a
+  credit limit, one idempotency key under concurrent callers, and a frozen
+  wallet refused at the write. `ARANDU_TEST_MYSQL_DSN` names the server, and
+  they skip where it does not.
+- `quoterFor` and the statement composed through the connection's grammar.
+  MySQL quotes identifiers with backticks and PostgreSQL with double quotes, so
+  the one place in this package that writes SQL by hand asks `hesape` how to
+  spell a column rather than deciding for itself.
+
+### Changed
+
+- A transaction is opened at the level it names rather than told afterwards.
+  It was a `SET TRANSACTION ISOLATION LEVEL` as the first statement inside the
+  transaction, which PostgreSQL takes and MySQL refuses -- a transaction's
+  characteristics cannot be changed once it is in progress. The level goes to
+  `BeginTx` now, through `TransactionAt` in Hesape `v0.26.0`, where each driver
+  spells it the way its engine takes.
+- The statement that moves a balance carries a `returning` clause only where
+  the engine has one. MySQL has none, so there the row is read back inside the
+  same transaction, which is safe for a reason worth naming: an update that
+  matched a row holds an exclusive lock on it until the transaction ends, so
+  the select that follows reads what this write left. The guard is untouched --
+  it is still a predicate on the update, still evaluated at the instant of the
+  write, and whether it matched is read from the count the engine reports and
+  never from anything fetched afterwards.
+- The minimum Hesape version is now `v0.26.0`, with Framework `v0.46.1`.
+
+### Fixed
+
+- The migrations apply on MySQL. Two of them could not, and neither had ever
+  been run against it:
+  `20260905_0008_add_wallet_metadata` and `20260906_0011_add_wallet_description`
+  declared `meta` as unbounded text with a default, which MySQL refuses outright
+  -- "BLOB, TEXT, GEOMETRY or JSON column can't have a default value" -- and
+  `20260905_0009_create_wallet_purchases` built a five-column index over columns
+  of the default width, which is 4080 bytes of utf8mb4 and past InnoDB's limit
+  of 3072. The metadata columns are bounded at `MaxMetaBytes`, which is already
+  the largest this package writes, and the identifier columns are declared at
+  the width a UUID needs.
+
 ## [0.4.1] - 2026-09-06
 
 ### Added

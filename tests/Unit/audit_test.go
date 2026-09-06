@@ -532,7 +532,20 @@ func qualifiedName(call *ast.CallExpr, standard map[string]string) string {
 func TestOnlyOneStatementInThePackageWritesABalance(t *testing.T) {
 	t.Parallel()
 
-	writers := map[string]int{}
+	// Every identifier in a balance statement goes through the connection's
+	// grammar now, because MySQL quotes with backticks and PostgreSQL with
+	// double quotes. So the column is named by a call rather than spelled into
+	// a literal, and what this walks is the call: any function asking the
+	// quoter for "balance" is a function composing SQL about the balance.
+	//
+	// It is a stricter question than the literal it replaced in one way and a
+	// narrower one in another. Stricter, because the literal form could only
+	// see the quoting the author happened to use and this sees the column in
+	// every spelling. Narrower, because it recognises the quoter by the name
+	// the package gives it. The reach is held by the test below, which asks
+	// what composes an update of that table at all and does not care how the
+	// columns in it were named.
+	namers := map[string]int{}
 	for _, source := range auditedFiles(t) {
 		for _, declaration := range source.file.Decls {
 			function, ok := declaration.(*ast.FuncDecl)
@@ -540,27 +553,85 @@ func TestOnlyOneStatementInThePackageWritesABalance(t *testing.T) {
 				continue
 			}
 			ast.Inspect(function.Body, func(node ast.Node) bool {
-				literal, ok := node.(*ast.BasicLit)
-				if !ok || literal.Kind != token.STRING {
+				call, ok := node.(*ast.CallExpr)
+				if !ok || len(call.Args) != 1 {
 					return true
 				}
-				// An assignment to the column, in whatever quoting the
-				// statement uses. It is the left of a SET and not a comparison,
-				// which is what tells a write from a guard.
-				if strings.Contains(literal.Value, `"balance" = `) {
-					writers[function.Name.Name]++
+				// Through the quoter, which the package names q everywhere it
+				// holds one. A migration also names the column -- it creates it
+				// -- and does so through the Blueprint, which is why the callee
+				// is asked for and not only the argument.
+				callee, ok := call.Fun.(*ast.Ident)
+				if !ok || callee.Name != "q" {
+					return true
 				}
+				literal, ok := call.Args[0].(*ast.BasicLit)
+				if !ok || literal.Kind != token.STRING || literal.Value != `"balance"` {
+					return true
+				}
+				namers[function.Name.Name]++
 				return true
 			})
 		}
 	}
 
-	if len(writers) == 0 {
-		t.Fatal("nothing in this package composes a write to the balance column, so this test proved nothing")
+	if len(namers) == 0 {
+		t.Fatal("nothing in this package names the balance column in a statement, so this test proved nothing")
 	}
-	if len(writers) != 1 || writers["moveStatement"] == 0 {
-		t.Errorf("the balance column is written from %v, and it is written from moveStatement or from nowhere: a second site is a second guard to keep right",
-			writers)
+
+	// moveStatement composes the write. movedColumns names the same column in
+	// the list the row is read back through, on both paths, and composes no
+	// update of its own.
+	allowed := map[string]bool{"moveStatement": true, "movedColumns": true}
+	for name := range namers {
+		if !allowed[name] {
+			t.Errorf("%s composes SQL naming the balance column: the write lives in moveStatement or nowhere, because a second site is a second guard to keep right",
+				name)
+		}
+	}
+	if namers["moveStatement"] == 0 {
+		t.Error("moveStatement does not name the balance column, so the statement that moves money is somewhere else now")
+	}
+}
+
+// TestOnlyOneFunctionComposesAnUpdateOfTheWalletsTable is the reach the audit
+// above cannot have on its own.
+//
+// A second writer that named its column through a variable rather than a
+// literal would pass the walk above. What it could not do is compose an update
+// of that table without naming the table, which is what this asks.
+func TestOnlyOneFunctionComposesAnUpdateOfTheWalletsTable(t *testing.T) {
+	t.Parallel()
+
+	composers := map[string]bool{}
+	for _, source := range auditedFiles(t) {
+		for _, declaration := range source.file.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if !ok || function.Body == nil {
+				continue
+			}
+			var namesTable, opensUpdate bool
+			ast.Inspect(function.Body, func(node ast.Node) bool {
+				switch n := node.(type) {
+				case *ast.Ident:
+					if n.Name == "walletsTable" {
+						namesTable = true
+					}
+				case *ast.BasicLit:
+					if n.Kind == token.STRING && strings.HasPrefix(n.Value, `"update `) {
+						opensUpdate = true
+					}
+				}
+				return true
+			})
+			if namesTable && opensUpdate {
+				composers[function.Name.Name] = true
+			}
+		}
+	}
+
+	if len(composers) != 1 || !composers["moveStatement"] {
+		t.Errorf("the wallets table is updated from %v, and it is updated from moveStatement or from nowhere", composers)
 	}
 }
 
