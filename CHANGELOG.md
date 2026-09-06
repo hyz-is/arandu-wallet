@@ -18,6 +18,22 @@ name here. They are gone.
 
 ### Changed
 
+- `service.go` is seven files. It reached four thousand lines, which is not a
+  property of the language and was never a decision: it is where every new
+  capability was appended. They are all still `package wallet` -- the division
+  is by subject and not by layer, there is no directory per Service or per DTO,
+  and `go doc -all` is byte for byte what it was before.
+- Every column width names the bound that validates it. The comment over those
+  bounds already said they were "the widths the columns are created at", and
+  every migration repeated the number as a literal beside it -- the MySQL work
+  added two more, one of which disagreed: a key column created at 191 next to a
+  validator refusing anything over 128. `TestEveryColumnWidthIsANamedBound`
+  refuses a literal width now, and a column created at `12` instead of
+  `maxCurrencyLen` fails it.
+- `TestThePackageUsesTheModelFirstDataPath` asks the package rather than
+  `service.go`. It named a file, which is a claim about where a method is
+  written and not about what the package does.
+
 - The parity table says what the three engines change and what they do not: one
   round trip on PostgreSQL and SQLite and two on MySQL, the isolation level
   handed to `BeginTx` rather than set inside the transaction, and the measured

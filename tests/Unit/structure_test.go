@@ -101,9 +101,6 @@ func TestThePackageUsesTheModelFirstDataPath(t *testing.T) {
 		"service.go": {
 			"db        *data.DB",
 			"func NewWalletService(db *data.DB, rates RateProvider, fees FeeProvider, discounts DiscountProvider, listeners ...Listener) *WalletService",
-			"Wallets(s.db)",
-			") (*Wallet, error)",
-			") ([]*Wallet, error)",
 		},
 		"module.go": {
 			"NewWalletService(db, cfg.Rates, cfg.Fees, cfg.Discounts, cfg.Listeners...)",
@@ -118,6 +115,51 @@ func TestThePackageUsesTheModelFirstDataPath(t *testing.T) {
 			if !strings.Contains(string(body), want) {
 				t.Errorf("%s does not contain %q", path, want)
 			}
+		}
+	}
+}
+
+// TestTheServiceReachesTheModelAndReturnsWhatItOwns asks the package rather than
+// one file in it.
+//
+// It used to name service.go, and that was a claim about where a method is
+// written rather than about what the package does. Splitting a four-thousand
+// line file by responsibility broke it while changing nothing: Find and List
+// moved to wallet.go, and the same package went on reaching the same Model and
+// returning the same pointers.
+//
+// A package is one package however many files it is in, so the question is
+// asked of all of them together.
+func TestTheServiceReachesTheModelAndReturnsWhatItOwns(t *testing.T) {
+	t.Parallel()
+
+	root := packageRoot(t)
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("reading the package: %v", err)
+	}
+
+	var body strings.Builder
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			t.Fatalf("reading %s: %v", name, err)
+		}
+		body.Write(raw)
+	}
+	source := body.String()
+
+	for _, want := range []string{
+		"Wallets(s.db)",
+		") (*Wallet, error)",
+		") ([]*Wallet, error)",
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("no file in this package contains %q: the data path is the configured Model, and what it owns is what the Service hands back", want)
 		}
 	}
 }

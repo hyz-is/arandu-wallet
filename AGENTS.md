@@ -113,7 +113,13 @@ cart.go        the basket, and the seams that say what is for sale
 model.go       the entities, and what they may answer with
 purchase.go    the record of what was bought, and its own read model
 policy.go      who may do what
-service.go     the rules and authorized Model access
+service.go     the Service, its seams, and the reads
+request.go     what every request has to be for the Service to take it
+wallet.go      opening a wallet, naming it, finding it, taking it out of service
+movement.go    deposit, withdrawal, transfer, reversal, confirmation, statement
+payment.go     a basket paid for, and a line given back
+reconcile.go   a ledger that stopped explaining its balance, and its repair
+commit.go      the engine: one operation, one transaction, the guarded write
 event.go       what a listener is told, once the write has committed
 commands.go    what an operator runs from a terminal
 translation.go the sentences the screens say
@@ -232,6 +238,27 @@ What the audit does not reach is written at the top of the file it lives in. It
 reads syntax, so dynamic dispatch, reflection, and wrappers around the named
 seams are invisible to it. A green run means no such thing was found written
 down, not that none exists.
+
+## One package, several files
+
+Everything above is `package wallet`. The files divide a subject, not a layer:
+there is no directory per Service, per Interface or per DTO, and adding one
+would be adding a shape this language does not need. A method moved between two
+of these files changes nothing at all, and the guarantee is checkable -- the
+output of `go doc -all` is the same before and after.
+
+They were one file until they were seven. `service.go` reached four thousand
+lines, which is not a property of Go and not a decision anybody wrote down: it
+is what happens when every new capability is appended where the last one went.
+The reference this package is measured against holds a comparable surface --
+12,921 lines to 10,867 -- in 194 files whose largest is 591 lines, and the shape
+of that comparison is the only part of it worth taking. Its layers are not: half
+of them exist because PHP has no types to pass, no embedding, and a container
+that needs an interface for everything it resolves.
+
+`commit.go` is the one to read first. Every movement of money in this package
+goes through it, and the guard that decides is a predicate on the update rather
+than a check in Go.
 
 ## Parity, and the limits that are not gaps
 

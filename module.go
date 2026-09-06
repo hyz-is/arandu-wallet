@@ -1099,12 +1099,12 @@ func (createWallets) GetName() string { return "20260905_0001_create_wallets" }
 // The timestamps have no database default: the values come from Go.
 func (createWallets) Up(ctx context.Context, conn migrations.Connection) error {
 	return conn.Schema().Create(ctx, walletsTable, func(table *schema.Blueprint) {
-		table.String("id", idColumn).Primary()
-		table.String("tenant_id", idColumn)
-		table.String("holder_id", idColumn)
-		table.String("slug", keyColumn)
-		table.String("name")
-		table.String("currency", 12)
+		table.String("id", maxIdentifierLen).Primary()
+		table.String("tenant_id", maxIdentifierLen)
+		table.String("holder_id", maxIdentifierLen)
+		table.String("slug", maxIdentifierLen)
+		table.String("name", maxNameLen)
+		table.String("currency", maxCurrencyLen)
 		table.UnsignedSmallInteger("decimal_places").Default(2)
 		table.BigInteger("balance").Default(0)
 		table.BigInteger("last_sequence").Default(0)
@@ -1148,12 +1148,12 @@ func (createWalletOperations) GetName() string { return "20260905_0002_create_wa
 // both walk past.
 func (createWalletOperations) Up(ctx context.Context, conn migrations.Connection) error {
 	return conn.Schema().Create(ctx, operationsTable, func(table *schema.Blueprint) {
-		table.String("id", idColumn).Primary()
-		table.String("tenant_id", idColumn)
-		table.String("idempotency_key", 128)
-		table.String("kind", 16)
-		table.String("reverses_id", idColumn)
-		table.String("reason", 255).Default("")
+		table.String("id", maxIdentifierLen).Primary()
+		table.String("tenant_id", maxIdentifierLen)
+		table.String("idempotency_key", maxIdempotencyKeyLen)
+		table.String("kind", maxKindLen)
+		table.String("reverses_id", maxIdentifierLen)
+		table.String("reason", maxReasonLen).Default("")
 		table.Timestamp("created_at")
 
 		table.Unique([]string{"tenant_id", "idempotency_key"}, "wallet_operations_key_uq")
@@ -1186,11 +1186,11 @@ func (createWalletEntries) GetName() string { return "20260905_0003_create_walle
 // holds unique.
 func (createWalletEntries) Up(ctx context.Context, conn migrations.Connection) error {
 	return conn.Schema().Create(ctx, entriesTable, func(table *schema.Blueprint) {
-		table.String("id", idColumn).Primary()
-		table.String("tenant_id", idColumn)
-		table.String("operation_id", idColumn)
-		table.String("wallet_id", idColumn)
-		table.String("kind", 16)
+		table.String("id", maxIdentifierLen).Primary()
+		table.String("tenant_id", maxIdentifierLen)
+		table.String("operation_id", maxIdentifierLen)
+		table.String("wallet_id", maxIdentifierLen)
+		table.String("kind", maxKindLen)
 		table.BigInteger("sequence")
 		table.UnsignedSmallInteger("position").Default(0)
 		table.BigInteger("amount")
@@ -1238,15 +1238,15 @@ func (createWalletConversions) GetName() string { return "20260905_0004_create_w
 // place is a rate that says what somebody later wished it had been.
 func (createWalletConversions) Up(ctx context.Context, conn migrations.Connection) error {
 	return conn.Schema().Create(ctx, conversionsTable, func(table *schema.Blueprint) {
-		table.String("id", idColumn).Primary()
-		table.String("tenant_id", idColumn)
-		table.String("operation_id", idColumn)
+		table.String("id", maxIdentifierLen).Primary()
+		table.String("tenant_id", maxIdentifierLen)
+		table.String("operation_id", maxIdentifierLen)
 
-		table.String("from_currency", 12)
+		table.String("from_currency", maxCurrencyLen)
 		table.UnsignedSmallInteger("from_decimal_places").Default(2)
 		table.BigInteger("from_amount")
 
-		table.String("to_currency", 12)
+		table.String("to_currency", maxCurrencyLen)
 		table.UnsignedSmallInteger("to_decimal_places").Default(2)
 		table.BigInteger("to_amount")
 
@@ -1254,7 +1254,7 @@ func (createWalletConversions) Up(ctx context.Context, conn migrations.Connectio
 		table.BigInteger("rate_denominator")
 		table.Timestamp("quoted_at")
 
-		table.String("rounding", 16)
+		table.String("rounding", maxRoundingLen)
 		table.BigInteger("remainder_numerator").Default(0)
 		table.BigInteger("remainder_denominator").Default(1)
 
@@ -1357,11 +1357,11 @@ func (createWalletCharges) GetName() string { return "20260905_0007_create_walle
 // the schema, exactly as it is on the ledger and on the recorded rates.
 func (createWalletCharges) Up(ctx context.Context, conn migrations.Connection) error {
 	return conn.Schema().Create(ctx, chargesTable, func(table *schema.Blueprint) {
-		table.String("id", idColumn).Primary()
-		table.String("tenant_id", idColumn)
-		table.String("operation_id", idColumn)
+		table.String("id", maxIdentifierLen).Primary()
+		table.String("tenant_id", maxIdentifierLen)
+		table.String("operation_id", maxIdentifierLen)
 
-		table.String("currency", 12)
+		table.String("currency", maxCurrencyLen)
 		table.UnsignedSmallInteger("decimal_places").Default(2)
 
 		table.BigInteger("requested_amount")
@@ -1374,9 +1374,9 @@ func (createWalletCharges) Up(ctx context.Context, conn migrations.Connection) e
 		table.BigInteger("fee_maximum").Default(0)
 		table.UnsignedSmallInteger("fee_deductible").Default(0)
 		table.BigInteger("fee_amount").Default(0)
-		table.String("fee_wallet_id", idColumn).Default("")
+		table.String("fee_wallet_id", maxIdentifierLen).Default("")
 
-		table.String("rounding", 16)
+		table.String("rounding", maxRoundingLen)
 		table.BigInteger("remainder_numerator").Default(0)
 		table.BigInteger("remainder_denominator").Default(1)
 
@@ -1473,41 +1473,21 @@ func (createWalletPurchases) GetName() string { return "20260905_0009_create_wal
 // the schema, exactly as it is on the ledger, the recorded rates and the
 // charges: a line that was given back is a second row naming the first, so what
 // was bought stays readable after it is undone.
-// idColumn is how wide a column holding one of this package's identifiers is.
-//
-// An identifier here is a version 4 UUID as text, which is thirty-six
-// characters and always will be, so sixty-four is the size with room in it.
-//
-// It is named rather than left to the default because the default is 255, and
-// four of those in one index is 4080 bytes of utf8mb4 -- past InnoDB's limit of
-// 3072, which refuses the index outright rather than truncating it. The
-// purchases table has exactly such an index, and this is what lets it exist on
-// every engine. PostgreSQL and SQLite are indifferent to the number.
-const idColumn = 64
-
-// keyColumn is how wide a column holding a key the application chose is.
-//
-// An idempotency key and a product key are the application's strings, not this
-// package's identifiers, so they are given room rather than a UUID's width --
-// and a bound rather than none, because both take part in an index and an
-// unbounded column cannot.
-const keyColumn = 191
-
 func (createWalletPurchases) Up(ctx context.Context, conn migrations.Connection) error {
 	return conn.Schema().Create(ctx, purchasesTable, func(table *schema.Blueprint) {
-		table.String("id", idColumn).Primary()
-		table.String("tenant_id", idColumn)
-		table.String("operation_id", idColumn)
+		table.String("id", maxIdentifierLen).Primary()
+		table.String("tenant_id", maxIdentifierLen)
+		table.String("operation_id", maxIdentifierLen)
 		table.UnsignedSmallInteger("position").Default(0)
 
-		table.String("payer_wallet_id", idColumn)
-		table.String("owner_wallet_id", idColumn)
-		table.String("receiver_wallet_id", idColumn)
+		table.String("payer_wallet_id", maxIdentifierLen)
+		table.String("owner_wallet_id", maxIdentifierLen)
+		table.String("receiver_wallet_id", maxIdentifierLen)
 
-		table.String("product_key", keyColumn)
+		table.String("product_key", maxIdentifierLen)
 		table.UnsignedInteger("quantity").Default(1)
 
-		table.String("currency", 12)
+		table.String("currency", maxCurrencyLen)
 		table.UnsignedSmallInteger("decimal_places").Default(2)
 
 		table.BigInteger("price_per_item")
@@ -1521,17 +1501,17 @@ func (createWalletPurchases) Up(ctx context.Context, conn migrations.Connection)
 		table.BigInteger("fee_maximum").Default(0)
 		table.UnsignedSmallInteger("fee_deductible").Default(0)
 		table.BigInteger("fee_amount").Default(0)
-		table.String("fee_wallet_id", idColumn).Default("")
+		table.String("fee_wallet_id", maxIdentifierLen).Default("")
 
-		table.String("rounding", 16)
+		table.String("rounding", maxRoundingLen)
 		table.BigInteger("remainder_numerator").Default(0)
 		table.BigInteger("remainder_denominator").Default(1)
 
 		table.BigInteger("paid_amount")
 		table.BigInteger("credited_amount")
 
-		table.String("kind", 16)
-		table.String("settles_id", idColumn)
+		table.String("kind", maxKindLen)
+		table.String("settles_id", maxIdentifierLen)
 		table.BigInteger("sequence").Default(0)
 
 		table.Timestamp("created_at")
@@ -1616,7 +1596,7 @@ func (addWalletDescription) GetName() string { return "20260906_0011_add_wallet_
 // neither column, and neither needs naming.
 func (addWalletDescription) Up(ctx context.Context, conn migrations.Connection) error {
 	return conn.Schema().Table(ctx, walletsTable, func(table *schema.Blueprint) {
-		table.String("description", 255).Default("")
+		table.String("description", maxDescriptionLen).Default("")
 		table.String("meta", MaxMetaBytes).Default("")
 	})
 }

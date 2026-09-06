@@ -1,6 +1,7 @@
 package unit_test
 
 import (
+	"fmt"
 	"go/ast"
 	"go/build/constraint"
 	"go/token"
@@ -529,6 +530,56 @@ func qualifiedName(call *ast.CallExpr, standard map[string]string) string {
 // having. Replacing the predicate with a read and an if left every SQLite test
 // passing, because SQLite serializes writers; on PostgreSQL the same code let
 // twenty-six withdrawals of one unit through against a balance of twenty.
+// TestEveryColumnWidthIsANamedBound holds the sentence that already stood over
+// the bounds this package validates with: "they are the widths the columns are
+// created at, so a value that fits here fits there".
+//
+// It did not hold. Every migration repeated its width as a literal -- 12, 128,
+// 255 -- beside a constant that said the same number somewhere else, and adding
+// MySQL added two more of them, one of which disagreed: a key column created at
+// 191 next to a validator that refuses anything over 128.
+//
+// A literal width is the second place a bound lives, and the failure of two
+// places is a column that accepts what the validator refuses or refuses what it
+// accepts. Neither is found by a test of behaviour, because the validator runs
+// first and the column never sees the value.
+func TestEveryColumnWidthIsANamedBound(t *testing.T) {
+	t.Parallel()
+
+	var literals []string
+	for _, source := range auditedFiles(t) {
+		for _, declaration := range source.file.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if !ok || function.Body == nil {
+				continue
+			}
+			ast.Inspect(function.Body, func(node ast.Node) bool {
+				call, ok := node.(*ast.CallExpr)
+				if !ok || len(call.Args) != 2 {
+					return true
+				}
+				method, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || method.Sel.Name != "String" {
+					return true
+				}
+				column, ok := call.Args[0].(*ast.BasicLit)
+				if !ok || column.Kind != token.STRING {
+					return true
+				}
+				if width, ok := call.Args[1].(*ast.BasicLit); ok && width.Kind == token.INT {
+					literals = append(literals,
+						fmt.Sprintf("%s: %s is created at the literal %s", function.Name.Name, column.Value, width.Value))
+				}
+				return true
+			})
+		}
+	}
+
+	for _, at := range literals {
+		t.Errorf("%s: a column width is the bound the validator uses, named once", at)
+	}
+}
+
 func TestOnlyOneStatementInThePackageWritesABalance(t *testing.T) {
 	t.Parallel()
 
