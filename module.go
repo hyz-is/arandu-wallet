@@ -237,12 +237,15 @@ const PublishCommand = "aru vendor:publish --apply"
 // request that reached one of them -- which is where it used to be answered,
 // once per page, to whoever happened to open it.
 //
-// It also holds the destination. Every file the archive offers has to land
-// under the vendor directory named after this module: an archive that reached
-// resources/views/home.kyse.go would land on a page the application wrote, and
-// what publishes the files writes what the archive says.
+// It also holds the destination. Every file this package offers has to land
+// under the vendor directory named after this module: a publication that
+// reached resources/views/home.kyse.go would land on a page the application
+// wrote, and what publishes the files writes where the publication says.
 func (m *Module) Boot(context.Context) error {
-	prefix := viewRoot + "/" + vendorDir + "/" + m.Name() + "/"
+	// The destination and not the archive: the two differ because go mod
+	// refuses to publish a path with a vendor segment, and the destination has
+	// one.
+	prefix := viewPrefix + "/"
 	var stray []string
 	for _, path := range PublishedPaths() {
 		if !strings.HasPrefix(path, prefix) {

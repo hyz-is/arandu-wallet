@@ -18,23 +18,35 @@ import (
 // does not exist as files. Whatever is handed over has to already be inside the
 // program doing the handing.
 //
-// The paths inside the archive are the paths the files take in the project, not
-// paths of this repository that something has to translate on the way. A view
-// sits here at the address it will sit at there, so the publication names
-// neither a source directory nor a destination one, and there is no second
-// spelling of a destination for the first one to disagree with.
+// The archive keeps them under a directory of its own, and the publication says
+// where they came from and where they go. The two cannot be one path: an
+// application looks for a package's views below a directory named vendor, and
+// go mod publishes no file whose path carries a segment with that name -- a
+// tree kept at the destination is in the repository and missing from what
+// anybody downloads, and the pattern below then matches nothing.
 //
-//go:embed resources/views
+//go:embed resources/publish
 var viewSources embed.FS
 
-// Where a view is written and what it is called.
+// Where a view is kept, where it is written, and what it is called.
 //
-// viewRoot is the directory every path in the archive starts with, and it is
-// what is cut off to get the name a view is registered under. viewSuffix is the
-// extension: it ends in .go so the build tag on the first line keeps the
-// compiler out of a file that is markup below the package clause.
+// viewSuffix is the extension: it ends in .go so the build tag on the first
+// line keeps the compiler out of a file that is markup below the package
+// clause.
 const (
-	viewRoot   = "resources/views"
+	// viewRoot is the directory every path in the archive starts with. It is
+	// deliberately not the destination: go mod drops every file whose path
+	// carries a segment named vendor, at any depth, so a tree kept under
+	// resources/views/vendor is present in the repository and absent from the
+	// published module -- and the embed above then matches nothing in any
+	// project that imports this.
+	viewRoot = "resources/publish"
+	// viewPrefix is where the same files are written in a project: below the
+	// directory an application keeps other people's views in, under this
+	// module's own name. Two packages with a view called index are two files
+	// under two names there, and neither shadows the other or the
+	// application's own.
+	viewPrefix = "resources/views/vendor/wallet"
 	viewSuffix = ".kyse.go"
 )
 
@@ -418,14 +430,6 @@ func formatInt(value int64) string {
 	return digits
 }
 
-// vendorDir is the directory an application keeps other people's views in.
-//
-// It is part of the path in the archive and not something the publication adds,
-// which is what makes the archive a literal picture of what lands in the
-// project. Two packages with a view called index are two files under two names
-// below it, and neither shadows the other or the application's own.
-const vendorDir = "vendor"
-
 // Publishes declares the files this package offers, each at the path it takes
 // relative to the root of the project.
 //
@@ -454,19 +458,31 @@ const vendorDir = "vendor"
 // it is the one thing the project is expected to edit. A package cannot know
 // what a screen should say in a product it has never seen.
 func (m *Module) Publishes() []foundation.Publication {
-	return []foundation.Publication{{Tag: foundation.PublishView, Files: viewSources}}
+	// From and To are what keep the archive and the destination two different
+	// paths, and two is what they have to be: the destination carries a segment
+	// named vendor, and go mod publishes no file whose path does.
+	return []foundation.Publication{{
+		Tag:   foundation.PublishView,
+		Files: viewSources,
+		From:  viewRoot,
+		To:    viewPrefix,
+	}}
 }
 
-// PublishedPaths are the files in the archive, each relative to the root of the
-// application, sorted.
+// PublishedPaths are where this package's views are written, each relative to
+// the root of the application, sorted.
+//
+// They are the destination rather than the archive, so that what the module
+// refuses at boot and what a project ends up holding are one list.
 func PublishedPaths() []string { return append([]string(nil), publishedPaths...) }
 
 // ViewNames are the names the published views are rendered by, sorted.
 //
-// The name is the path under the view root with its separators turned into
-// dots, which is what the view compiler writes into the registration call. It
-// is derived from the same archive the publication carries, so a view that was
-// renamed cannot keep an old name here.
+// The name is the path a view is written at, below the project's view
+// directory, with its separators turned into dots -- which is what the view
+// compiler writes into the registration call. It is derived from the same
+// archive the publication carries, so a view that was renamed cannot keep an
+// old name here.
 func ViewNames() []string { return append([]string(nil), viewNames...) }
 
 // ViewPackages are the directories the compiled views land in, each relative to
@@ -480,7 +496,9 @@ func ViewPackages() []string {
 	var out []string
 	seen := make(map[string]bool)
 	for _, path := range publishedPaths {
-		dir := compiledRoot + strings.TrimPrefix(path[:strings.LastIndexByte(path, '/')], viewRoot)
+		// The paths already carry the destination, so what is cut off is the
+		// directory a project keeps its views in, not the archive's root.
+		dir := compiledRoot + strings.TrimPrefix(path[:strings.LastIndexByte(path, '/')], "resources/views")
 		if seen[dir] {
 			continue
 		}
@@ -505,7 +523,7 @@ func readArchive() (paths, names []string) {
 		if entry.IsDir() || !strings.HasSuffix(path, viewSuffix) {
 			return nil
 		}
-		paths = append(paths, path)
+		paths = append(paths, publishedPath(path))
 		names = append(names, viewName(path))
 		return nil
 	})
@@ -518,11 +536,24 @@ func readArchive() (paths, names []string) {
 	return paths, names
 }
 
+// publishedPath turns an archive path into the path the file is written at.
+//
+// The archive keeps the views under a directory with no vendor segment, because
+// go mod publishes no path that has one. The destination has one, because that
+// is where an application looks for a package's views.
+func publishedPath(path string) string {
+	return viewPrefix + strings.TrimPrefix(path, viewRoot)
+}
+
 // viewName turns an archive path into the name the view is registered under.
 //
-//	resources/views/vendor/wallet/index.kyse.go -> vendor.wallet.index
+// The name comes from where the file is written and not from where it is kept:
+// the view compiler reads the project's tree, and the registration call it
+// writes says the path it found there.
+//
+//	resources/publish/index.kyse.go -> vendor.wallet.index
 func viewName(path string) string {
-	name := strings.TrimPrefix(strings.TrimPrefix(path, viewRoot), "/")
+	name := strings.TrimPrefix(publishedPath(path), "resources/views/")
 	name = strings.TrimSuffix(name, viewSuffix)
 	return strings.ReplaceAll(name, "/", ".")
 }
