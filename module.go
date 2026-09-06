@@ -1158,9 +1158,9 @@ func (addWalletEntrySettlement) GetName() string { return "20260905_0006_add_wal
 
 // Up adds to the ledger the column that says whether a row moved the balance.
 //
-// A small integer and not a boolean column, which is the same decision Flag
-// carries and made for the same reason: a Go bool arrives at the driver as 0 or
-// 1, and a driver told its column is a boolean refuses that.
+// A small integer and not a boolean column, which is the decision Flag carries:
+// a yes-or-no is written as 0 or 1, every engine holds that, and the Go value
+// that spells it cannot be spelled differently by a driver.
 //
 // It defaults to one, which is what every row written before this ran is: the
 // ledger had no other kind. So the sum of the settled entries of any wallet is

@@ -481,17 +481,20 @@ const (
 	EntryWithdraw EntryKind = "withdraw"
 )
 
-// Flag is a yes-or-no column, and it carries how it is written and how it is
-// read back.
+// Flag is a yes-or-no column held as the integer 0 or 1, and it carries how that
+// is written and how it is read back.
 //
-// The column behind it is a small integer rather than a boolean one, because
-// the two ends of the connection disagree about what a boolean is: the database
-// layer turns a Go bool into 0 or 1 before the driver sees it, and a driver that
-// has been told its column is a boolean refuses that integer. The column is
-// therefore the integer, and reading it is this type's own business -- which is
-// the same arrangement Amount has with the column that holds money, and for the
-// same reason: a value that spells its own column cannot be spelled differently
-// by an engine.
+// The column is an integer, and a Go bool is not what a driver accepts for one:
+// a driver that has been told its parameter is a small integer refuses a bool
+// outright, and one told the opposite refuses an integer. So the Go value spells
+// its own column -- which is the same arrangement Amount has with the column that
+// holds money, and for the same reason: a value that says what it writes cannot
+// be spelled differently by an engine.
+//
+// Reading is wider than writing on purpose. A yes-or-no comes back as an
+// integer, a boolean, the text of either or the bytes of any of them depending
+// on the engine and on how the table was created, and this is the one place that
+// is flattened.
 type Flag bool
 
 // Value writes the flag as the integer the column holds.
