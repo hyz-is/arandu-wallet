@@ -196,6 +196,7 @@ func (m *Module) Routes(r *fhttp.Router) {
 	m.register(r, "wallet.show", m.show)
 	m.register(r, "wallet.entries", m.entries)
 	m.register(r, "wallet.credit", m.credit)
+	m.register(r, "wallet.describe", m.describe)
 	m.register(r, "wallet.deposit", m.deposit)
 	m.register(r, "wallet.withdraw", m.withdraw)
 	m.register(r, "wallet.transfer", m.transfer)
@@ -401,6 +402,8 @@ func (m *Module) store(ctx *fhttp.Context) error {
 		HolderID:      ctx.Input("holder_id"),
 		Slug:          ctx.Input("slug"),
 		Name:          ctx.Input("name"),
+		Description:   ctx.Input("description"),
+		Meta:          m.meta(ctx, "meta"),
 		Currency:      Currency(ctx.Input("currency")),
 		DecimalPlaces: places,
 	}
@@ -413,6 +416,25 @@ func (m *Module) store(ctx *fhttp.Context) error {
 		return ctx.Redirect(m.cfg.Prefix + "/" + record.ID)
 	}
 	return ctx.JSON(stdhttp.StatusCreated, resourceFromPointer(record))
+}
+
+// describe changes what one wallet is called and what it is for.
+func (m *Module) describe(ctx *fhttp.Context) error {
+	in := DescribeRequest{
+		WalletID:    ctx.Param("id"),
+		Name:        ctx.Input("name"),
+		Description: ctx.Input("description"),
+		Meta:        m.meta(ctx, "meta"),
+	}
+
+	record, err := m.svc.Describe(ctx.Ctx(), m.subject(ctx.Request), in)
+	if err != nil {
+		return m.answer(ctx, err)
+	}
+	if !ctx.WantsJSON() {
+		return ctx.Redirect(m.cfg.Prefix + "/" + record.ID)
+	}
+	return ctx.JSON(stdhttp.StatusOK, resourceFromPointer(record))
 }
 
 // entries answers a page of one wallet's ledger.
@@ -955,6 +977,7 @@ func (m *Module) Migrations() []foundation.Migration {
 		addWalletMetadata{},
 		createWalletPurchases{},
 		addWalletFreeze{},
+		addWalletDescription{},
 	}
 }
 
@@ -973,6 +996,7 @@ var (
 	_ migrations.ReversibleMigration = addWalletMetadata{}
 	_ migrations.ReversibleMigration = createWalletPurchases{}
 	_ migrations.ReversibleMigration = addWalletFreeze{}
+	_ migrations.ReversibleMigration = addWalletDescription{}
 )
 
 // createWallets is the balances table.
@@ -1463,5 +1487,40 @@ func (addWalletFreeze) Up(ctx context.Context, conn migrations.Connection) error
 func (addWalletFreeze) Down(ctx context.Context, conn migrations.Connection) error {
 	return conn.Schema().Table(ctx, walletsTable, func(table *schema.Blueprint) {
 		table.DropColumn("frozen")
+	})
+}
+
+// addWalletDescription is what a wallet is for, and the application's own facts
+// about it.
+type addWalletDescription struct{ migrations.BaseMigration }
+
+// GetName is the migration's identity, and it carries the order.
+func (addWalletDescription) GetName() string { return "20260906_0011_add_wallet_description" }
+
+// Up adds the sentence and the metadata to the balances table.
+//
+// The metadata is text and not a document type, for the reason the metadata on
+// a movement is: the engines spell one differently, only some of them have it,
+// and nothing in this package reads what is inside. An application that wants to
+// query its own facts keeps them in a table of its own, against rows it owns.
+//
+// Both default to the empty string, which is what every wallet opened before
+// this ran holds and what a wallet nobody described holds afterwards -- so no
+// row is left saying somebody described it as nothing, which is a different
+// statement from saying nothing. It is also what lets the previous version of
+// the binary go on writing rows through this schema during a rollout: it names
+// neither column, and neither needs naming.
+func (addWalletDescription) Up(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Table(ctx, walletsTable, func(table *schema.Blueprint) {
+		table.String("description", 255).Default("")
+		table.Text("meta").Default("")
+	})
+}
+
+// Down drops both columns, which leaves every wallet carrying nothing.
+func (addWalletDescription) Down(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Table(ctx, walletsTable, func(table *schema.Blueprint) {
+		table.DropColumn("description")
+		table.DropColumn("meta")
 	})
 }

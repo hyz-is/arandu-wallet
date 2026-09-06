@@ -59,6 +59,20 @@ they describe releases of the template and not of this package.
 
 ### Added
 
+- `description` and `meta` on `wallets`, `Wallet.Description`, `Wallet.Meta`,
+  and both on `Resource`. A fact that is true of every movement -- the account
+  a wallet settles to, the contract it belongs to -- is a fact about the wallet,
+  and attaching it to each movement instead would write it into a table that
+  only grows.
+- `(*WalletService).Describe`, `DescribeRequest`, `WalletDescribe` and
+  `PUT {prefix}/{id}/description`. Labels only: the slug is under a unique
+  index and the currency and the scale decide what every amount already written
+  means, so none of the three is reachable. It is allowed on a frozen wallet,
+  because a freeze is a statement about the balance and not about what the
+  wallet is called.
+- `OpenRequest.Description` and `OpenRequest.Meta`, carried by the `store`
+  handler.
+
 - `Cart`, `CartItem`, `Product` and `LimitedProduct`: a basket of lines the
   application prices, paid for in one operation and one transaction. What is for
   sale is the application's, through an interface this package declares and never

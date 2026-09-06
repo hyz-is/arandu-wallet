@@ -33,6 +33,7 @@ const (
 	maxIdempotencyKeyLen = 128
 	maxReasonLen         = 255
 	maxCurrencyLen       = 12
+	maxDescriptionLen    = 255
 )
 
 // sortableWallet is the ordering allowlist. A column name taken directly
@@ -105,6 +106,11 @@ type OpenRequest struct {
 	Slug string
 	// Name is what a person will call it.
 	Name string
+	// Description is what a person is told it is for, and it may be empty.
+	Description string
+	// Meta is what the application attaches to the wallet itself: facts that
+	// are true of the wallet rather than of any one movement.
+	Meta Meta
 	// Currency is what its balance will count.
 	Currency Currency
 	// DecimalPlaces is the scale of that currency's minor unit, and it is fixed
@@ -121,6 +127,8 @@ func (r OpenRequest) Validate() validation.Errors {
 	validation.MaxLen(e, "slug", r.Slug, maxIdentifierLen)
 	validation.Required(e, "name", r.Name)
 	validation.MaxLen(e, "name", r.Name, maxNameLen)
+	validation.MaxLen(e, "description", r.Description, maxDescriptionLen)
+	checkMeta(e, "meta", r.Meta)
 	validation.Required(e, "currency", string(r.Currency))
 	validation.MaxLen(e, "currency", string(r.Currency), maxCurrencyLen)
 	if !ValidDecimalPlaces(r.DecimalPlaces) {
@@ -507,7 +515,10 @@ func (s *WalletService) Open(ctx context.Context, actor security.Subject, in Ope
 		return nil, errs
 	}
 
-	proposed := Wallet{HolderID: in.HolderID, Slug: in.Slug, Name: in.Name}
+	proposed := Wallet{
+		HolderID: in.HolderID, Slug: in.Slug, Name: in.Name,
+		Description: in.Description, Meta: in.Meta,
+	}
 
 	g, err := security.Authorize(ctx, s.policy, actor, WalletCreate, proposed)
 	if err != nil {
@@ -528,6 +539,8 @@ func (s *WalletService) Open(ctx context.Context, actor security.Subject, in Ope
 	candidate.HolderID = proposed.HolderID
 	candidate.Slug = proposed.Slug
 	candidate.Name = proposed.Name
+	candidate.Description = in.Description
+	candidate.Meta = in.Meta
 	candidate.Currency = in.Currency
 	candidate.DecimalPlaces = in.DecimalPlaces
 	candidate.Balance = 0
@@ -631,6 +644,92 @@ func (s *WalletService) SetCredit(ctx context.Context, actor security.Subject, i
 		Balance:       written.Balance,
 	})
 	return written, nil
+}
+
+// DescribeRequest is what changing a wallet's labels takes.
+//
+// Labels and nothing else. The slug, the currency and the scale are absent and
+// have to be: the first names which of a holder's wallets this is and is under
+// a unique index, and the other two decide what every amount already written
+// means. A wallet whose scale changed would be a wallet whose whole ledger
+// silently moved a decimal point.
+type DescribeRequest struct {
+	// WalletID is the wallet being relabelled.
+	WalletID string
+	// Name is what a person calls it. It is required, because a wallet with no
+	// name is a row in a list nobody can pick out.
+	Name string
+	// Description is what a person is told it is for, and empty clears it.
+	Description string
+	// Meta is what the application attaches to the wallet, and it replaces what
+	// was there rather than merging into it: a partial write would make
+	// "remove this name" impossible to express.
+	Meta Meta
+}
+
+// Validate reports the errors per field.
+func (r DescribeRequest) Validate() validation.Errors {
+	e := validation.Errors{}
+	validation.Required(e, "wallet_id", r.WalletID)
+	validation.MaxLen(e, "wallet_id", r.WalletID, maxIdentifierLen)
+	validation.Required(e, "name", r.Name)
+	validation.MaxLen(e, "name", r.Name, maxNameLen)
+	validation.MaxLen(e, "description", r.Description, maxDescriptionLen)
+	checkMeta(e, "meta", r.Meta)
+	return e
+}
+
+// Describe changes what a wallet is called, what it is for, and the facts the
+// application keeps about it.
+//
+// It touches no money and no column any guard reads, which is why it is allowed
+// on a frozen wallet: the freeze says this package cannot explain the balance,
+// and a sentence about what the wallet is for is not a claim about the balance.
+// A relabelling refused because of a discrepancy would be a refusal nobody could
+// act on -- the person correcting the label is usually the person investigating
+// the discrepancy.
+//
+// It is asked about twice, like every other write to one wallet: once to decide
+// whether this subject relabels wallets at all, and once about the wallet whose
+// label it is.
+func (s *WalletService) Describe(ctx context.Context, actor security.Subject, in DescribeRequest) (*Wallet, error) {
+	if errs := in.Validate(); errs.Any() {
+		return nil, errs
+	}
+
+	g, err := security.Authorize(ctx, s.policy, actor, WalletDescribe, Wallet{})
+	if err != nil {
+		return nil, err
+	}
+
+	rows := Wallets(s.db)
+	record, err := rows.NewQuery().WhereKey(in.WalletID).First(ctx, g)
+	if err != nil {
+		return nil, err
+	}
+	if record == nil {
+		return nil, ErrNotFound
+	}
+	if _, err := security.Authorize(ctx, s.policy, actor, WalletDescribe, *record); err != nil {
+		return nil, err
+	}
+
+	if _, err := rows.NewQuery().WhereKey(in.WalletID).Update(ctx, g, map[string]any{
+		"name":        in.Name,
+		"description": in.Description,
+		"meta":        in.Meta,
+	}); err != nil {
+		return nil, err
+	}
+
+	relabelled, err := rows.NewQuery().WhereKey(in.WalletID).First(ctx, g)
+	if err != nil {
+		return nil, err
+	}
+	if relabelled == nil {
+		return nil, ErrNotFound
+	}
+	return relabelled, nil
 }
 
 // Find returns one wallet, and asks the policy twice.

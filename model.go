@@ -58,6 +58,26 @@ type Wallet struct {
 	// Name is what a person calls this wallet.
 	Name string `db:"name"`
 
+	// Description is what a person is told this wallet is for, and it is empty
+	// where nobody said. It is text this package carries and never reads: what
+	// a wallet is for is the application's sentence, in the application's
+	// language, and a package that parsed it would be a package deciding what
+	// the sentences may be.
+	Description string `db:"description"`
+
+	// Meta is what the application attaches to the wallet itself: its own facts
+	// about whose money this is and why it exists.
+	//
+	// It is the wallet's own and not a movement's. A fact that is true of every
+	// movement -- the account it settles to, the contract it belongs to -- is a
+	// fact about the wallet, and attaching it to each movement instead would
+	// write it into a table that only grows.
+	//
+	// Nothing here is read by this package, exactly as on a movement: it is not
+	// indexed, not searched and not compared, and every decision about the money
+	// is made from the columns beside it.
+	Meta Meta `db:"meta"`
+
 	// Currency is what the balance counts.
 	Currency Currency `db:"currency"`
 
@@ -806,6 +826,8 @@ type Resource struct {
 	holderID      string
 	slug          string
 	name          string
+	description   string
+	meta          Meta
 	currency      Currency
 	decimalPlaces int
 	balance       Amount
@@ -820,6 +842,8 @@ func NewResource(record Wallet) Resource {
 		holderID:      record.HolderID,
 		slug:          record.Slug,
 		name:          record.Name,
+		description:   record.Description,
+		meta:          record.Meta,
 		currency:      record.Currency,
 		decimalPlaces: record.DecimalPlaces,
 		balance:       record.Balance,
@@ -851,6 +875,8 @@ func (r Resource) ToArray() map[string]any {
 		"holder_id":          r.holderID,
 		"slug":               r.slug,
 		"name":               r.name,
+		"description":        r.description,
+		"meta":               map[string]string(r.meta),
 		"currency":           string(r.currency),
 		"decimal_places":     r.decimalPlaces,
 		"balance_minor":      int64(r.balance),

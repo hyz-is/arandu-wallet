@@ -82,8 +82,8 @@ this one must prove about itself it proves in its own suite or nowhere.
 | --- | --- |
 | 15 Go files, one per role, all in one package at the root | `grep -l '^package wallet' *.go` |
 | 27 test files, 200 passing tests and subtests, and 12 more when `ARANDU_TEST_POSTGRES_DSN` names a server | `find tests -name '*_test.go'` · `go test -count=1 ./... -v \| grep -cE '^( *)--- PASS'` |
-| 12 routes | `grep -c 'm.register(r,' module.go` |
-| 15 actions the policy answers about | `grep -cE '^\t[A-Za-z]+ security.Action = ' policy.go` |
+| 13 routes | `grep -c 'm.register(r,' module.go` |
+| 16 actions the policy answers about | `grep -cE '^\t[A-Za-z]+ security.Action = ' policy.go` |
 | 5 direct dependencies, all under `arandu-io` | `go list -m -f '{{if and (not .Indirect) (not .Main)}}{{.Path}} {{.Version}}{{end}}' all` |
 
 Two of those five are database connectors, imported by the test suite and by
@@ -246,7 +246,8 @@ repository; the fifth property is what the answer has to be when a row says
 | a fee somebody charges to be paid | yes | `FeeProvider`, and the fee is credited to a third wallet |
 | a discount one payer is charged less | yes | `DiscountProvider`, recorded on the charge |
 | the same request twice moves money once | yes | the idempotency key, under a unique index, answered by replay |
-| the application's own facts on a movement | operations and entries only | `Meta`; the wallet row itself carries none — **open** |
+| the application's own facts on a movement | yes | `Meta`, on operations, entries and the wallet row itself |
+| what a wallet is called and what it is for | yes | `Open` takes them, `Describe` changes them, and neither touches money |
 | a retry when the engine reports a conflict | yes | classified around `commit` by SQLSTATE, and `ErrConcurrencyConflict` when the attempts run out |
 | a balance repaired after it stops matching its ledger | yes | `Reconcile` reports and freezes the wallet; `Rebuild` closes the difference by appending one settled entry and touching no balance |
 | an isolation level the guard can be read against | yes | read committed, named as the first statement of every transaction this package opens |

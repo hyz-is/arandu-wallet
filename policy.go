@@ -59,6 +59,13 @@ const (
 	WalletRefund security.Action = "wallet.refund"
 	// WalletPurchases is reading what a wallet has bought.
 	WalletPurchases security.Action = "wallet.purchases"
+	// WalletDescribe is changing what a wallet is called, what it is for, and
+	// the facts the application keeps about it.
+	//
+	// It is separate from WalletCreate because relabelling an existing wallet
+	// and opening a new one are different things to be trusted with, and it is
+	// separate from every action that moves money because it moves none.
+	WalletDescribe security.Action = "wallet.describe"
 	// WalletReconcile is checking that a wallet's ledger still adds up to its
 	// balance, freezing it where it does not, and appending the entry that
 	// closes the difference.
@@ -149,7 +156,8 @@ func (WalletPolicy) Can(ctx context.Context, s security.Subject, a security.Acti
 		case WalletView, WalletList, WalletCreate, WalletHistory,
 			WalletDeposit, WalletWithdraw, WalletTransfer, WalletReverse,
 			WalletConfirm, WalletCredit, WalletForce,
-			WalletPay, WalletRefund, WalletPurchases, WalletReconcile:
+			WalletPay, WalletRefund, WalletPurchases, WalletReconcile,
+			WalletDescribe:
 			return nil
 		}
 	}
@@ -170,7 +178,8 @@ func (WalletPolicy) Can(ctx context.Context, s security.Subject, a security.Acti
 	if isProbe(record) {
 		switch a {
 		case WalletList, WalletView, WalletHistory, WalletDeposit, WalletWithdraw,
-			WalletTransfer, WalletConfirm, WalletPay, WalletPurchases:
+			WalletTransfer, WalletConfirm, WalletPay, WalletPurchases,
+			WalletDescribe:
 			return nil
 		}
 		return fmt.Errorf("no rule allows %s on wallet", a)
@@ -180,7 +189,8 @@ func (WalletPolicy) Can(ctx context.Context, s security.Subject, a security.Acti
 	if s.ID != "" && s.ID == record.HolderID {
 		switch a {
 		case WalletView, WalletHistory, WalletCreate, WalletDeposit, WalletWithdraw,
-			WalletTransfer, WalletConfirm, WalletPay, WalletPurchases:
+			WalletTransfer, WalletConfirm, WalletPay, WalletPurchases,
+			WalletDescribe:
 			return nil
 		}
 	}
