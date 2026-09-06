@@ -82,8 +82,8 @@ this one must prove about itself it proves in its own suite or nowhere.
 | --- | --- |
 | 15 Go files, one per role, all in one package at the root | `grep -l '^package wallet' *.go` |
 | 27 test files, 200 passing tests and subtests, and 12 more when `ARANDU_TEST_POSTGRES_DSN` names a server | `find tests -name '*_test.go'` · `go test -count=1 ./... -v \| grep -cE '^( *)--- PASS'` |
-| 14 routes | `grep -c 'm.register(r,' module.go` |
-| 16 actions the policy answers about | `grep -cE '^\t[A-Za-z]+ security.Action = ' policy.go` |
+| 16 routes | `grep -c 'm.register(r,' module.go` |
+| 17 actions the policy answers about | `grep -cE '^\t[A-Za-z]+ security.Action = ' policy.go` |
 | 5 direct dependencies, all under `arandu-io` | `go list -m -f '{{if and (not .Indirect) (not .Main)}}{{.Path}} {{.Version}}{{end}}' all` |
 
 Two of those five are database connectors, imported by the test suite and by
@@ -255,7 +255,7 @@ repository; the fifth property is what the answer has to be when a row says
 | statement, ledger, running balance | yes | `History`, `Statement`, `Entry.BalanceAfter` |
 | told what the money did, after it did it | yes | `Listener` |
 | lookup by holder and slug, and a name for the default one | yes | `FindBySlug`, `DefaultSlug`, and `GET {prefix}/holders/{holder}/{slug}`. It opens nothing: a read that created what it did not find would guess a currency and a scale |
-| closing or archiving a wallet | no | **open** |
+| closing a wallet, and putting it back | yes | `Close`, `Reopen`, `WalletClose`. The row and the ledger stay; one column leaves, and it requires a zero balance |
 | typed errors from a rate source | no | **open**: what the provider returns travels out as it came |
 | a free line in a basket | no | **open**: a price of zero or less is refused |
 | an empty balance told apart from an insufficient one | no | **open**: both answer `ErrInsufficientFunds` |

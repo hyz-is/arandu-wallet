@@ -132,6 +132,20 @@ type Wallet struct {
 	// both saw as clear.
 	Frozen Flag `db:"frozen"`
 
+	// Closed takes the wallet out of service.
+	//
+	// It is somebody's decision rather than a defect: the holder left, the
+	// contract ended, the account was consolidated into another. Money stops
+	// moving and everything already written stays readable, which is why this
+	// is a column and not a deleted row -- a wallet whose row was removed takes
+	// its ledger's meaning with it, and a statement that cannot name the wallet
+	// it belongs to is a statement nobody can audit.
+	//
+	// It is a second column beside Frozen and not a second value in one, and
+	// the two are kept apart because they are answered differently. See
+	// servable.
+	Closed Flag `db:"closed"`
+
 	// CreatedAt is when the wallet was opened, in UTC.
 	CreatedAt time.Time `db:"created_at"`
 
@@ -851,6 +865,18 @@ var (
 	// happened when nothing did.
 	ErrLedgerBalanced = errors.New("wallet: this wallet's ledger already adds up to its balance, so there is nothing to adjust")
 
+	// ErrWalletClosed is returned when a movement names a wallet somebody has
+	// taken out of service. It is a different answer from ErrWalletFrozen and
+	// has a different cure: a freeze is lifted by closing the difference the
+	// ledger shows, and this is lifted by deciding to put the wallet back.
+	ErrWalletClosed = errors.New("wallet: this wallet is closed, and money does not move in or out of a wallet that is out of service")
+
+	// ErrWalletHoldsMoney is returned when closing a wallet that still holds a
+	// balance. Closing one would leave money nobody can reach, so it is moved
+	// out first and the refusal comes from the statement that would have closed
+	// it.
+	ErrWalletHoldsMoney = errors.New("wallet: this wallet still holds money, and closing it would leave a balance nothing can reach")
+
 	// ErrUnsupportedDialect is returned when the handle speaks an engine this
 	// package does not verify. The guard on a withdrawal is a predicate on an
 	// update, and what an update sees of a row another transaction is changing
@@ -876,6 +902,8 @@ type Resource struct {
 	decimalPlaces int
 	balance       Amount
 	creditLimit   Amount
+	frozen        Flag
+	closed        Flag
 	createdAt     time.Time
 }
 
@@ -892,6 +920,8 @@ func NewResource(record Wallet) Resource {
 		decimalPlaces: record.DecimalPlaces,
 		balance:       record.Balance,
 		creditLimit:   record.CreditLimit,
+		frozen:        record.Frozen,
+		closed:        record.Closed,
 		createdAt:     record.CreatedAt,
 	}
 }
@@ -927,6 +957,8 @@ func (r Resource) ToArray() map[string]any {
 		"balance":            r.balance.Format(r.decimalPlaces),
 		"credit_limit_minor": int64(r.creditLimit),
 		"credit_limit":       r.creditLimit.Format(r.decimalPlaces),
+		"frozen":             bool(r.frozen),
+		"closed":             bool(r.closed),
 		"created_at":         r.createdAt.UTC().Format(time.RFC3339),
 	}
 }

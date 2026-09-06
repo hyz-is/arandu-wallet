@@ -66,6 +66,13 @@ const (
 	// and opening a new one are different things to be trusted with, and it is
 	// separate from every action that moves money because it moves none.
 	WalletDescribe security.Action = "wallet.describe"
+	// WalletClose is taking a wallet out of service, and putting it back.
+	//
+	// One action for both, because deciding that a wallet is no longer used and
+	// deciding that it is again are the same authority over the same fact: an
+	// action per direction would let somebody hold one half of it, and the half
+	// they held would be the one that stops other people's money moving.
+	WalletClose security.Action = "wallet.close"
 	// WalletReconcile is checking that a wallet's ledger still adds up to its
 	// balance, freezing it where it does not, and appending the entry that
 	// closes the difference.
@@ -157,7 +164,7 @@ func (WalletPolicy) Can(ctx context.Context, s security.Subject, a security.Acti
 			WalletDeposit, WalletWithdraw, WalletTransfer, WalletReverse,
 			WalletConfirm, WalletCredit, WalletForce,
 			WalletPay, WalletRefund, WalletPurchases, WalletReconcile,
-			WalletDescribe:
+			WalletDescribe, WalletClose:
 			return nil
 		}
 	}

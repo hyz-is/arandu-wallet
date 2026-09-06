@@ -20,6 +20,12 @@ const (
 	WalletOpened EventKind = "wallet.opened"
 	// WalletCreditChanged is a change to how far below zero a wallet may go.
 	WalletCreditChanged EventKind = "wallet.credit_changed"
+	// WalletWasClosed is a wallet somebody took out of service. Its money is
+	// zero, because that is what closing required, and its ledger is exactly as
+	// readable as it was.
+	WalletWasClosed EventKind = "wallet.closed"
+	// WalletWasReopened is a wallet somebody put back in service.
+	WalletWasReopened EventKind = "wallet.reopened"
 	// MoneyMoved is one movement that counted: a balance changed by exactly the
 	// amount on the event, in the direction on it.
 	MoneyMoved EventKind = "wallet.money_moved"

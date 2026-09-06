@@ -147,6 +147,7 @@ func TestTheModuleRegistersItsRoutesUnderItsPrefix(t *testing.T) {
 	// so a route that lost its handler disappears from this list rather than
 	// answering with a panic.
 	want := []string{
+		"DELETE /widgets/{id}/closure",
 		"GET /widgets",
 		"GET /widgets/holders/{holder}/{slug}",
 		"GET /widgets/{id}",
@@ -159,6 +160,7 @@ func TestTheModuleRegistersItsRoutesUnderItsPrefix(t *testing.T) {
 		"POST /widgets/{id}/deposits",
 		"POST /widgets/{id}/transfers",
 		"POST /widgets/{id}/withdrawals",
+		"PUT /widgets/{id}/closure",
 		"PUT /widgets/{id}/credit",
 		"PUT /widgets/{id}/description",
 	}

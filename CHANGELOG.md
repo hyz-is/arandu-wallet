@@ -59,6 +59,16 @@ they describe releases of the template and not of this package.
 
 ### Added
 
+- `(*WalletService).Close`, `(*WalletService).Reopen`, `CloseRequest`,
+  `WalletClose`, `Wallet.Closed`, the `closed` column, `ErrWalletClosed`,
+  `ErrWalletHoldsMoney`, `WalletWasClosed`, `WalletWasReopened`, and
+  `PUT`/`DELETE {prefix}/{id}/closure`. The row and the ledger stay readable,
+  which is the difference between closing and deleting; closing requires a zero
+  balance, guarded by the statement that closes.
+- `servable`, the one gate every balance statement carries, with its two reasons
+  named: frozen means the ledger stopped explaining the balance and is lifted by
+  `Rebuild`; closed means somebody took the wallet out of service and is lifted
+  by `Reopen`. `Resource` answers with both.
 - `(*WalletService).FindBySlug`, `DefaultSlug` and
   `GET {prefix}/holders/{holder}/{slug}`. The pair of holder and slug is what
   names a wallet and has been under a unique index since the table was created;

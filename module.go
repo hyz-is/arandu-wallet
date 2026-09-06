@@ -198,6 +198,8 @@ func (m *Module) Routes(r *fhttp.Router) {
 	m.register(r, "wallet.credit", m.credit)
 	m.register(r, "wallet.describe", m.describe)
 	m.register(r, "wallet.named", m.named)
+	m.register(r, "wallet.close", m.close)
+	m.register(r, "wallet.reopen", m.reopen)
 	m.register(r, "wallet.deposit", m.deposit)
 	m.register(r, "wallet.withdraw", m.withdraw)
 	m.register(r, "wallet.transfer", m.transfer)
@@ -427,6 +429,33 @@ func (m *Module) store(ctx *fhttp.Context) error {
 // the read is scoped by it before either of these is compared.
 func (m *Module) named(ctx *fhttp.Context) error {
 	record, err := m.svc.FindBySlug(ctx.Ctx(), m.subject(ctx.Request), ctx.Param("holder"), ctx.Param("slug"))
+	if err != nil {
+		return m.answer(ctx, err)
+	}
+	if !ctx.WantsJSON() {
+		return ctx.Redirect(m.cfg.Prefix + "/" + record.ID)
+	}
+	return ctx.JSON(stdhttp.StatusOK, resourceFromPointer(record))
+}
+
+// close takes one wallet out of service.
+func (m *Module) close(ctx *fhttp.Context) error {
+	record, err := m.svc.Close(ctx.Ctx(), m.subject(ctx.Request), CloseRequest{
+		WalletID: ctx.Param("id"),
+		Reason:   ctx.Input("reason"),
+	})
+	if err != nil {
+		return m.answer(ctx, err)
+	}
+	if !ctx.WantsJSON() {
+		return ctx.Redirect(m.cfg.Prefix + "/" + record.ID)
+	}
+	return ctx.JSON(stdhttp.StatusOK, resourceFromPointer(record))
+}
+
+// reopen puts one closed wallet back in service.
+func (m *Module) reopen(ctx *fhttp.Context) error {
+	record, err := m.svc.Reopen(ctx.Ctx(), m.subject(ctx.Request), ctx.Param("id"))
 	if err != nil {
 		return m.answer(ctx, err)
 	}
@@ -898,6 +927,12 @@ func (m *Module) answer(ctx *fhttp.Context, err error) error {
 	case errors.Is(err, ErrWalletFrozen):
 		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusConflict, "that wallet is frozen because its ledger and its balance disagree")
 		return nil
+	case errors.Is(err, ErrWalletClosed):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusConflict, "that wallet is closed")
+		return nil
+	case errors.Is(err, ErrWalletHoldsMoney):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusConflict, "that wallet still holds money, and closing it would leave a balance nothing can reach")
+		return nil
 	case errors.Is(err, ErrWalletNotFrozen):
 		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusConflict, "that wallet is not frozen, so there is nothing to rebuild")
 		return nil
@@ -996,6 +1031,7 @@ func (m *Module) Migrations() []foundation.Migration {
 		createWalletPurchases{},
 		addWalletFreeze{},
 		addWalletDescription{},
+		addWalletClosure{},
 	}
 }
 
@@ -1015,6 +1051,7 @@ var (
 	_ migrations.ReversibleMigration = createWalletPurchases{}
 	_ migrations.ReversibleMigration = addWalletFreeze{}
 	_ migrations.ReversibleMigration = addWalletDescription{}
+	_ migrations.ReversibleMigration = addWalletClosure{}
 )
 
 // createWallets is the balances table.
@@ -1540,5 +1577,37 @@ func (addWalletDescription) Down(ctx context.Context, conn migrations.Connection
 	return conn.Schema().Table(ctx, walletsTable, func(table *schema.Blueprint) {
 		table.DropColumn("description")
 		table.DropColumn("meta")
+	})
+}
+
+// addWalletClosure is whether a wallet is still in service.
+type addWalletClosure struct{ migrations.BaseMigration }
+
+// GetName is the migration's identity, and it carries the order.
+func (addWalletClosure) GetName() string { return "20260906_0012_add_wallet_closure" }
+
+// Up adds to the balances table the column that takes a wallet out of service.
+//
+// A small integer and not a boolean column, and not a nullable timestamp
+// either. The integer is the decision Flag carries everywhere else here; the
+// timestamp is what the reference uses, and what it costs is a column that is
+// read as a yes-or-no by every statement and as a moment by nobody, plus a NULL
+// in a schema that has none. When a wallet was closed reaches the application
+// through the event, where the rest of what happened to a wallet already goes.
+//
+// It defaults to zero, which is every wallet that existed before this ran and
+// every wallet opened afterwards. So the previous version of the binary, which
+// does not name this column, goes on writing rows the new guard reads as in
+// service -- which is what lets the two serve one table during a rollout.
+func (addWalletClosure) Up(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Table(ctx, walletsTable, func(table *schema.Blueprint) {
+		table.UnsignedSmallInteger("closed").Default(0)
+	})
+}
+
+// Down drops the column, which puts every wallet back in service.
+func (addWalletClosure) Down(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Table(ctx, walletsTable, func(table *schema.Blueprint) {
+		table.DropColumn("closed")
 	})
 }

@@ -652,6 +652,182 @@ func (s *WalletService) SetCredit(ctx context.Context, actor security.Subject, i
 	return written, nil
 }
 
+// CloseRequest is what taking a wallet out of service takes.
+type CloseRequest struct {
+	// WalletID is the wallet being closed.
+	WalletID string
+	// Reason is why it was closed. It is required and it is carried on the
+	// event rather than on the row: what this package keeps about a wallet is
+	// what decides about its money, and why somebody stopped using it is the
+	// application's record to write where it writes the rest of its history.
+	Reason string
+}
+
+// Validate reports the errors per field.
+func (r CloseRequest) Validate() validation.Errors {
+	e := validation.Errors{}
+	validation.Required(e, "wallet_id", r.WalletID)
+	validation.MaxLen(e, "wallet_id", r.WalletID, maxIdentifierLen)
+	validation.Required(e, "reason", r.Reason)
+	validation.MaxLen(e, "reason", r.Reason, maxReasonLen)
+	return e
+}
+
+// Close takes a wallet out of service.
+//
+// The row stays and the ledger stays readable, which is the difference between
+// this and deleting: a wallet whose row was removed takes the meaning of its own
+// statement with it, and every entry naming it becomes a movement nobody can
+// place. What changes is one column, and every statement that moves a balance
+// carries it -- see servable -- so a wallet closed between a read and a write is
+// refused at the write.
+//
+// It requires the balance to be zero, and the requirement is a predicate on the
+// statement rather than a check before it: a wallet closed with money in it is
+// money nothing can reach afterwards, and a balance read a moment earlier is a
+// balance a concurrent deposit has already changed. Where it does not hold, the
+// answer is ErrWalletHoldsMoney and nothing changed.
+//
+// A frozen wallet can be closed. The freeze says this package cannot explain the
+// balance; if that balance is zero, closing it is a decision somebody is
+// entitled to make, and the ledger stays exactly as readable afterwards.
+func (s *WalletService) Close(ctx context.Context, actor security.Subject, in CloseRequest) (*Wallet, error) {
+	if errs := in.Validate(); errs.Any() {
+		return nil, errs
+	}
+
+	g, err := security.Authorize(ctx, s.policy, actor, WalletClose, Wallet{})
+	if err != nil {
+		return nil, err
+	}
+
+	record, err := Wallets(s.db).NewQuery().WhereKey(in.WalletID).First(ctx, g)
+	if err != nil {
+		return nil, err
+	}
+	if record == nil {
+		return nil, ErrNotFound
+	}
+	if _, err := security.Authorize(ctx, s.policy, actor, WalletClose, *record); err != nil {
+		return nil, err
+	}
+	return s.setClosed(ctx, g, in.WalletID, true)
+}
+
+// Reopen puts a closed wallet back in service.
+//
+// It exists because closing is a decision and decisions are made wrongly. It
+// changes the one column back and nothing else: the ledger was never touched,
+// so a reopened wallet is the wallet it was, with the balance it had -- which is
+// zero, because that is what closing required.
+//
+// It is the same action as closing. Deciding that a wallet is out of service and
+// deciding that it is back are the same authority over the same fact, and a
+// separate action would let somebody hold one half of it.
+func (s *WalletService) Reopen(ctx context.Context, actor security.Subject, walletID string) (*Wallet, error) {
+	e := validation.Errors{}
+	validation.Required(e, "wallet_id", walletID)
+	validation.MaxLen(e, "wallet_id", walletID, maxIdentifierLen)
+	if e.Any() {
+		return nil, e
+	}
+
+	g, err := security.Authorize(ctx, s.policy, actor, WalletClose, Wallet{})
+	if err != nil {
+		return nil, err
+	}
+
+	record, err := Wallets(s.db).NewQuery().WhereKey(walletID).First(ctx, g)
+	if err != nil {
+		return nil, err
+	}
+	if record == nil {
+		return nil, ErrNotFound
+	}
+	if _, err := security.Authorize(ctx, s.policy, actor, WalletClose, *record); err != nil {
+		return nil, err
+	}
+	return s.setClosed(ctx, g, walletID, false)
+}
+
+// setClosed is the guarded write both Close and Reopen make, and nothing else.
+//
+// The authorization is not in here, and that is deliberate rather than an
+// oversight: a Service method whose policy call sits behind a helper is a method
+// tests/Unit/audit_test.go cannot see the boundary of, and an audit that reads
+// syntax has to be able to read it. So each exported method asks, and this
+// writes.
+func (s *WalletService) setClosed(ctx context.Context, g security.Grant, walletID string, closing bool) (*Wallet, error) {
+	rows := Wallets(s.db)
+
+	// The state being left is in the predicate as well as the state being
+	// reached, so closing a wallet twice writes once and the second call is
+	// told which of the two things happened.
+	was, becomes := int64(0), int64(1)
+	if !closing {
+		was, becomes = 1, 0
+	}
+	page := rows.NewQuery().WhereKey(walletID).Where("closed", "=", was)
+	if closing {
+		page = page.Where("balance", "=", int64(0))
+	}
+	affected, err := page.Update(ctx, g, map[string]any{"closed": becomes})
+	if err != nil {
+		return nil, err
+	}
+	if affected == 0 {
+		return nil, s.whyNotClosed(ctx, g, walletID, closing)
+	}
+
+	written, err := rows.NewQuery().WhereKey(walletID).First(ctx, g)
+	if err != nil {
+		return nil, err
+	}
+	if written == nil {
+		return nil, ErrNotFound
+	}
+
+	kind := WalletWasClosed
+	if !closing {
+		kind = WalletWasReopened
+	}
+	s.notify(ctx, g, Event{
+		Kind:          kind,
+		WalletID:      written.ID,
+		Currency:      written.Currency,
+		DecimalPlaces: written.DecimalPlaces,
+		Balance:       written.Balance,
+	})
+	return written, nil
+}
+
+// whyNotClosed reads back the row a close or a reopen did not match, and says
+// which of the two things stopped it.
+//
+// After the statement and never instead of it. The write is what decided; this
+// only turns "no rows" into a sentence, and it reads the row again because the
+// answer depends on what the row says now rather than on what it said when the
+// wallet was loaded.
+func (s *WalletService) whyNotClosed(ctx context.Context, g security.Grant, walletID string, closing bool) error {
+	record, err := Wallets(s.db).NewQuery().WhereKey(walletID).First(ctx, g)
+	if err != nil {
+		return err
+	}
+	if record == nil {
+		return ErrNotFound
+	}
+	switch {
+	case closing && bool(record.Closed):
+		// Already out of service, which is what was asked for.
+		return ErrWalletClosed
+	case closing:
+		return ErrWalletHoldsMoney
+	}
+	// A reopen matched nothing and the wallet is not closed, so it was already
+	// in service.
+	return ErrNotFound
+}
+
 // DefaultSlug is the slug of the wallet a holder has when nobody said which.
 //
 // A constant rather than a rule: this package opens no wallet by itself and
@@ -1669,6 +1845,42 @@ func withdrawalFloor(amount Amount, force bool) query.Expression {
 	return query.Raw(strconv.FormatInt(int64(amount), 10) + ` - "credit_limit"`)
 }
 
+// servable is the gate on money, and it has exactly two reasons.
+//
+// Every statement that moves a balance carries it, so a wallet that stopped
+// being servable between the read that loaded it and the write that would move
+// it is refused at the write. That is the same arrangement the credit limit
+// has, for the same reason: an answer read a moment earlier is an answer two
+// concurrent movements both saw.
+//
+// # The two reasons, and why they are two columns
+//
+// Frozen means this package no longer knows what the wallet holds: its ledger
+// stopped adding up to its balance. Closed means somebody took the wallet out
+// of service. They are kept apart because they are lifted by different things
+// and answered to different people -- a freeze is lifted by Rebuild, which
+// appends the row that explains the balance, and a closure is lifted by Reopen,
+// which decides. A single "unavailable" column would make those two one, and
+// the first person to look at a stopped wallet would not be able to tell
+// whether it needs an investigation or a decision.
+//
+// # A third reason does not belong here
+//
+// This is the shape that invites one: a gate with two entries reads like a list
+// somebody may add to. It is not. Everything this package refuses about money
+// is refused for a reason it can name in the row -- not enough balance, past
+// the credit limit, past the range of the column -- and each of those is a
+// predicate about the movement rather than a state of the wallet. A third
+// column here would mean a third state a wallet can be stuck in, with a third
+// way out that somebody has to write, and a stopped wallet would need three
+// questions asked before anybody could say what is wrong with it. What looks
+// like a third reason is nearly always the application's own: an application
+// that wants to stop a wallet for a reason of its own writes that rule in its
+// own policy, where it can also say who may lift it.
+func servable(rows *model.Builder[Wallet]) *model.Builder[Wallet] {
+	return rows.Where("frozen", "=", int64(0)).Where("closed", "=", int64(0))
+}
+
 // stepped is the extra column every balance statement carries: the wallet's
 // entry counter, moved in the same statement as the balance.
 //
@@ -2290,6 +2502,7 @@ func (s *WalletService) move(ctx context.Context, g security.Grant, operationID 
 		affected, err = rows.NewQuery().
 			WhereKey(m.wallet.ID).
 			Where("frozen", "=", int64(1)).
+			Where("closed", "=", int64(0)).
 			Where("balance", "=", int64(m.wallet.Balance)).
 			Where("last_sequence", "=", m.wallet.LastSequence).
 			Update(ctx, g, released())
@@ -2300,9 +2513,7 @@ func (s *WalletService) move(ctx context.Context, g security.Grant, operationID 
 		// in order -- and the position has to be one nothing else can be
 		// holding, which is why it comes from the statement rather than from a
 		// number read here.
-		affected, err = rows.NewQuery().
-			WhereKey(m.wallet.ID).
-			Where("frozen", "=", int64(0)).
+		affected, err = servable(rows.NewQuery().WhereKey(m.wallet.ID)).
 			Update(ctx, g, stepped())
 	case m.kind == EntryWithdraw:
 		// The balance has to still be enough at the moment of the write, and
@@ -2310,17 +2521,13 @@ func (s *WalletService) move(ctx context.Context, g security.Grant, operationID 
 		// freeze is in the same predicate for the same reason: a wallet whose
 		// ledger stopped explaining its balance is refused by the write, not by
 		// a flag somebody read before it.
-		affected, err = rows.NewQuery().
-			WhereKey(m.wallet.ID).
-			Where("frozen", "=", int64(0)).
+		affected, err = servable(rows.NewQuery().WhereKey(m.wallet.ID)).
 			Where("balance", ">=", withdrawalFloor(m.amount, m.force)).
 			Decrement(ctx, g, "balance", int64(m.amount), stepped())
 	case m.kind == EntryDeposit:
 		// And it has to still have room, or the column wraps into a negative
 		// balance that no rule in this package would ever have allowed.
-		affected, err = rows.NewQuery().
-			WhereKey(m.wallet.ID).
-			Where("frozen", "=", int64(0)).
+		affected, err = servable(rows.NewQuery().WhereKey(m.wallet.ID)).
 			Where("balance", "<=", int64(m.amount.Ceiling())).
 			Increment(ctx, g, "balance", int64(m.amount), stepped())
 	default:
@@ -2352,6 +2559,8 @@ func (s *WalletService) move(ctx context.Context, g security.Grant, operationID 
 			// Read off the row this transaction just failed to update, so the
 			// answer is the column's and not a flag from before the statement.
 			return Entry{}, ErrWalletFrozen
+		case bool(after.Closed):
+			return Entry{}, ErrWalletClosed
 		case m.pending:
 			// Nothing about the money can have refused this one, so the row is
 			// gone: another statement in this transaction would have read it.
