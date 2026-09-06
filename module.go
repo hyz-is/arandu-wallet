@@ -129,7 +129,7 @@ func New(cfg Config, db *data.DB, sessions *security.SessionStore) (*Module, err
 	cfg = cfg.withDefaults()
 	return &Module{
 		cfg:      cfg,
-		svc:      NewWalletService(db, cfg.Rates, cfg.Fees, cfg.Discounts),
+		svc:      NewWalletService(db, cfg.Rates, cfg.Fees, cfg.Discounts, cfg.Listeners...),
 		sessions: sessions,
 	}, nil
 }

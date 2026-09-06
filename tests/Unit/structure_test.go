@@ -100,13 +100,13 @@ func TestThePackageUsesTheModelFirstDataPath(t *testing.T) {
 		},
 		"service.go": {
 			"db        *data.DB",
-			"func NewWalletService(db *data.DB, rates RateProvider, fees FeeProvider, discounts DiscountProvider) *WalletService",
+			"func NewWalletService(db *data.DB, rates RateProvider, fees FeeProvider, discounts DiscountProvider, listeners ...Listener) *WalletService",
 			"Wallets(s.db)",
 			") (*Wallet, error)",
 			") ([]*Wallet, error)",
 		},
 		"module.go": {
-			"NewWalletService(db, cfg.Rates, cfg.Fees, cfg.Discounts)",
+			"NewWalletService(db, cfg.Rates, cfg.Fees, cfg.Discounts, cfg.Listeners...)",
 		},
 	}
 	for path, required := range wants {

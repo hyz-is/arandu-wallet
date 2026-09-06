@@ -60,6 +60,7 @@ type WalletService struct {
 	rates     RateProvider
 	fees      FeeProvider
 	discounts DiscountProvider
+	listeners []Listener
 }
 
 // NewWalletService wires the service over the application's database handle.
@@ -70,12 +71,23 @@ type WalletService struct {
 // them. A transfer that would need a rate is refused rather than guessed at,
 // and a payment with no schedule is a payment with no fee.
 //
-// They are three parameters and not a struct of options, for the reason Config
-// is a struct and not a map: what this service is made of is written at the one
-// place that builds it, and reading that place is how somebody learns what the
-// package reaches for.
-func NewWalletService(db *data.DB, rates RateProvider, fees FeeProvider, discounts DiscountProvider) *WalletService {
-	return &WalletService{db: db, rates: rates, fees: fees, discounts: discounts}
+// They are parameters and not a struct of options, for the reason Config is a
+// struct and not a map: what this service is made of is written at the one place
+// that builds it, and reading that place is how somebody learns what the package
+// reaches for.
+//
+// The listeners are last and variadic because there may be none, which is the
+// ordinary case: an application that wants to be told what its money did says so
+// by passing something, and one that does not passes nothing rather than a nil
+// it has to remember the meaning of.
+func NewWalletService(db *data.DB, rates RateProvider, fees FeeProvider, discounts DiscountProvider, listeners ...Listener) *WalletService {
+	return &WalletService{
+		db:        db,
+		rates:     rates,
+		fees:      fees,
+		discounts: discounts,
+		listeners: append([]Listener(nil), listeners...),
+	}
 }
 
 // OpenRequest is what opening a wallet takes.
@@ -533,6 +545,14 @@ func (s *WalletService) Open(ctx context.Context, actor security.Subject, in Ope
 		}
 		return nil, err
 	}
+
+	s.notify(ctx, g, Event{
+		Kind:          WalletOpened,
+		WalletID:      candidate.ID,
+		Currency:      candidate.Currency,
+		DecimalPlaces: candidate.DecimalPlaces,
+		Balance:       candidate.Balance,
+	})
 	return candidate, nil
 }
 
@@ -600,6 +620,15 @@ func (s *WalletService) SetCredit(ctx context.Context, actor security.Subject, i
 	if written == nil {
 		return nil, ErrNotFound
 	}
+
+	s.notify(ctx, g, Event{
+		Kind:          WalletCreditChanged,
+		WalletID:      written.ID,
+		Currency:      written.Currency,
+		DecimalPlaces: written.DecimalPlaces,
+		Amount:        written.CreditLimit,
+		Balance:       written.Balance,
+	})
 	return written, nil
 }
 
@@ -1562,6 +1591,13 @@ func (s *WalletService) commit(ctx context.Context, g security.Grant, op operati
 		}
 		return Receipt{}, err
 	}
+
+	// After the transaction, and never inside it. Everything above either
+	// committed or left nothing behind, so what is told here is what happened
+	// -- a listener told about a movement that was then rolled back has told
+	// somebody about a thing that did not happen.
+	s.notify(ctx, g, movedEvents(*record, entries, touched(movements))...)
+
 	return Receipt{
 		Operation:  *record,
 		Entries:    entries,
@@ -1569,6 +1605,22 @@ func (s *WalletService) commit(ctx context.Context, g security.Grant, op operati
 		Charge:     charge,
 		Purchases:  purchases,
 	}, nil
+}
+
+// touched is the wallets an operation moved, by identifier.
+//
+// They are read off the movements rather than the database, because the
+// movements already hold them: an event says what currency and scale an amount
+// is in, and a read to find that out again would be a statement per wallet after
+// the transaction that changed it.
+func touched(movements []movement) map[string]Wallet {
+	out := make(map[string]Wallet, len(movements))
+	for _, m := range movements {
+		if m.wallet != nil {
+			out[m.wallet.ID] = *m.wallet
+		}
+	}
+	return out
 }
 
 // recordPurchases writes the lines of a basket, inside the caller's

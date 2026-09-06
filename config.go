@@ -80,6 +80,19 @@ type Config struct {
 	// gets one and why is a question about customers, which this package has
 	// no way to answer and no business answering.
 	Discounts DiscountProvider
+
+	// Listeners are told what the money did, after it did it.
+	//
+	// Empty is the ordinary case. Each one is called once the write has
+	// committed, in the goroutine that made it, so what a listener is told is
+	// what happened -- a movement that was rolled back is never announced, and
+	// there is no message that would take an announcement back.
+	//
+	// There is no dispatcher here and no queue. What an application does with an
+	// event is the application's, and one that wants the work off the request
+	// hands it to whatever it already uses; a queue in this package would be a
+	// second one beside the application's, with its own failures to learn.
+	Listeners []Listener
 }
 
 // Validate reports what the configuration cannot be used with.
