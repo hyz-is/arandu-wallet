@@ -222,6 +222,18 @@ they describe releases of the template and not of this package.
 - An entry answers with `operation_kind`, a receipt with `conversion`, and a
   page of a ledger with `conversions` beside its items.
 
+### Fixed
+
+- The published module carries its view sources. They were kept at
+  `resources/views/vendor/wallet/`, and `go mod` drops every path with a segment
+  named `vendor` when it packs a module, so the files were in the repository and
+  absent from the archive the proxy serves: a project that imported this package
+  failed to build with `pattern resources/views: no matching files found`, and
+  every gate that compiles this repository was green. The archive keeps them
+  under `resources/publish/` and the publication carries where they come from
+  and where they go, so the files still land at `resources/views/vendor/wallet/`
+  under the same view names.
+
 ## [0.4.0] - 2026-09-05
 
 ### Added
