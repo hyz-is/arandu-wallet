@@ -82,6 +82,13 @@ type Config struct {
 	// no way to answer and no business answering.
 	Discounts DiscountProvider
 
+	// CSRF issues the token every form on these screens carries.
+	//
+	// It is required, because every screen here writes: a page rendered without
+	// a token is a page whose buttons the application refuses, and finding that
+	// out from a form that does nothing is worse than finding it out at boot.
+	CSRF *security.CSRF
+
 	// Translator is the application's own catalogue, asked before the one this
 	// package ships.
 	//
@@ -128,6 +135,9 @@ func (c Config) Validate() error {
 	}
 	if c.PageSize < 0 || c.PageSize > MaxPageSize {
 		return fmt.Errorf("wallet: Config.PageSize is %d, and has to be between 0 and %d, where 0 means %d", c.PageSize, MaxPageSize, DefaultPageSize)
+	}
+	if c.CSRF == nil {
+		return fmt.Errorf("wallet: Config.CSRF is required: every screen this module draws moves money, and a form with no token is a form the application refuses")
 	}
 	return nil
 }

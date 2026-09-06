@@ -6,6 +6,8 @@ github.com/arandu-io/hesape/database/connectors/pgx v0.7.1 h1:QcK27YxrIlbctnsMS6
 github.com/arandu-io/hesape/database/connectors/pgx v0.7.1/go.mod h1:HVq+IRmKzm8lTE3e3yyTD0/xPoa65wIBLmJ1cMQQ3K4=
 github.com/arandu-io/hesape/database/connectors/sqlite v0.7.1 h1:WVzNGpZpaSUL+RHXyyxHT7miUk397RKh70yzmHDAYFM=
 github.com/arandu-io/hesape/database/connectors/sqlite v0.7.1/go.mod h1:UV7Sfqbq+AFZJahvkefxJv6BKETRtInpw4YMzMnhOuE=
+github.com/arandu-io/kyse v0.18.0 h1:swqDuWzRglV0YWVhd7YzqJlcFSCFRKUy4X2kZEs4qZg=
+github.com/arandu-io/kyse v0.18.0/go.mod h1:ARRYvVvSV1oaZ26k/6zOh2xbXYdj6nLe7GoZpbO3heY=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=

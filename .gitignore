@@ -31,3 +31,8 @@ Thumbs.db
 *~
 .idea/
 .vscode/
+
+# Where the suite copies the compiled views so a compiler can see them. The go
+# command skips any directory named vendor, and the build output lands under
+# one, so this is the only way to put those files in front of it.
+.views-compile-check/

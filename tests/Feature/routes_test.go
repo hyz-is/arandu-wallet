@@ -36,10 +36,18 @@ const appKey = "0123456789abcdef0123456789abcdef"
 // repository that can still fix it.
 const reservedPrefix = "/_arandu"
 
+// csrf is the token issuer every configuration needs. Every screen this module
+// draws moves money, so a page with no token is a page whose buttons the
+// application refuses.
+func csrf() *security.CSRF { return security.NewCSRF([]byte(appKey), time.Hour) }
+
 // mount builds the module and returns a router with its routes registered.
 func mount(t *testing.T, cfg wallet.Config) *fhttp.Router {
 	t.Helper()
 
+	if cfg.CSRF == nil {
+		cfg.CSRF = csrf()
+	}
 	sessions := security.NewSessionStore([]byte(appKey), time.Hour, false, security.NewMemoryBackend())
 
 	module, err := wallet.New(cfg, data.Wrap(nil, data.DialectSQLite), sessions)
@@ -199,7 +207,7 @@ func TestNewRefusesAWiringThatCannotWork(t *testing.T) {
 
 	sessions := security.NewSessionStore([]byte(appKey), time.Hour, false, security.NewMemoryBackend())
 	handle := data.Wrap(nil, data.DialectSQLite)
-	valid := wallet.Config{Tenant: "acme"}
+	valid := wallet.Config{Tenant: "acme", CSRF: csrf()}
 
 	if _, err := wallet.New(wallet.Config{}, handle, sessions); err == nil {
 		t.Error("a configuration with no tenant was accepted")
@@ -209,6 +217,9 @@ func TestNewRefusesAWiringThatCannotWork(t *testing.T) {
 	}
 	if _, err := wallet.New(valid, handle, nil); err == nil {
 		t.Error("a nil session store was accepted")
+	}
+	if _, err := wallet.New(wallet.Config{Tenant: "acme"}, handle, sessions); err == nil {
+		t.Error("a configuration with no token issuer was accepted, and every form it draws would be refused")
 	}
 	if _, err := wallet.New(valid, handle, sessions); err != nil {
 		t.Fatalf("a valid wiring was refused: %v", err)
@@ -222,7 +233,7 @@ func TestNewRefusesARoutePrefixThatCannotBeRegistered(t *testing.T) {
 	handle := data.Wrap(nil, data.DialectSQLite)
 
 	for _, prefix := range []string{"/widgets{", "/widgets/{id}"} {
-		if _, err := wallet.New(wallet.Config{Tenant: "acme", Prefix: prefix}, handle, sessions); err == nil {
+		if _, err := wallet.New(wallet.Config{Tenant: "acme", Prefix: prefix, CSRF: csrf()}, handle, sessions); err == nil {
 			t.Errorf("New accepted route prefix %q, which would panic during route registration", prefix)
 		}
 	}
@@ -232,7 +243,7 @@ func TestTheModuleDeclaresItsSchema(t *testing.T) {
 	t.Parallel()
 
 	sessions := security.NewSessionStore([]byte(appKey), time.Hour, false, security.NewMemoryBackend())
-	module, err := wallet.New(wallet.Config{Tenant: "acme"}, data.Wrap(nil, data.DialectSQLite), sessions)
+	module, err := wallet.New(wallet.Config{Tenant: "acme", CSRF: csrf()}, data.Wrap(nil, data.DialectSQLite), sessions)
 	if err != nil {
 		t.Fatalf("building the module: %v", err)
 	}

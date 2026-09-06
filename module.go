@@ -70,6 +70,7 @@ import (
 	"github.com/arandu-io/framework/validation"
 	"github.com/arandu-io/hesape/database/migrations"
 	"github.com/arandu-io/hesape/database/schema"
+	"github.com/arandu-io/hesape/translation"
 	"github.com/arandu-io/hesape/view"
 )
 
@@ -292,16 +293,64 @@ func (m *Module) index(ctx *fhttp.Context) error {
 	if len(records) == m.cfg.PageSize {
 		cursor = records[len(records)-1].ID
 	}
-	return ctx.JSON(stdhttp.StatusOK, collectionFromPointers(records, cursor))
+	if ctx.WantsJSON() {
+		return ctx.JSON(stdhttp.StatusOK, collectionFromPointers(records, cursor))
+	}
+
+	labels := m.Labels(m.locale(ctx.Request))
+	return ctx.View(ViewIndex, IndexPageData{
+		Page:   m.page(ctx, labels.T("screen.index_title")),
+		Prefix: m.cfg.Prefix,
+		Labels: labels,
+		Holder: in.HolderID,
+		Rows:   walletRows(records),
+		Next:   cursor,
+	})
 }
 
-// show answers one wallet.
+// show answers one wallet, as the resource or as the screen that moves its
+// money.
 func (m *Module) show(ctx *fhttp.Context) error {
-	record, err := m.svc.Find(ctx.Ctx(), m.subject(ctx.Request), ctx.Param("id"))
+	actor := m.subject(ctx.Request)
+	record, err := m.svc.Find(ctx.Ctx(), actor, ctx.Param("id"))
 	if err != nil {
 		return m.answer(ctx, err)
 	}
-	return ctx.JSON(stdhttp.StatusOK, resourceFromPointer(record))
+	if ctx.WantsJSON() {
+		return ctx.JSON(stdhttp.StatusOK, resourceFromPointer(record))
+	}
+
+	// What was bought with this wallet goes on the screen because the
+	// identifier a refund names is on it: a control whose argument the reader
+	// has to fetch from somewhere else is a control nobody uses.
+	labels := m.Labels(m.locale(ctx.Request))
+	lines, err := m.svc.PurchasesOf(ctx.Ctx(), actor, record.ID, data.Query{Limit: m.cfg.PageSize})
+	if err != nil && !errors.Is(err, security.ErrForbidden) {
+		return m.answer(ctx, err)
+	}
+	return ctx.View(ViewOperations, OperationsPageData{
+		Page:      m.page(ctx, labels.T("screen.operations_title")),
+		Prefix:    m.cfg.Prefix,
+		Labels:    labels,
+		Wallet:    walletRow(record),
+		Purchases: purchaseRows(labels, lines),
+		// Asked before the page is drawn rather than after the button is
+		// pressed. It is the same policy the write would consult, so a control
+		// that is drawn is a control that works.
+		MaySetCredit: m.allowed(ctx, actor, WalletCredit, *record),
+	})
+}
+
+// allowed reports whether the policy would let this subject do this to this
+// wallet.
+//
+// It is the same call the write makes, and that is the point: a screen that
+// decided for itself which controls to draw would be a second copy of the rules,
+// and the copy that fell behind would be the one drawing a button that answers
+// 403.
+func (m *Module) allowed(ctx *fhttp.Context, actor security.Subject, action security.Action, record Wallet) bool {
+	_, err := security.Authorize(ctx.Ctx(), WalletPolicy{}, actor, action, record)
+	return err == nil
 }
 
 // store opens one wallet.
@@ -321,6 +370,9 @@ func (m *Module) store(ctx *fhttp.Context) error {
 	record, err := m.svc.Open(ctx.Ctx(), m.subject(ctx.Request), in)
 	if err != nil {
 		return m.answer(ctx, err)
+	}
+	if !ctx.WantsJSON() {
+		return ctx.Redirect(m.cfg.Prefix + "/" + record.ID)
 	}
 	return ctx.JSON(stdhttp.StatusCreated, resourceFromPointer(record))
 }
@@ -344,7 +396,21 @@ func (m *Module) entries(ctx *fhttp.Context) error {
 	if len(statement.Entries) == m.cfg.PageSize {
 		cursor = statement.Entries[len(statement.Entries)-1].ID
 	}
-	return ctx.JSON(stdhttp.StatusOK, NewEntryCollection(statement, cursor))
+	if ctx.WantsJSON() {
+		return ctx.JSON(stdhttp.StatusOK, NewEntryCollection(statement, cursor))
+	}
+
+	labels := m.Labels(m.locale(ctx.Request))
+	return ctx.View(ViewStatement, StatementPageData{
+		Page:        m.page(ctx, labels.T("screen.statement_title")),
+		Prefix:      m.cfg.Prefix,
+		Labels:      labels,
+		Wallet:      walletRow(&statement.Wallet),
+		Rows:        statementRows(labels, statement),
+		Conversions: conversionRows(statement),
+		Charges:     chargeRows(statement),
+		Next:        cursor,
+	})
 }
 
 // credit sets how far below zero one wallet may go.
@@ -357,6 +423,9 @@ func (m *Module) credit(ctx *fhttp.Context) error {
 	record, err := m.svc.SetCredit(ctx.Ctx(), m.subject(ctx.Request), in)
 	if err != nil {
 		return m.answer(ctx, err)
+	}
+	if !ctx.WantsJSON() {
+		return ctx.Redirect(m.cfg.Prefix + "/" + record.ID)
 	}
 	return ctx.JSON(stdhttp.StatusOK, resourceFromPointer(record))
 }
@@ -534,6 +603,13 @@ func (m *Module) confirm(ctx *fhttp.Context) error {
 // that cannot be read falls back to the integer, because a scale guessed at is
 // worse than an integer nobody can misread.
 func (m *Module) receipt(ctx *fhttp.Context, receipt Receipt) error {
+	// A form has nowhere to put a receipt, so it is answered with the page the
+	// numbers are on. It is a redirect and not a rendered page, because a form
+	// answered with a body is a form the browser offers to send again.
+	if !ctx.WantsJSON() {
+		return ctx.Redirect(m.pageOf(ctx, receipt))
+	}
+
 	actor := m.subject(ctx.Request)
 	places := make(map[string]int, len(receipt.Entries))
 	for _, entry := range receipt.Entries {
@@ -549,6 +625,51 @@ func (m *Module) receipt(ctx *fhttp.Context, receipt Receipt) error {
 		status = stdhttp.StatusOK
 	}
 	return ctx.JSON(status, NewReceiptResource(receipt, places))
+}
+
+// locale is what language the request asked for, as the negotiation middleware
+// left it on the context.
+//
+// A request that went through no such middleware carries none, and the screens
+// are drawn in the shipped locale. That is a screen somebody can read, where a
+// refusal would not be.
+func (m *Module) locale(r *stdhttp.Request) string { return translation.Locale(r.Context()) }
+
+// page is the chrome the application's layout draws around a screen.
+func (m *Module) page(ctx *fhttp.Context, title string) view.Page {
+	actor := m.subject(ctx.Request)
+	token, err := m.cfg.CSRF.Issue(m.sessions.IDFromRequest(ctx.Request))
+	if err != nil {
+		// An unissued token is left empty rather than reported. The page still
+		// renders and every form on it is refused, which is what a missing
+		// session means -- and the alternative, failing the read because the
+		// write would fail, is a blank screen where a sign-in prompt belongs.
+		token = ""
+	}
+	return view.Page{
+		Title:         title,
+		Token:         token,
+		Authenticated: actor.ID != "",
+		Path:          ctx.Request.URL.Path,
+	}
+}
+
+// pageOf is where a form is sent back to once its movement is done.
+//
+// The wallet the request named, where there is one, because that is the screen
+// the person was looking at and the one the new balance is on. A movement that
+// named no wallet in its path -- a reversal, a confirmation, a refund -- goes to
+// the listing, which is the only page that is right for all of them.
+func (m *Module) pageOf(ctx *fhttp.Context, receipt Receipt) string {
+	if id := ctx.Param("id"); id != "" {
+		return m.cfg.Prefix + "/" + id
+	}
+	for _, entry := range receipt.Entries {
+		if entry.WalletID != "" {
+			return m.cfg.Prefix + "/" + entry.WalletID
+		}
+	}
+	return m.cfg.Prefix
 }
 
 // subject reads who is acting from the session, and from nowhere else.

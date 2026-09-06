@@ -7,6 +7,7 @@ require (
 	github.com/arandu-io/hesape v0.25.2
 	github.com/arandu-io/hesape/database/connectors/pgx v0.7.1
 	github.com/arandu-io/hesape/database/connectors/sqlite v0.7.1
+	github.com/arandu-io/kyse v0.18.0
 )
 
 require (

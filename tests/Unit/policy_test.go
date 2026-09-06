@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/arandu-io/framework/data"
 	"github.com/arandu-io/framework/security"
@@ -404,21 +405,27 @@ func TestEveryRequestValidatesItsInput(t *testing.T) {
 func TestTheConfigurationRefusesWhatCannotWork(t *testing.T) {
 	t.Parallel()
 
+	token := security.NewCSRF([]byte("0123456789abcdef0123456789abcdef"), time.Hour)
+
 	for name, cfg := range map[string]wallet.Config{
-		"no tenant":        {},
-		"tenant with a /":  {Tenant: "acme/reports"},
-		"tenant uppercase": {Tenant: "Acme"},
-		"relative prefix":  {Tenant: "acme", Prefix: "wallet"},
-		"page size too big": {Tenant: "acme",
+		"no tenant":        {CSRF: token},
+		"tenant with a /":  {Tenant: "acme/reports", CSRF: token},
+		"tenant uppercase": {Tenant: "Acme", CSRF: token},
+		"relative prefix":  {Tenant: "acme", Prefix: "wallet", CSRF: token},
+		"page size too big": {Tenant: "acme", CSRF: token,
 			PageSize: wallet.MaxPageSize + 1},
-		"negative page size": {Tenant: "acme", PageSize: -1},
+		"negative page size": {Tenant: "acme", CSRF: token, PageSize: -1},
+		// Every screen this module draws moves money, so a page with no token
+		// is a page whose buttons the application refuses -- which is worse to
+		// find out from a form that does nothing than from a boot that stops.
+		"no token issuer": {Tenant: "acme"},
 	} {
 		if err := cfg.Validate(); err == nil {
 			t.Errorf("the configuration with %s was accepted", name)
 		}
 	}
 
-	if err := (wallet.Config{Tenant: "acme"}).Validate(); err != nil {
+	if err := (wallet.Config{Tenant: "acme", CSRF: token}).Validate(); err != nil {
 		t.Fatalf("a valid configuration was refused: %v", err)
 	}
 }

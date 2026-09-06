@@ -104,7 +104,7 @@ func postgres(t *testing.T) *data.DB {
 	})
 	migrationConnection := hedatabase.ForMigrations(connection)
 
-	module, err := wallet.New(wallet.Config{Tenant: tenant}, data.Wrap(handle, data.DialectPostgres), sessionStore())
+	module, err := wallet.New(wallet.Config{Tenant: tenant, CSRF: csrf()}, data.Wrap(handle, data.DialectPostgres), sessionStore())
 	if err != nil {
 		t.Fatalf("building the module: %v", err)
 	}
