@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"sort"
 	"strconv"
 	"time"
@@ -1525,7 +1526,131 @@ func released() map[string]any {
 	return values
 }
 
-// commit records the operation and applies its movements, all or nothing.
+// maxCommitAttempts is how many times one movement is sent again after the
+// engine refused it as a conflict with another transaction.
+//
+// Four, and the number is a bound rather than a preference. A request retried
+// without one is a request that never answers, and the caller holding a
+// connection open for it is the one whose own timeout ends up deciding. Three
+// further attempts clear the contention that two transactions crossing produce;
+// what they do not clear is a wallet every request in the system is queueing
+// behind, and that is a shape to report rather than to wait out.
+const maxCommitAttempts = 4
+
+// commitBackoff is how long to wait before the attempt after this one.
+//
+// It doubles, and it carries a random half. Two transactions that conflicted
+// did so because they ran together, and two that retry after the same fixed
+// pause run together again -- so the pause is a range rather than a number, and
+// the two come back at different moments. It is measured in milliseconds
+// because the losing transaction's row locks are already released: what is
+// being waited out is the winner finishing, not a timeout.
+func commitBackoff(attempt int) time.Duration {
+	step := int64(1<<attempt) * int64(time.Millisecond)
+	return time.Duration(step/2 + rand.Int64N(step/2))
+}
+
+// conflictCodes are the answers that mean the engine rolled this transaction
+// back over another one, rather than anything about the request.
+//
+// Serialization failure and deadlock, by SQLSTATE, and not the whole of class
+// 40. The class also holds an integrity constraint violation, which would
+// repeat on every attempt, and a completion of unknown outcome, which is not
+// something to decide by class -- so the two that mean "nothing was written,
+// send it again" are named and the rest are not.
+var conflictCodes = map[string]bool{
+	"40001": true, // serialization_failure
+	"40P01": true, // deadlock_detected
+}
+
+// conflicted reports that the engine refused this transaction as a conflict
+// with another one.
+//
+// The answer is read through an interface a driver satisfies rather than by
+// importing a driver: a driver imported here would be a driver in every build
+// that installs this package, and the SQLSTATE is the one thing the engines
+// spell the same way. A driver that reports no state answers no, which is the
+// safe direction -- an error nobody classified is reported to the caller
+// instead of being sent again.
+//
+// SQLite has no SQLSTATE and reaches none of these. Its writers are serialized
+// by the database itself, so what contention produces there is a busy file that
+// the driver's own handle waits on, and a transaction that reaches this package
+// with an error has failed for a reason retrying will not change.
+func conflicted(err error) bool {
+	var stated interface{ SQLState() string }
+	if !errors.As(err, &stated) {
+		return false
+	}
+	return conflictCodes[stated.SQLState()]
+}
+
+// pause waits, and gives up where the caller has.
+//
+// A retry that ignored the context would go on holding a request whose client
+// has gone, which is the failure the deadline exists to prevent.
+func pause(ctx context.Context, wait time.Duration) error {
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// supported reports whether this package has been run against the engine a
+// handle speaks.
+//
+// PostgreSQL and SQLite, and the list is what the suite covers rather than what
+// the SQL would compile on. Every statement here is written through the Model
+// and would run on more engines than these two. What does not travel with it is
+// the reading of the guard: what an update sees of a row another transaction is
+// changing is the engine's answer, nothing that compiles checks it, and an
+// engine no test has interleaved two withdrawals on is an engine whose answer
+// nobody here has read.
+func supported(dialect data.Dialect) error {
+	switch dialect {
+	case data.DialectPostgres, data.DialectSQLite:
+		return nil
+	}
+	return fmt.Errorf("%w: got %q", ErrUnsupportedDialect, dialect)
+}
+
+// isolate names the isolation level of a transaction this package opened.
+//
+// The guard on a balance is a predicate on the update, and what that predicate
+// is evaluated against, while another transaction is changing the same row, is
+// the isolation level's answer. Unstated it is the engine's default -- which is
+// not the same on every engine and is a setting an operator can change for a
+// whole cluster -- so the level the guard was written against is named here
+// instead of assumed.
+//
+// Read committed, and not something stricter. At this level the update
+// re-evaluates its predicate against the row as the other transaction left it,
+// which is exactly what "the balance has to still be enough at the moment of
+// the write" means. A stricter level does not make the guard more correct: it
+// makes the second transaction abort where it would have re-decided, which is a
+// conflict to send again rather than an answer.
+//
+// It runs as the first statement of the transaction, because that is the only
+// place an engine takes it, and it is skipped where this package joined a
+// transaction the application had already opened: the level of that one is the
+// application's, and changing it from inside would be this package deciding
+// about statements it cannot see.
+func (s *WalletService) isolate(ctx context.Context) error {
+	if s.db.Dialect() != data.DialectPostgres {
+		return nil
+	}
+	if _, err := s.db.ExecContext(ctx, "SET TRANSACTION ISOLATION LEVEL READ COMMITTED"); err != nil {
+		return fmt.Errorf("wallet: naming the isolation level of the transaction: %w", err)
+	}
+	return nil
+}
+
+// commit records the operation and applies its movements, all or nothing, and
+// sends it again where the engine refused it as a conflict.
 //
 // The operation row goes in first, and that ordering is the idempotency: the
 // unique index on the tenant and the key is what refuses a second request under
@@ -1533,7 +1658,62 @@ func released() map[string]any {
 // balance -- one of them fails at the index and rolls back with nothing
 // written. The loser then finds the winner's operation and answers with it,
 // which is why a failure here is looked up before it is reported.
+//
+// # Why sending it again is safe
+//
+// Everything one attempt writes is inside one transaction, so a failed attempt
+// left nothing behind. What the next attempt is given is the same values: the
+// operation and the movements arrive as data, and nothing in here asks a rate,
+// a fee, a discount or a product again -- there is nowhere it could, because
+// none of those seams is reachable from this call. So a second attempt cannot
+// price the request differently from the first.
+//
+// And where an attempt did commit and the failure was in hearing so, the key is
+// what settles it: the second attempt's operation row collides with the first
+// one's on the unique index, and the lookup answers with what the first one
+// did. That is the same path a second caller under a shared key takes, and it
+// is checked before the error is classified, so an outcome nobody could observe
+// is answered with the outcome rather than retried into a second movement.
+//
+// A conflict that survives the attempts is ErrConcurrencyConflict, which says
+// exactly that: nothing was written, and the same request under the same key is
+// still safe to send.
 func (s *WalletService) commit(ctx context.Context, g security.Grant, op operation, movements []movement) (Receipt, error) {
+	for attempt := 1; ; attempt++ {
+		receipt, err := s.attempt(ctx, g, op, movements)
+		if err == nil {
+			// After the transaction, and never inside it. Everything above
+			// either committed or left nothing behind, so what is told here is
+			// what happened -- a listener told about a movement that was then
+			// rolled back has told somebody about a thing that did not happen.
+			s.notify(ctx, g, movedEvents(receipt.Operation, receipt.Entries, touched(movements))...)
+			return receipt, nil
+		}
+
+		// A key already spent answers with what it did, whatever this attempt
+		// failed on.
+		if replayed, found, lookupErr := s.replay(ctx, g, op.key, op.kind); lookupErr == nil && found {
+			return replayed, nil
+		}
+		if !conflicted(err) {
+			return Receipt{}, err
+		}
+		if attempt >= maxCommitAttempts {
+			return Receipt{}, fmt.Errorf("%w: %d attempts: %w", ErrConcurrencyConflict, attempt, err)
+		}
+		if waited := pause(ctx, commitBackoff(attempt)); waited != nil {
+			return Receipt{}, waited
+		}
+	}
+}
+
+// attempt records the operation and applies its movements once.
+func (s *WalletService) attempt(ctx context.Context, g security.Grant, op operation, movements []movement) (Receipt, error) {
+	// Whether this call is the one opening the transaction, asked before it is
+	// opened. An application that already had one is joined rather than
+	// interrupted, and the level it chose stays its own.
+	opening := !data.InTransaction(ctx, s.db)
+
 	id, err := data.NewID()
 	if err != nil {
 		return Receipt{}, err
@@ -1565,6 +1745,11 @@ func (s *WalletService) commit(ctx context.Context, g security.Grant, op operati
 	var charge *Charge
 	var purchases []Purchase
 	err = data.Transaction(ctx, s.db, func(ctx context.Context) error {
+		if opening {
+			if err := s.isolate(ctx); err != nil {
+				return err
+			}
+		}
 		if _, err := record.Save(ctx, g); err != nil {
 			return err
 		}
@@ -1608,17 +1793,8 @@ func (s *WalletService) commit(ctx context.Context, g security.Grant, op operati
 		return nil
 	})
 	if err != nil {
-		if receipt, found, lookupErr := s.replay(ctx, g, op.key, op.kind); lookupErr == nil && found {
-			return receipt, nil
-		}
 		return Receipt{}, err
 	}
-
-	// After the transaction, and never inside it. Everything above either
-	// committed or left nothing behind, so what is told here is what happened
-	// -- a listener told about a movement that was then rolled back has told
-	// somebody about a thing that did not happen.
-	s.notify(ctx, g, movedEvents(*record, entries, touched(movements))...)
 
 	return Receipt{
 		Operation:  *record,

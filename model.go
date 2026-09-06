@@ -757,6 +757,13 @@ var (
 	// cannot both be that key's answer, so neither is guessed at.
 	ErrOperationConflict = errors.New("wallet: that idempotency key belongs to a different request")
 
+	// ErrConcurrencyConflict is returned when the engine refused a movement as
+	// a serialization failure or a deadlock, and retrying it did not get past
+	// that. It is a distinct answer because it is the one the caller can act
+	// on: nothing was written, the request is still valid, and sending it again
+	// under the same idempotency key is safe.
+	ErrConcurrencyConflict = errors.New("wallet: the engine refused this movement as a conflict with another transaction, and the retries did not clear it")
+
 	// ErrWalletFrozen is returned when a movement names a wallet whose ledger
 	// no longer explains its balance. The refusal comes from the statement that
 	// would have moved the money, so a wallet frozen between the read and the
@@ -779,6 +786,13 @@ var (
 	// adjustment of nothing would be a row in the ledger saying something
 	// happened when nothing did.
 	ErrLedgerBalanced = errors.New("wallet: this wallet's ledger already adds up to its balance, so there is nothing to adjust")
+
+	// ErrUnsupportedDialect is returned when the handle speaks an engine this
+	// package does not verify. The guard on a withdrawal is a predicate on an
+	// update, and what an update sees of a row another transaction is changing
+	// is the engine's answer rather than this package's -- so an engine no test
+	// here runs against is an engine whose answer nobody has read.
+	ErrUnsupportedDialect = errors.New("wallet: this package is verified on PostgreSQL and SQLite, and refuses an engine its suite has never run against")
 )
 
 // Resource is the list of fields one Wallet is allowed to answer with.

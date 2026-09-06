@@ -3,21 +3,278 @@ package feature_test
 import (
 	"context"
 	"errors"
-
+	"fmt"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/arandu-io/framework/data"
+	"github.com/arandu-io/hesape/log"
 
 	wallet "github.com/hyz-is/arandu-wallet"
 )
 
-// A balance that stopped matching the ledger explaining it, and what this
-// package does about that.
+// What an engine does to a transaction it refuses, and what this package does
+// about it.
 //
-// The interesting half needs PostgreSQL: a wallet that disagrees with its own
-// ledger only matters once something else is trying to spend it, and SQLite
-// serializes writers so it cannot show a guard being read at the write rather
-// than before it. The refusals that need no contention run anywhere.
+// Three claims live here, and none of them can be shown on SQLite. It takes one
+// lock for the whole database, so it produces no deadlock between two rows; it
+// serializes writers, so it has no isolation level for a guard to be read
+// against; and a balance that stopped matching its ledger is only interesting
+// once something else is trying to spend it. Every test below therefore needs
+// PostgreSQL and skips without it.
+
+// TestADeadlockIsSentAgainAndTheMovementSurvives holds the retry.
+//
+// The deadlock is a real one and is arranged rather than simulated. A
+// connection of the test's own takes the row lock on the wallet a transfer
+// reaches second and holds it; the transfer takes the first and blocks; the
+// test's connection then asks for the first and the cycle is closed. PostgreSQL
+// breaks it by killing one of the two, and the one it kills is the transfer:
+// the victim is whoever's deadlock_timeout expires first, and the test's
+// connection sets its own to ten seconds so that it is never that one.
+//
+// So the transfer is refused by the engine with 40P01, having written nothing.
+// What the assertion below says is that the caller never sees it: the money
+// moved, once, and the ledger says so.
+//
+// Removing the classification in service.go -- making conflicted answer false
+// -- fails it with the driver's own sentence, which is the mutation this test
+// exists for.
+func TestADeadlockIsSentAgainAndTheMovementSurvives(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	handle := postgres(t)
+	service := wallet.NewWalletService(handle, nil, nil, nil)
+
+	left := openWallet(t, service, "user-1", "main", 2)
+	right := openWallet(t, service, "user-2", "main", 2)
+	deposit(t, service, left.ID, "opening-left", "50.00")
+	deposit(t, service, right.ID, "opening-right", "50.00")
+
+	// The order the service takes the two locks in, which is by identifier and
+	// never the order the request named them.
+	first, second := left.ID, right.ID
+	if second < first {
+		first, second = second, first
+	}
+
+	blocker, err := handle.Unwrap().Conn(ctx)
+	if err != nil {
+		t.Fatalf("opening the connection that holds the lock: %v", err)
+	}
+	defer func() { _ = blocker.Close() }()
+
+	// Ten seconds, so that this connection is never the one PostgreSQL kills.
+	// The victim of a deadlock is whichever waiter notices the cycle first, and
+	// that is decided by this setting.
+	if _, err := blocker.ExecContext(ctx, `SET deadlock_timeout = '10s'`); err != nil {
+		t.Fatalf("setting the deadlock timeout: %v", err)
+	}
+
+	held, err := blocker.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("beginning the transaction that holds the lock: %v", err)
+	}
+	if _, err := held.ExecContext(ctx, `SELECT id FROM wallets WHERE id = $1 FOR UPDATE`, second); err != nil {
+		_ = held.Rollback()
+		t.Fatalf("taking the row lock: %v", err)
+	}
+
+	var (
+		moving  sync.WaitGroup
+		receipt wallet.Receipt
+		moved   error
+	)
+	moving.Add(1)
+	go func() {
+		defer moving.Done()
+		receipt, moved = service.Transfer(ctx, staff(), wallet.TransferRequest{
+			IdempotencyKey: "one-transfer",
+			FromWalletID:   first,
+			ToWalletID:     second,
+			Amount:         "1.00",
+		})
+	}()
+
+	// Long enough for the transfer to have taken the first lock and to be
+	// waiting on the second. It is a wait and not a signal because what is being
+	// waited for is a lock inside the engine, which nothing in this process can
+	// observe.
+	time.Sleep(500 * time.Millisecond)
+
+	// The other half of the cycle. It blocks until PostgreSQL kills the
+	// transfer, which is what releases the first row.
+	if _, err := held.ExecContext(ctx, `SELECT id FROM wallets WHERE id = $1 FOR UPDATE`, first); err != nil {
+		_ = held.Rollback()
+		t.Fatalf("the connection holding the lock was the one PostgreSQL killed, so this test proved nothing about the retry: %v", err)
+	}
+	if err := held.Commit(); err != nil {
+		t.Fatalf("releasing the locks: %v", err)
+	}
+
+	moving.Wait()
+
+	if moved != nil {
+		t.Fatalf("the transfer answered %v, and a deadlock the engine broke is exactly what is supposed to be sent again", moved)
+	}
+	if receipt.Replayed {
+		t.Error("the transfer answered with a replay, so the money moved on an attempt this test did not arrange")
+	}
+	if got := balanceOf(t, service, first); got != 4900 {
+		t.Errorf("the wallet that paid holds %d, want 4900", got)
+	}
+	if got := balanceOf(t, service, second); got != 5100 {
+		t.Errorf("the wallet that was paid holds %d, want 5100", got)
+	}
+	for _, id := range []string{first, second} {
+		if ledger, balance := ledgerOf(t, service, id), balanceOf(t, service, id); ledger != balance {
+			t.Errorf("the ledger of %s sums to %d and its balance column says %d", id, ledger, balance)
+		}
+	}
+}
+
+// serializableDefault is a server whose default has been tightened, which is
+// what an operator who wanted stronger guarantees leaves behind on a cluster.
+//
+// libpq-style startup options, which pgx reads off the connection string.
+var serializableDefault = map[string]string{"options": "-c default_transaction_isolation=serializable"}
+
+// TestThisPackageNamesTheIsolationLevelOfEveryTransactionItOpens holds the
+// level, by reading the statements that were issued.
+//
+// The pool here is opened against a server whose default is serializable. What
+// has to be true is that the transaction does not run at that level: the guard
+// on a balance was written against read committed, where an update
+// re-evaluates its predicate against the row the other transaction left, and a
+// level chosen by whoever configured the server is not the level a guard was
+// written for.
+//
+// It asserts the statement rather than an outcome, and that is deliberate. The
+// outcome is the same either way, because the retry beside this absorbs the
+// conflicts a stricter level produces -- which is exactly why the level has to
+// be checked directly. The test below asserts the outcome, and passes with the
+// naming removed; this one does not.
+func TestThisPackageNamesTheIsolationLevelOfEveryTransactionItOpens(t *testing.T) {
+	t.Parallel()
+
+	service := wallet.NewWalletService(postgresWith(t, serializableDefault), nil, nil, nil)
+	account := openWallet(t, service, "user-1", "main", 2)
+
+	collected := log.NewCollector("isolation")
+	ctx := log.WithCollector(context.Background(), collected)
+	if _, err := service.Deposit(ctx, staff(), wallet.DepositRequest{
+		IdempotencyKey: "opening", WalletID: account.ID, Amount: "10.00",
+	}); err != nil {
+		t.Fatalf("depositing: %v", err)
+	}
+
+	statements := collected.Queries()
+	named := -1
+	for i, query := range statements {
+		if strings.Contains(query.SQL, "SET TRANSACTION ISOLATION LEVEL READ COMMITTED") {
+			named = i
+			break
+		}
+	}
+	if named < 0 {
+		t.Fatalf("no statement named the isolation level, so this transaction ran at whatever the server was configured for; %d statements were issued", len(statements))
+	}
+	if named+1 >= len(statements) {
+		t.Fatal("the isolation level was named and nothing followed it, so no transaction was opened around it")
+	}
+
+	// It has to be the first statement of the transaction, because that is the
+	// only place an engine takes it. What follows is the operation row, which is
+	// the first thing every movement writes.
+	next := statements[named+1].SQL
+	if !strings.Contains(next, "wallet_operations") {
+		t.Errorf("the statement after the isolation level is %q, and it has to be the operation row: anything in between means the level was named after the transaction had already read something", next)
+	}
+}
+
+// TestTheGuardIsExactWhenTheServerDefaultIsTightened holds the outcome at a
+// server somebody configured for serializable.
+//
+// It passes whether or not this package names its own level, and that is not a
+// gap in it: with the level unnamed the transactions run serializable, the
+// second writer of a row is aborted rather than re-deciding, and the retry
+// turns those aborts back into the same answer. What it holds is that the whole
+// arrangement -- guard, level and retry together -- still spends exactly the
+// balance and no more. The statement itself is asserted above.
+func TestTheGuardIsExactWhenTheServerDefaultIsTightened(t *testing.T) {
+	t.Parallel()
+
+	service := wallet.NewWalletService(postgresWith(t, serializableDefault), nil, nil, nil)
+	account := openWallet(t, service, "user-1", "main", 2)
+
+	const (
+		opening    = wallet.Amount(2000)
+		each       = wallet.Amount(100)
+		affordable = int(opening / each)
+	)
+	deposit(t, service, account.ID, "opening", "20.00")
+
+	var (
+		start     sync.WaitGroup
+		done      sync.WaitGroup
+		mu        sync.Mutex
+		succeeded int
+		conflicts int
+		other     []error
+	)
+	start.Add(1)
+	done.Add(withdrawers)
+
+	for i := range withdrawers {
+		go func() {
+			defer done.Done()
+			start.Wait()
+
+			_, err := service.Withdraw(context.Background(), staff(), wallet.WithdrawRequest{
+				IdempotencyKey: fmt.Sprintf("withdraw-%d", i),
+				WalletID:       account.ID,
+				Amount:         "1.00",
+			})
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case err == nil:
+				succeeded++
+			case errors.Is(err, wallet.ErrInsufficientFunds):
+			case errors.Is(err, wallet.ErrConcurrencyConflict):
+				conflicts++
+			default:
+				other = append(other, err)
+			}
+		}()
+	}
+	start.Done()
+	done.Wait()
+
+	for _, err := range other {
+		t.Errorf("a withdrawal failed for a reason that is neither the balance nor a conflict: %v", err)
+	}
+	if conflicts > 0 {
+		t.Errorf("%d withdrawals ran out of attempts against a conflict", conflicts)
+	}
+	if succeeded != affordable {
+		t.Errorf("%d withdrawals succeeded against a balance of %d, want exactly %d", succeeded, opening, affordable)
+	}
+
+	balance := balanceOf(t, service, account.ID)
+	if balance < 0 {
+		t.Fatalf("the balance went negative: %d", balance)
+	}
+	if want := opening - wallet.Amount(succeeded)*each; balance != want {
+		t.Fatalf("the balance is %d, want %d", balance, want)
+	}
+	if ledger := ledgerOf(t, service, account.ID); ledger != balance {
+		t.Fatalf("the ledger sums to %d and the balance column says %d", ledger, balance)
+	}
+}
 
 // TestAWalletThatStopsAddingUpFreezesAndIsRebuiltByAppending holds the repair.
 //

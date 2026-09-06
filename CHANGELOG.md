@@ -16,6 +16,16 @@ they describe releases of the template and not of this package.
 
 ### Added
 
+- `ErrConcurrencyConflict`, and a movement that is sent again when the engine
+  refuses it as a conflict with another transaction. Serialization failure and
+  deadlock are classified by SQLSTATE, read through an interface a driver
+  satisfies rather than by importing one, and retried with a widening random
+  pause. Sending it again is safe because the operation and the movements arrive
+  at the transaction as values -- no rate, fee, discount or product is asked
+  twice -- and because an attempt that did commit is answered by its own
+  idempotency key rather than repeated. A conflict that survives four attempts
+  is `ErrConcurrencyConflict`, which says that nothing was written and the same
+  request can be sent again.
 - `(*WalletService).Rebuild`, `RebuildRequest`, `OperationAdjustment`,
   `MoneyAdjusted`, `ErrWalletNotFrozen`, `ErrLedgerBalanced` and `ErrLedgerMoved`.
   A wallet whose ledger stopped explaining its balance is closed by appending the
@@ -29,9 +39,19 @@ they describe releases of the template and not of this package.
 - `WalletReconcile`, the action `Reconcile` and `Rebuild` ask about. It is the
   operator's and not the holder's: what these two write is a wallet that no
   longer moves, or a ledger row no request produced.
+- `ErrUnsupportedDialect`. `New` refuses an engine this package's suite has never
+  run against; PostgreSQL and SQLite are what it covers, and nothing here claims
+  MySQL.
 
 ### Changed
 
+- Every transaction this package opens names its own isolation level -- read
+  committed, as the first statement -- instead of taking the engine's default.
+  The guard on a balance is a predicate on an update, and what that predicate is
+  evaluated against while another transaction changes the same row is the level's
+  answer; a default is a setting an operator can change for a whole cluster. A
+  transaction the application had already opened is joined and left at the level
+  it chose.
 - `(*WalletService).Reconcile` asks about `WalletReconcile` rather than
   `WalletHistory`, and sums the ledger only up to the position the wallet held
   when the read began, so what it compares against the balance is exactly the set

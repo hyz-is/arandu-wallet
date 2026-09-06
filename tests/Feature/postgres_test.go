@@ -49,6 +49,19 @@ const postgresDSN = "ARANDU_TEST_POSTGRES_DSN"
 func postgres(t *testing.T) *data.DB {
 	t.Helper()
 
+	return postgresWith(t, nil)
+}
+
+// postgresWith is postgres with settings written onto the pool's connection
+// string.
+//
+// On the connection string and never in a statement run afterwards: a pool
+// opens connections when it needs them, so a setting applied to the first one
+// is a setting the second does not have -- which is a test that passes until it
+// is made concurrent.
+func postgresWith(t *testing.T, settings map[string]string) *data.DB {
+	t.Helper()
+
 	dsn := os.Getenv(postgresDSN)
 	if dsn == "" {
 		t.Skipf("no server: set %s to run the tests that need transactions which really interleave", postgresDSN)
@@ -91,7 +104,7 @@ func postgres(t *testing.T) *data.DB {
 	// somebody runs afterwards: a pool opens connections when it needs them, so
 	// a setting applied to the first one is a setting the second does not have
 	// -- which is a test that passes until it is made concurrent.
-	handle, err := sql.Open(pgxconnector.PostgresConnector{}.DriverName(), withSearchPath(t, dsn, schema))
+	handle, err := sql.Open(pgxconnector.PostgresConnector{}.DriverName(), withSearchPath(t, dsn, schema, settings))
 	if err != nil {
 		t.Fatalf("opening PostgreSQL: %v", err)
 	}
@@ -134,8 +147,9 @@ func schemaFor(name string) string {
 	}, name)
 }
 
-// withSearchPath returns the connection string with the schema named on it.
-func withSearchPath(t *testing.T, dsn, schema string) string {
+// withSearchPath returns the connection string with the schema named on it, and
+// with any further settings the test asked for.
+func withSearchPath(t *testing.T, dsn, schema string, settings map[string]string) string {
 	t.Helper()
 
 	parsed, err := url.Parse(dsn)
@@ -144,6 +158,9 @@ func withSearchPath(t *testing.T, dsn, schema string) string {
 	}
 	query := parsed.Query()
 	query.Set("search_path", schema)
+	for name, value := range settings {
+		query.Set(name, value)
+	}
 	parsed.RawQuery = query.Encode()
 	return parsed.String()
 }

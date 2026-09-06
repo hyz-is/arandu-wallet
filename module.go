@@ -35,7 +35,17 @@
 // Every operation carries an idempotency key the caller chose. The same key
 // twice moves money once: the second call answers with the first one's receipt,
 // and for an exchange that means the first one's rate and the first one's
-// price.
+// price. That key is also what makes a movement safe to send again: a
+// transaction the engine refuses as a conflict with another one wrote nothing
+// and is retried here, and one that committed without the caller hearing so is
+// answered with what it did rather than repeated. A conflict that survives the
+// attempts is ErrConcurrencyConflict.
+//
+// Every transaction this package opens names its own isolation level rather
+// than taking the engine's, because the guard on a balance is a predicate on an
+// update and what an update sees of a row another transaction is changing is
+// the level's answer. The engines it is run against are PostgreSQL and SQLite,
+// and New refuses any other.
 //
 // A ledger that stops explaining the balance beside it freezes the wallet:
 // every balance statement names the column that says so, so a wallet found to
@@ -134,6 +144,9 @@ func New(cfg Config, db *data.DB, sessions *security.SessionStore) (*Module, err
 	}
 	if sessions == nil {
 		return nil, errors.New("wallet: New needs a session store: it is where the subject comes from, and a request with no subject cannot be authorized")
+	}
+	if err := supported(db.Dialect()); err != nil {
+		return nil, err
 	}
 	cfg = cfg.withDefaults()
 	return &Module{
@@ -855,7 +868,7 @@ func (m *Module) answer(ctx *fhttp.Context, err error) error {
 	// Nothing was written and the same request is still safe to send, so the
 	// answer says so: 409 with a name the caller can act on, rather than a 500
 	// that reads as "this may or may not have happened".
-	case errors.Is(err, ErrLedgerMoved):
+	case errors.Is(err, ErrConcurrencyConflict), errors.Is(err, ErrLedgerMoved):
 		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusConflict, "another transaction was moving the same money; nothing was written, and this request can be sent again")
 		return nil
 

@@ -81,7 +81,7 @@ this one must prove about itself it proves in its own suite or nowhere.
 | | measured with |
 | --- | --- |
 | 15 Go files, one per role, all in one package at the root | `grep -l '^package wallet' *.go` |
-| 27 test files, 200 passing tests and subtests, and 9 more when `ARANDU_TEST_POSTGRES_DSN` names a server | `find tests -name '*_test.go'` · `go test -count=1 ./... -v \| grep -cE '^( *)--- PASS'` |
+| 27 test files, 200 passing tests and subtests, and 12 more when `ARANDU_TEST_POSTGRES_DSN` names a server | `find tests -name '*_test.go'` · `go test -count=1 ./... -v \| grep -cE '^( *)--- PASS'` |
 | 12 routes | `grep -c 'm.register(r,' module.go` |
 | 15 actions the policy answers about | `grep -cE '^\t[A-Za-z]+ security.Action = ' policy.go` |
 | 5 direct dependencies, all under `arandu-io` | `go list -m -f '{{if and (not .Indirect) (not .Main)}}{{.Path}} {{.Version}}{{end}}' all` |
@@ -247,9 +247,10 @@ repository; the fifth property is what the answer has to be when a row says
 | a discount one payer is charged less | yes | `DiscountProvider`, recorded on the charge |
 | the same request twice moves money once | yes | the idempotency key, under a unique index, answered by replay |
 | the application's own facts on a movement | operations and entries only | `Meta`; the wallet row itself carries none — **open** |
-| a retry when the engine reports a conflict | no | **open**: a serialization failure or a deadlock travels out as the driver wrote it |
+| a retry when the engine reports a conflict | yes | classified around `commit` by SQLSTATE, and `ErrConcurrencyConflict` when the attempts run out |
 | a balance repaired after it stops matching its ledger | yes | `Reconcile` reports and freezes the wallet; `Rebuild` closes the difference by appending one settled entry and touching no balance |
-| an isolation level the guard can be read against | no | **open**: the transaction takes the engine's default, which is not the same on every engine |
+| an isolation level the guard can be read against | yes | read committed, named as the first statement of every transaction this package opens |
+| an engine this package has not been run against | refused | `New` answers `ErrUnsupportedDialect`; the suite covers PostgreSQL and SQLite, and nothing claims MySQL |
 | statement, ledger, running balance | yes | `History`, `Statement`, `Entry.BalanceAfter` |
 | told what the money did, after it did it | yes | `Listener` |
 | a default wallet, or lookup by holder and slug | no | **open**: the unique index exists, the read does not |
@@ -275,6 +276,7 @@ one has written the second engine.
 | `MaxPageSize` | 200 | a page nobody bounded reads the whole table on the day it is large |
 | `MaxMetaBytes` | 4096 | what an application attaches is carried, never queried |
 | `MaxMetaKeys` | 32 | the same decision, counted |
+| `maxCommitAttempts` | 4 | a conflict sent again forever is a request that never answers |
 
 Three things the reference does that this package deliberately does not:
 
