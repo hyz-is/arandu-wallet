@@ -81,9 +81,9 @@ this one must prove about itself it proves in its own suite or nowhere.
 | | measured with |
 | --- | --- |
 | 15 Go files, one per role, all in one package at the root | `grep -l '^package wallet' *.go` |
-| 25 test files, 197 passing tests and subtests, and 8 more when `ARANDU_TEST_POSTGRES_DSN` names a server | `find tests -name '*_test.go'` · `go test -count=1 ./... -v \| grep -cE '^( *)--- PASS'` |
+| 27 test files, 200 passing tests and subtests, and 9 more when `ARANDU_TEST_POSTGRES_DSN` names a server | `find tests -name '*_test.go'` · `go test -count=1 ./... -v \| grep -cE '^( *)--- PASS'` |
 | 12 routes | `grep -c 'm.register(r,' module.go` |
-| 14 actions the policy answers about | `grep -cE '^\t[A-Za-z]+ security.Action = ' policy.go` |
+| 15 actions the policy answers about | `grep -cE '^\t[A-Za-z]+ security.Action = ' policy.go` |
 | 5 direct dependencies, all under `arandu-io` | `go list -m -f '{{if and (not .Indirect) (not .Main)}}{{.Path}} {{.Version}}{{end}}' all` |
 
 Two of those five are database connectors, imported by the test suite and by
@@ -248,7 +248,7 @@ repository; the fifth property is what the answer has to be when a row says
 | the same request twice moves money once | yes | the idempotency key, under a unique index, answered by replay |
 | the application's own facts on a movement | operations and entries only | `Meta`; the wallet row itself carries none — **open** |
 | a retry when the engine reports a conflict | no | **open**: a serialization failure or a deadlock travels out as the driver wrote it |
-| a balance repaired after it stops matching its ledger | detected only | `Reconcile` reads and reports; nothing repairs, and nothing stops serving a wallet known to diverge — **open** |
+| a balance repaired after it stops matching its ledger | yes | `Reconcile` reports and freezes the wallet; `Rebuild` closes the difference by appending one settled entry and touching no balance |
 | an isolation level the guard can be read against | no | **open**: the transaction takes the engine's default, which is not the same on every engine |
 | statement, ledger, running balance | yes | `History`, `Statement`, `Entry.BalanceAfter` |
 | told what the money did, after it did it | yes | `Listener` |

@@ -16,6 +16,29 @@ they describe releases of the template and not of this package.
 
 ### Added
 
+- `(*WalletService).Rebuild`, `RebuildRequest`, `OperationAdjustment`,
+  `MoneyAdjusted`, `ErrWalletNotFrozen`, `ErrLedgerBalanced` and `ErrLedgerMoved`.
+  A wallet whose ledger stopped explaining its balance is closed by appending the
+  settled entry the ledger was missing: the balance column is not touched, so
+  the repair is a row somebody can read rather than a value somebody changed.
+- The `frozen` column on `wallets`, `Wallet.Frozen`, `Reconciliation.Frozen` and
+  `ErrWalletFrozen`. `(*WalletService).Reconcile` now freezes a wallet whose
+  ledger and balance disagree, and every balance statement names the column in
+  its own predicate, so a wallet frozen between a read and a write is refused at
+  the write.
+- `WalletReconcile`, the action `Reconcile` and `Rebuild` ask about. It is the
+  operator's and not the holder's: what these two write is a wallet that no
+  longer moves, or a ledger row no request produced.
+
+### Changed
+
+- `(*WalletService).Reconcile` asks about `WalletReconcile` rather than
+  `WalletHistory`, and sums the ledger only up to the position the wallet held
+  when the read began, so what it compares against the balance is exactly the set
+  of rows that produced it.
+
+### Added
+
 - `Cart`, `CartItem`, `Product` and `LimitedProduct`: a basket of lines the
   application prices, paid for in one operation and one transaction. What is for
   sale is the application's, through an interface this package declares and never

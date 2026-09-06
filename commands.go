@@ -7,7 +7,7 @@
 // installed it and audited by nothing -- see PublishCommand for the same
 // reasoning on the other half of the install.
 //
-// # They read, and they do not move money
+// # They do not move money
 //
 // Every command here answers a question: what wallets are there, what happened
 // on one of them, what was bought with it, and whether its ledger still adds up
@@ -16,6 +16,12 @@
 // moves carries an idempotency key so that a retry is safe, and a terminal is
 // exactly where a command is retried by somebody who is not sure whether the
 // first one worked -- a shell that scrolled away is not a receipt.
+//
+// The audit is the one that writes, and what it writes is not money: a wallet
+// whose ledger has stopped explaining its balance is frozen, so that nothing is
+// paid out of a number this package cannot account for. It moves no balance and
+// closes no difference; the command that would is the one that does not exist,
+// for the reason below.
 //
 // # Every command authorizes, and none of them invents a subject
 //
@@ -249,12 +255,18 @@ func purchasesCommand(deps Deps) console.Command {
 }
 
 // auditCommand reports whether every ledger still adds up to the balance beside
-// it.
+// it, and freezes the wallets where it does not.
 //
-// It reports and never repairs, and the flag that would repair does not exist.
-// A balance this package quietly rewrote would be a defect nobody ever heard
-// about, in the one table where the defect is money -- what an operator needs is
-// the number and the wallet, so that somebody can find out why.
+// It repairs nothing, and the flag that would repair does not exist. A balance
+// this package quietly rewrote would be a defect nobody ever heard about, in the
+// one table where the defect is money -- what an operator needs is the number
+// and the wallet, so that somebody can find out why. Closing a difference is
+// WalletService.Rebuild: it takes a reason, it writes a row rather than editing
+// a column, and a shell history is not where that decision belongs.
+//
+// The freeze is not a repair and is not optional. A wallet found to disagree
+// with its own ledger goes on serving withdrawals until something stops it, and
+// the audit is the thing that has just found out.
 func auditCommand(deps Deps) console.Command {
 	return console.Command{
 		Signature: CommandPrefix + "audit {wallet? : One wallet, or every wallet when it is left out}" +
@@ -296,12 +308,13 @@ func auditCommand(deps Deps) console.Command {
 					continue
 				}
 				broken++
-				o.Alert("%s: the balance says %s and the ledger sums to %s, a difference of %s over %d movements",
+				o.Alert("%s: the balance says %s and the ledger sums to %s, a difference of %s over %d movements%s",
 					report.Wallet.ID,
 					report.Wallet.Balance.Format(places),
 					report.Settled.Format(places),
 					report.Difference().Format(places),
-					report.Entries)
+					report.Entries,
+					frozenNote(report))
 			}
 
 			if broken > 0 {
@@ -311,6 +324,19 @@ func auditCommand(deps Deps) console.Command {
 			return nil
 		},
 	}
+}
+
+// frozenNote says what the audit did about a wallet that does not add up, and
+// nothing where the wallet still moves.
+//
+// It is on the line rather than in a summary, because the operator reading it
+// is deciding what to do about that wallet and "it no longer serves anybody" is
+// half of what they need to know.
+func frozenNote(report Reconciliation) string {
+	if !report.Frozen {
+		return ""
+	}
+	return ". It is frozen and moves no money until Rebuild closes the difference"
 }
 
 // operator reads the customer off the command line and asks the application who

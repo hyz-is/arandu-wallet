@@ -59,6 +59,15 @@ const (
 	WalletRefund security.Action = "wallet.refund"
 	// WalletPurchases is reading what a wallet has bought.
 	WalletPurchases security.Action = "wallet.purchases"
+	// WalletReconcile is checking that a wallet's ledger still adds up to its
+	// balance, freezing it where it does not, and appending the entry that
+	// closes the difference.
+	//
+	// It is its own decision and not a share of WalletHistory, although it
+	// begins by reading the same rows: what it leaves behind is a wallet that
+	// no longer moves, or a ledger with a row in it that no request produced.
+	// Neither is a reading of somebody's money, and neither is theirs to do.
+	WalletReconcile security.Action = "wallet.reconcile"
 )
 
 // OperatorRole is the role an application grants to the people who run its
@@ -82,6 +91,11 @@ const OperatorRole = "wallet.operator"
 // Reversal is deliberately not the holder's, and neither is a refund. Undoing a
 // payment is a decision about a movement that already settled, and letting the
 // person who received it take it back is a hole with a name.
+//
+// Reconciling is not the holder's either. It reads a whole history, which a
+// holder may do, but what it leaves behind is a wallet that no longer moves or
+// a ledger row no request produced -- and a holder who could write either could
+// decide what their own balance is supposed to be.
 //
 // Neither is the overdraft limit, and neither is moving money past it. A holder
 // who could raise their own limit could spend money nobody lent them, and one
@@ -135,7 +149,7 @@ func (WalletPolicy) Can(ctx context.Context, s security.Subject, a security.Acti
 		case WalletView, WalletList, WalletCreate, WalletHistory,
 			WalletDeposit, WalletWithdraw, WalletTransfer, WalletReverse,
 			WalletConfirm, WalletCredit, WalletForce,
-			WalletPay, WalletRefund, WalletPurchases:
+			WalletPay, WalletRefund, WalletPurchases, WalletReconcile:
 			return nil
 		}
 	}

@@ -96,6 +96,22 @@ type Wallet struct {
 	// statement that does not add up as somebody reads down it.
 	LastSequence int64 `db:"last_sequence"`
 
+	// Frozen stops every movement of this wallet's money.
+	//
+	// It is set when a reconciliation finds that the ledger no longer explains
+	// the balance beside it, and cleared by the adjustment that closes the
+	// difference. Nothing else writes it, and it is not a lock an application
+	// takes: what it means is that this package no longer knows what this
+	// wallet holds, and serving a withdrawal from a number it cannot explain is
+	// how a discrepancy becomes somebody else's money.
+	//
+	// It is a column and not a value read before the movement, for the reason
+	// the credit limit is one: the statement that moves the balance names it,
+	// so the answer that applies is the one the row holds at the instant of the
+	// write. A flag read a moment earlier is a flag two concurrent withdrawals
+	// both saw as clear.
+	Frozen Flag `db:"frozen"`
+
 	// CreatedAt is when the wallet was opened, in UTC.
 	CreatedAt time.Time `db:"created_at"`
 
@@ -158,6 +174,13 @@ const (
 	// basket is undone -- line by line, so that a basket half of which was
 	// already given back cannot be given back whole.
 	OperationRefund OperationKind = "refund"
+	// OperationAdjustment closed a difference between a wallet's ledger and the
+	// balance column beside it. It moves no balance: it appends the settled
+	// entry the ledger was missing, so the sum of the entries reaches the
+	// number the column already held. It is its own kind because a statement
+	// that could not tell it apart from a deposit would be a statement where a
+	// correction reads as money arriving.
+	OperationAdjustment OperationKind = "adjustment"
 )
 
 // Operation is one request that moved money, recorded before the money moves.
@@ -733,6 +756,29 @@ var (
 	// that asked for something else. Two different requests under one key
 	// cannot both be that key's answer, so neither is guessed at.
 	ErrOperationConflict = errors.New("wallet: that idempotency key belongs to a different request")
+
+	// ErrWalletFrozen is returned when a movement names a wallet whose ledger
+	// no longer explains its balance. The refusal comes from the statement that
+	// would have moved the money, so a wallet frozen between the read and the
+	// write is refused at the write.
+	ErrWalletFrozen = errors.New("wallet: this wallet is frozen because its ledger and its balance disagree, and Rebuild is what closes that")
+
+	// ErrWalletNotFrozen is returned when a rebuild names a wallet that is not
+	// frozen. The freeze is what holds the balance and the ledger still while
+	// the difference is measured and written, so a rebuild without one would be
+	// an adjustment computed from numbers that can move underneath it.
+	ErrWalletNotFrozen = errors.New("wallet: this wallet is not frozen, so a rebuild would adjust it by a difference that can still change")
+
+	// ErrLedgerMoved is returned when a wallet moved while its ledger was being
+	// read. What the scan concluded is about a wallet that no longer exists in
+	// that state, so it is reported rather than acted on.
+	ErrLedgerMoved = errors.New("wallet: the wallet moved while its ledger was being read, so the reconciliation is about a state it has left")
+
+	// ErrLedgerBalanced is returned when a rebuild names a wallet whose ledger
+	// already explains its balance. There is no difference to close, and an
+	// adjustment of nothing would be a row in the ledger saying something
+	// happened when nothing did.
+	ErrLedgerBalanced = errors.New("wallet: this wallet's ledger already adds up to its balance, so there is nothing to adjust")
 )
 
 // Resource is the list of fields one Wallet is allowed to answer with.

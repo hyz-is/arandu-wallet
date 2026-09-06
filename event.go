@@ -27,6 +27,15 @@ const (
 	// balance on it is the balance the movement did not change, and the money
 	// arrives when somebody confirms the operation.
 	MoneyProposed EventKind = "wallet.money_proposed"
+	// MoneyAdjusted is the entry that closed a difference between a wallet's
+	// ledger and the balance beside it. No balance changed: the amount is what
+	// the ledger was missing, and the balance is the number it now explains.
+	//
+	// It is its own kind because a listener that read it as money moving would
+	// tell somebody their balance had changed when nothing of theirs did, and
+	// because this is the one event worth an alert -- a wallet reaching it has
+	// been frozen, and something wrote a balance no request accounts for.
+	MoneyAdjusted EventKind = "wallet.money_adjusted"
 )
 
 // Event is one thing that happened, told to whoever asked to be told.
@@ -129,7 +138,10 @@ func movedEvents(op Operation, entries []Entry, wallets map[string]Wallet) []Eve
 	events := make([]Event, 0, len(entries))
 	for _, entry := range entries {
 		kind := MoneyMoved
-		if !entry.Settled {
+		switch {
+		case op.Kind == OperationAdjustment:
+			kind = MoneyAdjusted
+		case !bool(entry.Settled):
 			kind = MoneyProposed
 		}
 		held := wallets[entry.WalletID]

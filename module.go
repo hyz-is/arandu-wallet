@@ -37,6 +37,14 @@
 // and for an exchange that means the first one's rate and the first one's
 // price.
 //
+// A ledger that stops explaining the balance beside it freezes the wallet:
+// every balance statement names the column that says so, so a wallet found to
+// disagree stops being served at the write rather than at a flag somebody read.
+// The difference is closed by appending the entry the ledger was missing, which
+// leaves the balance column exactly as it was -- there is no path here that
+// corrects a balance, because a repair that left no row behind would be the one
+// write nobody could audit.
+//
 // The files are laid out by role rather than by layer, so the whole package
 // reads top to bottom:
 //
@@ -828,6 +836,29 @@ func (m *Module) answer(ctx *fhttp.Context, err error) error {
 		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusConflict, "that wallet is already further below zero than the new credit limit allows")
 		return nil
 
+	// A wallet whose ledger stopped explaining its balance is a conflict for the
+	// same reason: the request was well formed, and the answer is the state the
+	// record is in. It is named rather than hidden behind a 500, because the
+	// caller has already been authorized on this wallet and a payment that fails
+	// without saying why is a payment somebody retries until the support queue
+	// explains it.
+	case errors.Is(err, ErrWalletFrozen):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusConflict, "that wallet is frozen because its ledger and its balance disagree")
+		return nil
+	case errors.Is(err, ErrWalletNotFrozen):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusConflict, "that wallet is not frozen, so there is nothing to rebuild")
+		return nil
+	case errors.Is(err, ErrLedgerBalanced):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusConflict, "that wallet's ledger already adds up to its balance")
+		return nil
+
+	// Nothing was written and the same request is still safe to send, so the
+	// answer says so: 409 with a name the caller can act on, rather than a 500
+	// that reads as "this may or may not have happened".
+	case errors.Is(err, ErrLedgerMoved):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusConflict, "another transaction was moving the same money; nothing was written, and this request can be sent again")
+		return nil
+
 	// The request cannot be carried out against the money as it stands.
 	case errors.Is(err, ErrInsufficientFunds):
 		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, "the balance and the credit limit are not enough")
@@ -910,6 +941,7 @@ func (m *Module) Migrations() []foundation.Migration {
 		createWalletCharges{},
 		addWalletMetadata{},
 		createWalletPurchases{},
+		addWalletFreeze{},
 	}
 }
 
@@ -927,6 +959,7 @@ var (
 	_ migrations.ReversibleMigration = createWalletCharges{}
 	_ migrations.ReversibleMigration = addWalletMetadata{}
 	_ migrations.ReversibleMigration = createWalletPurchases{}
+	_ migrations.ReversibleMigration = addWalletFreeze{}
 )
 
 // createWallets is the balances table.
@@ -1383,4 +1416,39 @@ func (createWalletPurchases) Up(ctx context.Context, conn migrations.Connection)
 // Down drops the table, which takes its indexes with it.
 func (createWalletPurchases) Down(ctx context.Context, conn migrations.Connection) error {
 	return conn.Schema().DropIfExists(ctx, purchasesTable)
+}
+
+// addWalletFreeze is whether this package still knows what a wallet holds.
+type addWalletFreeze struct{ migrations.BaseMigration }
+
+// GetName is the migration's identity, and it carries the order.
+func (addWalletFreeze) GetName() string { return "20260906_0010_add_wallet_freeze" }
+
+// Up adds to the balances table the column that stops a wallet being served.
+//
+// A small integer and not a boolean column, which is the decision Flag carries
+// everywhere else here: a yes-or-no is written as 0 or 1, every engine holds
+// that, and the Go value that spells it cannot be spelled differently by a
+// driver.
+//
+// It defaults to zero, which is every wallet that existed before this ran and
+// every wallet opened afterwards: a wallet nobody has found a difference on is
+// a wallet that moves. So a binary of the previous version, which does not name
+// this column at all, keeps writing rows the new guard reads as clear -- which
+// is what makes the two versions able to serve the same table during a rollout.
+//
+// It is a column rather than a value read before the movement because the guard
+// on every balance statement names it, and the answer that applies has to be
+// the one the row holds at the instant of the write.
+func (addWalletFreeze) Up(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Table(ctx, walletsTable, func(table *schema.Blueprint) {
+		table.UnsignedSmallInteger("frozen").Default(0)
+	})
+}
+
+// Down drops the column, which leaves every wallet moving.
+func (addWalletFreeze) Down(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Table(ctx, walletsTable, func(table *schema.Blueprint) {
+		table.DropColumn("frozen")
+	})
 }
