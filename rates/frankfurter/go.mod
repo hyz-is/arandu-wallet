@@ -11,9 +11,9 @@ module github.com/hyz-is/arandu-wallet/rates/frankfurter
 go 1.26
 
 require (
-	github.com/arandu-io/framework v0.46.0
-	github.com/arandu-io/hesape v0.25.2
-	github.com/hyz-is/arandu-wallet v0.4.0
+	github.com/arandu-io/framework v0.46.1
+	github.com/arandu-io/hesape v0.26.0
+	github.com/hyz-is/arandu-wallet v0.5.0
 )
 
 require (
