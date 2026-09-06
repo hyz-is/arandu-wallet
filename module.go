@@ -959,6 +959,22 @@ func (m *Module) answer(ctx *fhttp.Context, err error) error {
 	case errors.Is(err, ErrCreditNegative):
 		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, "a credit limit is how far below zero a wallet may go, and cannot be negative")
 		return nil
+	// What a rate provider could not do. The pair and the moment are answers a
+	// caller acts on; the provider being down or unable to use its cache is a
+	// state of something else, and a client that reads it as a refusal stops
+	// retrying a payment that would work in a minute.
+	case errors.Is(err, ErrRatePairUnknown):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, "no rate is quoted between those two currencies")
+		return nil
+	case errors.Is(err, ErrRateMomentUnsupported):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, "no rate is published for that moment")
+		return nil
+	case errors.Is(err, ErrRateRequestRefused):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, "the rate provider refused the request")
+		return nil
+	case errors.Is(err, ErrRateProviderUnavailable), errors.Is(err, ErrRateCacheFailed):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusServiceUnavailable, "the rate provider could not be reached; nothing was moved, and this request can be sent again")
+		return nil
 	case errors.Is(err, ErrCurrencyMismatch):
 		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, "those wallets are not counted the same way, and no rate provider is configured")
 		return nil

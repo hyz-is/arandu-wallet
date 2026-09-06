@@ -2859,7 +2859,10 @@ func (s *WalletService) convert(ctx context.Context, g security.Grant, source, t
 
 	rate, err := s.rates.Rate(ctx, g, source.Currency, target.Currency)
 	if err != nil {
-		return 0, nil, err
+		// Named, so that a failure reaching this package's caller says which
+		// pair was being quoted. What the provider wrapped travels with it, so
+		// the five values above are still what errors.Is answers to.
+		return 0, nil, fmt.Errorf("wallet: quoting %s into %s: %w", source.Currency, target.Currency, err)
 	}
 
 	from := source.Money(debited)

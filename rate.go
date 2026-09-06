@@ -76,6 +76,59 @@ var (
 	ErrConversionUnderflow = errors.New("wallet: the amount is worth less than one minor unit of the target")
 )
 
+// What a rate provider could not do.
+//
+// A provider lives outside this process and fails in ways that are not this
+// package's: a pair nobody quotes, a service that is down, a moment it has no
+// figures for. Those used to travel out as whatever the provider wrote, so an
+// application had to match on a sentence to tell "this pair does not exist"
+// from "try again in a minute" -- and the two are opposite instructions to
+// whoever is waiting.
+//
+// The values are declared here and not where a provider is written, and that is
+// the whole point of them: a caller tests them with errors.Is against this
+// package, which it already imports, and never has to import the provider it
+// happens to be wired to. A provider wraps the one that fits and adds its own
+// sentence; one that wraps none is not wrong, and what it returns travels out
+// unclassified rather than being guessed at.
+//
+// There are five because there are five different things to do about them.
+// Their shape is the reference's, which distinguishes the same failures; what is
+// not carried over is its split between a failure and the runtime wrapper around
+// the same failure, which is one distinction with no different answer.
+var (
+	// ErrRatePairUnknown is returned when the provider does not quote this pair
+	// at all. Nothing about waiting or retrying helps: either the pair is wrong
+	// or the provider is the wrong one to ask.
+	//
+	// It is not ErrRatePair, which is about a rate this package was handed for
+	// two other currencies -- that one is wiring inside the process.
+	ErrRatePairUnknown = errors.New("wallet: the rate provider does not quote this pair of currencies")
+
+	// ErrRateProviderUnavailable is returned when the provider could not be
+	// reached or answered with a failure of its own. It is the one that is worth
+	// retrying, and the one that should not be turned into a refusal a customer
+	// reads as final.
+	ErrRateProviderUnavailable = errors.New("wallet: the rate provider could not be reached")
+
+	// ErrRateMomentUnsupported is returned when the provider cannot quote for
+	// the moment it was asked about -- a date before its history, or one it does
+	// not publish. The pair exists and the provider is up.
+	ErrRateMomentUnsupported = errors.New("wallet: the rate provider has no figures for that moment")
+
+	// ErrRateCacheFailed is returned when a provider that caches its quotes
+	// could not read or write its cache. The quote may still be obtainable, so
+	// it is told apart from the provider being down: what it names is the
+	// provider's own storage rather than the service it fronts.
+	ErrRateCacheFailed = errors.New("wallet: the rate provider could not use its cache")
+
+	// ErrRateRequestRefused is returned when the provider refused the request
+	// itself: a currency code it cannot parse, a query it does not accept.
+	// It is a defect in what was asked rather than in what was answered, so it
+	// is fixed in the caller and not waited out.
+	ErrRateRequestRefused = errors.New("wallet: the rate provider refused the request")
+)
+
 // Rate is one exchange rate, as the exact fraction Numerator/Denominator.
 //
 // A fraction of two integers and never a float: 5.4321 has no binary
@@ -243,5 +296,10 @@ type RateProvider interface {
 	// It reports an error rather than an approximation when the pair has no
 	// rate: money that moved at a rate nobody had is money that has to be
 	// unwound by hand.
+	//
+	// What it reports with should wrap one of the five values above where one
+	// fits, so that a caller can tell a pair nobody quotes from a service that
+	// is down without reading a sentence. An error that wraps none of them is
+	// carried out unchanged rather than guessed at.
 	Rate(ctx context.Context, g security.Grant, from, to Currency) (Rate, error)
 }

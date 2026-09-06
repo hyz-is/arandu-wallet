@@ -67,6 +67,13 @@ they describe releases of the template and not of this package.
 
 ### Added
 
+- `ErrRatePairUnknown`, `ErrRateProviderUnavailable`, `ErrRateMomentUnsupported`,
+  `ErrRateCacheFailed` and `ErrRateRequestRefused`: what a rate provider could
+  not do, as five values a caller tests with `errors.Is` against this package
+  rather than against whichever provider it is wired to. `RateProvider` says a
+  provider should wrap the one that fits; an error wrapping none of them travels
+  out unchanged rather than being guessed at. The service names the pair it was
+  quoting and wraps what the provider said, so the value survives the journey.
 - A line priced at zero is bought. It writes its purchase row, answers `Bought`
   like any other, moves no balance and appends no ledger entry -- an entry of
   zero would be a movement saying something happened when nothing did. No
