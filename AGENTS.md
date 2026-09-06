@@ -144,11 +144,22 @@ rejected in review. None of them is missing by accident.
 | a third dependency | an argument, first. This module is imported into other people's builds |
 | a command of its own that copies files into a project | `Publishes()`, which declares a tagged tree and nothing more. `aru vendor:publish` asks the application which modules it registered and writes what each one declares, so one command serves every installed package instead of one command per package |
 
-## The four properties
+There is no `arandu-swap`, and there will not be one. Swap, exchange, quotation
+and conversion are capabilities *inside* this package, beside transfer and
+bookkeeping: `RateProvider` is the seam that quotes, `Rate` is the exact
+fraction, `Rate.Convert` is the one rounding rule, and `wallet_conversions` is
+the row that records what an exchange was worth. A second package holding half
+of that would mean two answers to "what is this amount worth" and two places a
+rounding rule could be changed, and the ledger would carry both. A rate source
+that talks to a network belongs in a submodule of this repository with its own
+`go.mod`, implementing `RateProvider`; it does not belong in a package of its
+own, and it never re-implements the arithmetic.
+
+## The properties
 
 These are the reason the package is shaped the way it is. A change that breaks
 one of them is not merged, whatever else it improves. `tests/Unit/policy_test.go`
-checks all four against the code.
+checks the first four against the code.
 
 1. **The policy denies by default**, and has no branch that allows an action.
    `TestThePolicyDeniesEveryActionByDefault` walks every action with an
@@ -165,8 +176,21 @@ checks all four against the code.
    suite constructs the Service with a nil database, so a call to
    `Wallets(nil)` would panic. Every refusal it asserts is therefore proof
    that authorization happened before Model construction.
+5. **A generic financial capability is fixed here, never in the consumer.**
+   A retry that belongs around every money movement, a repair for a balance
+   that stopped matching its ledger, an isolation level the guard depends on,
+   a currency conversion, a fee, a refund — none of them is one application's
+   problem, and every one of them is this package's. An application that works
+   around a gap by writing its own is a second engine for money: it has its own
+   rounding, its own idempotency and its own idea of when a balance is safe to
+   spend, and the ledger here cannot explain what that engine did. The next
+   consumer then inherits the divergence, because the gap is still here and the
+   workaround is not. So the answer to "this package cannot do X yet" is a
+   change to this package, in this repository, with a test — and if that is not
+   possible today, an issue that says so, never a copy of the movement code
+   living outside it.
 
-`policy_test.go` holds those four by calling the code. `tests/Unit/audit_test.go`
+`policy_test.go` holds the first four by calling the code. `tests/Unit/audit_test.go`
 holds the same shape by *reading* it: every exported Service method must call
 `Authorize` before its first `Wallets`, every tenant write in the Service
 comes from `data.Tenant(g)`, and no tenant accessor reads request input.
@@ -180,7 +204,14 @@ which is a warning there and a failure here because `go test` has one outcome.
 Adding an outbound call, a file write or a process means declaring it in the
 same commit, and the suite is what says so.
 
-The fifth property is not syntax, so it is held where the routes exist.
+The fifth is the one no test can hold, and saying so is part of it: nothing in
+this repository can see the code an installer writes. It is held by review, by
+the parity table below, and by whoever reads a consumer's diff. The table exists
+so that a consumer can tell a gap from a decision without auditing this package
+again, because "I audited it and it was missing" is how the second engine gets
+written.
+
+The sixth property is not syntax either, so it is held where the routes exist.
 `TestNoRouteLandsInTheFrameworkNamespace`, in `tests/Feature/routes_test.go`,
 registers the module and reads the table back: a prefix arrives through
 configuration, and `/_arandu/` is refused when the application boots — in the
@@ -190,6 +221,73 @@ What the audit does not reach is written at the top of the file it lives in. It
 reads syntax, so dynamic dispatch, reflection, and wrappers around the named
 seams are invisible to it. A green run means no such thing was found written
 down, not that none exists.
+
+## Parity, and the limits that are not gaps
+
+The table is here so that a consumer does not audit this package to find out
+what it does. Read it before writing anything that moves money outside this
+repository; the fifth property is what the answer has to be when a row says
+*open*.
+
+| Capability | Here | Reached through |
+| --- | --- | --- |
+| several wallets per holder, one per slug | yes | `Open`, and the unique index on tenant, holder and slug |
+| balance as an integer of minor units | yes | `Amount`, an `int64`, with `ParseAmount` at the border |
+| deposit, withdrawal | yes | `Deposit`, `Withdraw` |
+| transfer between two wallets | yes | `Transfer` |
+| exchange across currency or scale | yes | `Transfer` again: the wallets decide, and the operation is recorded as an exchange with its rate |
+| the rate, recorded and reproducible | yes | `wallet_conversions`: both currencies, both scales, both amounts, the fraction, the moment, the remainder |
+| a source that quotes rates | no | `RateProvider` is the seam; nothing here talks to a network, and `arandu.mod.toml` says `network = false` |
+| overdraft, and moving past it | yes | `SetCredit`, the `credit_limit` column read by the guard, and `WalletForce` |
+| record without counting, then settle | yes | `Pending` on the request, then `Confirm` |
+| undo an operation | yes | `Reverse`, which appends the opposite and changes nothing already written |
+| basket, gift, refund by line | yes | `Pay` with a `Cart`, `BeneficiaryWalletID`, and `Refund` |
+| "has this wallet already bought that" | yes | `Bought`, `PurchasesOf` |
+| a fee somebody charges to be paid | yes | `FeeProvider`, and the fee is credited to a third wallet |
+| a discount one payer is charged less | yes | `DiscountProvider`, recorded on the charge |
+| the same request twice moves money once | yes | the idempotency key, under a unique index, answered by replay |
+| the application's own facts on a movement | operations and entries only | `Meta`; the wallet row itself carries none — **open** |
+| a retry when the engine reports a conflict | no | **open**: a serialization failure or a deadlock travels out as the driver wrote it |
+| a balance repaired after it stops matching its ledger | detected only | `Reconcile` reads and reports; nothing repairs, and nothing stops serving a wallet known to diverge — **open** |
+| an isolation level the guard can be read against | no | **open**: the transaction takes the engine's default, which is not the same on every engine |
+| statement, ledger, running balance | yes | `History`, `Statement`, `Entry.BalanceAfter` |
+| told what the money did, after it did it | yes | `Listener` |
+| a default wallet, or lookup by holder and slug | no | **open**: the unique index exists, the read does not |
+| closing or archiving a wallet | no | **open** |
+| typed errors from a rate source | no | **open**: what the provider returns travels out as it came |
+| a free line in a basket | no | **open**: a price of zero or less is refused |
+| an empty balance told apart from an insufficient one | no | **open**: both answer `ErrInsufficientFunds` |
+| a slug derived from a name | no | **open**: the caller supplies both |
+| locales beyond `en` and `pt-BR` | no | **open**: `Locales()` is what ships |
+
+These are limits this package chose, and they are part of the contract rather
+than gaps. A consumer that needs more asks here; a consumer that works around
+one has written the second engine.
+
+| Limit | Value | Why it is a number and not "none" |
+| --- | --- | --- |
+| `MaxCartLines` | 100 | one basket is one transaction, and every line takes a row lock |
+| `MaxItemQuantity` | 10000 | a line is for a quantity somebody meant |
+| `MaxPurchaseScan` | 2000 | one batch question reads this many rows; a wallet with more recent purchases is answered from what the scan reached |
+| `MaxPurchaseQuestions` | 100 | one batch carries this many questions |
+| `MaxDecimalPlaces` | 9 | past it the `int64` of minor units stops reaching a billion whole units |
+| `MaxRateDenominator` | 1000000000 | the remainder is recorded over this times ten to the source's scale, and that product has to fit an `int64` |
+| `MaxPageSize` | 200 | a page nobody bounded reads the whole table on the day it is large |
+| `MaxMetaBytes` | 4096 | what an application attaches is carried, never queried |
+| `MaxMetaKeys` | 32 | the same decision, counted |
+
+Three things the reference does that this package deliberately does not:
+
+- **the fee vanishes from the ledger there.** `PrepareService` adds it to the
+  withdrawal and `TransferService` writes two transactions, so the money leaves
+  and is credited nowhere. `FeeSchedule` here requires a `WalletID` and credits
+  it, so what leaves is what arrives plus the fee, exactly.
+- **the exchange there ignores scale.** It applies the rate without
+  `10^(to_dp − from_dp)`, so a conversion between two scales is wrong by that
+  factor. `Rate.Convert` applies it.
+- **the quote is never stored there.** There is no rate column anywhere in its
+  source. `wallet_conversions` holds the fraction and the moment, so the row can
+  be recomputed long after the provider that answered it is gone.
 
 ## Writing code
 
