@@ -8,74 +8,40 @@ the versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 A published module version is immutable: Go serves it from the proxy forever, so
 a release is corrected by another release and never by moving a tag.
 
+Every heading below is a tag of this repository. Up to `v0.4.0` this file also
+carried three sections describing releases of the package template this
+repository was configured from -- numbered `0.2.0`, `0.3.1` and `0.4.0`, dated
+before this repository existed, and colliding head-on with the tags of the same
+name here. They are gone.
+
 ## [Unreleased]
 
-The versions below `0.1.0` are the history of the package template this
-repository was configured from, carried over with every other file it holds;
-they describe releases of the template and not of this package.
+## [0.4.1] - 2026-09-06
 
 ### Added
 
-- `ErrConcurrencyConflict`, and a movement that is sent again when the engine
-  refuses it as a conflict with another transaction. Serialization failure and
-  deadlock are classified by SQLSTATE, read through an interface a driver
-  satisfies rather than by importing one, and retried with a widening random
-  pause. Sending it again is safe because the operation and the movements arrive
-  at the transaction as values -- no rate, fee, discount or product is asked
-  twice -- and because an attempt that did commit is answered by its own
-  idempotency key rather than repeated. A conflict that survives four attempts
-  is `ErrConcurrencyConflict`, which says that nothing was written and the same
-  request can be sent again.
-- `(*WalletService).Rebuild`, `RebuildRequest`, `OperationAdjustment`,
-  `MoneyAdjusted`, `ErrWalletNotFrozen`, `ErrLedgerBalanced` and `ErrLedgerMoved`.
-  A wallet whose ledger stopped explaining its balance is closed by appending the
-  settled entry the ledger was missing: the balance column is not touched, so
-  the repair is a row somebody can read rather than a value somebody changed.
-- The `frozen` column on `wallets`, `Wallet.Frozen`, `Reconciliation.Frozen` and
-  `ErrWalletFrozen`. `(*WalletService).Reconcile` now freezes a wallet whose
-  ledger and balance disagree, and every balance statement names the column in
-  its own predicate, so a wallet frozen between a read and a write is refused at
-  the write.
-- `WalletReconcile`, the action `Reconcile` and `Rebuild` ask about. It is the
-  operator's and not the holder's: what these two write is a wallet that no
-  longer moves, or a ledger row no request produced.
-- `ErrUnsupportedDialect`. `New` refuses an engine this package's suite has never
-  run against; PostgreSQL and SQLite are what it covers, and nothing here claims
-  MySQL.
-
-### Changed
-
-- The statement that moves a balance reports the row it left, so nothing reads
-  it back. `moveStatement` composes it -- the one place in the package that
-  writes the balance column -- and every branch of it carries the same
-  predicate: the wallet, the tenant, the two reasons a wallet is out of service,
-  and the condition on the balance. A basket of forty lines saves a hundred and
-  twenty round trips inside one transaction, with the row locks already held.
-  `TestEveryBalanceStatementCarriesItsOwnGuard` now asks that function for the
-  statement and reads it, and `TestOnlyOneStatementInThePackageWritesABalance`
-  holds that there is no second site.
+- Three tests that hold the two release files against the code: an action
+  declared in `policy.go` and a migration declared in `module.go` have to be
+  named under a version heading rather than under `[Unreleased]`, and the two
+  files have to describe the same set of versions. Removing the `## [0.4.0]`
+  heading names `WalletDescribe`, `WalletClose` and the two migrations of that
+  release, which is the defect this release corrects.
 
 ### Fixed
 
-- `(*WalletService).PurchasesOf` pages on the pair of the sequence and the
-  identifier rather than on the sequence alone. The sequence is not unique in
-  that table -- two lines of one basket take theirs from the ledgers of two
-  different wallets, and a free line records zero -- so a page anchored on it
-  alone skipped every row sharing the last one's.
+- `rates/frankfurter` requires the parent from the proxy instead of replacing
+  it with the directory above. The `replace` was there because a submodule
+  cannot require a version that does not exist yet; a consumer ignores it --
+  Go applies a replace only from the main module -- but the `require` it stood
+  in for is not ignored, so this repository's own gates were testing the
+  submodule against the parent on disk rather than against what was published.
+- This file and `UPGRADE.md` describe the releases of this package. Both
+  carried the package template's own history, with the entity renamed into it,
+  so `v0.4.0` shipped a changelog whose `[0.4.0]` section described a
+  publishing migration of the template and filed everything this version
+  actually added under `[Unreleased]`.
 
-### Changed
-
-- Every transaction this package opens names its own isolation level -- read
-  committed, as the first statement -- instead of taking the engine's default.
-  The guard on a balance is a predicate on an update, and what that predicate is
-  evaluated against while another transaction changes the same row is the level's
-  answer; a default is a setting an operator can change for a whole cluster. A
-  transaction the application had already opened is joined and left at the level
-  it chose.
-- `(*WalletService).Reconcile` asks about `WalletReconcile` rather than
-  `WalletHistory`, and sums the ledger only up to the position the wallet held
-  when the read began, so what it compares against the balance is exactly the set
-  of rows that produced it.
+## [0.4.0] - 2026-09-06
 
 ### Added
 
@@ -143,6 +109,93 @@ they describe releases of the template and not of this package.
   wallet is called.
 - `OpenRequest.Description` and `OpenRequest.Meta`, carried by the `store`
   handler.
+- `20260906_0011_add_wallet_description` and `20260906_0012_add_wallet_closure`.
+  Running `aru migrate` is required before this version serves.
+
+### Changed
+
+- The statement that moves a balance reports the row it left, so nothing reads
+  it back. `moveStatement` composes it -- the one place in the package that
+  writes the balance column -- and every branch of it carries the same
+  predicate: the wallet, the tenant, the two reasons a wallet is out of service,
+  and the condition on the balance. A basket of forty lines saves a hundred and
+  twenty round trips inside one transaction, with the row locks already held.
+  `TestEveryBalanceStatementCarriesItsOwnGuard` now asks that function for the
+  statement and reads it, and `TestOnlyOneStatementInThePackageWritesABalance`
+  holds that there is no second site.
+
+### Fixed
+
+- `(*WalletService).PurchasesOf` pages on the pair of the sequence and the
+  identifier rather than on the sequence alone. The sequence is not unique in
+  that table -- two lines of one basket take theirs from the ledgers of two
+  different wallets, and a free line records zero -- so a page anchored on it
+  alone skipped every row sharing the last one's.
+
+## [0.3.0] - 2026-09-06
+
+### Added
+
+- `ErrConcurrencyConflict`, and a movement that is sent again when the engine
+  refuses it as a conflict with another transaction. Serialization failure and
+  deadlock are classified by SQLSTATE, read through an interface a driver
+  satisfies rather than by importing one, and retried with a widening random
+  pause. Sending it again is safe because the operation and the movements arrive
+  at the transaction as values -- no rate, fee, discount or product is asked
+  twice -- and because an attempt that did commit is answered by its own
+  idempotency key rather than repeated. A conflict that survives four attempts
+  is `ErrConcurrencyConflict`, which says that nothing was written and the same
+  request can be sent again.
+- `(*WalletService).Rebuild`, `RebuildRequest`, `OperationAdjustment`,
+  `MoneyAdjusted`, `ErrWalletNotFrozen`, `ErrLedgerBalanced` and `ErrLedgerMoved`.
+  A wallet whose ledger stopped explaining its balance is closed by appending the
+  settled entry the ledger was missing: the balance column is not touched, so
+  the repair is a row somebody can read rather than a value somebody changed.
+- The `frozen` column on `wallets`, `Wallet.Frozen`, `Reconciliation.Frozen` and
+  `ErrWalletFrozen`. `(*WalletService).Reconcile` now freezes a wallet whose
+  ledger and balance disagree, and every balance statement names the column in
+  its own predicate, so a wallet frozen between a read and a write is refused at
+  the write.
+- `WalletReconcile`, the action `Reconcile` and `Rebuild` ask about. It is the
+  operator's and not the holder's: what these two write is a wallet that no
+  longer moves, or a ledger row no request produced.
+- `ErrUnsupportedDialect`. `New` refuses an engine this package's suite has never
+  run against; PostgreSQL and SQLite are what it covers, and nothing here claims
+  MySQL.
+- `20260906_0010_add_wallet_freeze`. Running `aru migrate` is required before
+  this version serves.
+
+### Changed
+
+- Every transaction this package opens names its own isolation level -- read
+  committed, as the first statement -- instead of taking the engine's default.
+  The guard on a balance is a predicate on an update, and what that predicate is
+  evaluated against while another transaction changes the same row is the level's
+  answer; a default is a setting an operator can change for a whole cluster. A
+  transaction the application had already opened is joined and left at the level
+  it chose.
+- `(*WalletService).Reconcile` asks about `WalletReconcile` rather than
+  `WalletHistory`, and sums the ledger only up to the position the wallet held
+  when the read began, so what it compares against the balance is exactly the set
+  of rows that produced it.
+
+## [0.2.1] - 2026-09-05
+
+### Fixed
+
+- The published module carries its view sources. They were kept at
+  `resources/views/vendor/wallet/`, and `go mod` drops every path with a segment
+  named `vendor` when it packs a module, so the files were in the repository and
+  absent from the archive the proxy serves: a project that imported this package
+  failed to build with `pattern resources/views: no matching files found`, and
+  every gate that compiles this repository was green. The archive keeps them
+  under `resources/publish/` and the publication carries where they come from
+  and where they go, so the files still land at `resources/views/vendor/wallet/`
+  under the same view names.
+
+## [0.2.0] - 2026-09-05
+
+### Added
 
 - `Cart`, `CartItem`, `Product` and `LimitedProduct`: a basket of lines the
   application prices, paid for in one operation and one transaction. What is for
@@ -172,6 +225,10 @@ they describe releases of the template and not of this package.
 - `Leg` and `TransferRequest.Withdrawal`/`TransferRequest.Deposit`: the two sides
   of a payment carry their own metadata and their own settlement, so money held
   until delivery and delivery on credit are both expressible.
+- `Config.CSRF`, the issuer of the token every form on these screens carries.
+  It is required: every screen this module draws moves money, and a form with no
+  token is a form the application refuses -- which is better found at boot than
+  from a button that does nothing.
 - `Listener`, `Event`, `EventKind` and `Config.Listeners`: whoever asked is told
   what the money did, after the write has committed and never inside it. A
   movement the database threw away is never announced.
@@ -350,107 +407,33 @@ they describe releases of the template and not of this package.
 - An entry answers with `operation_kind`, a receipt with `conversion`, and a
   page of a ledger with `conversions` beside its items.
 
-### Changed
-
-- The statement that moves a balance reports the row it left, so nothing reads
-  it back. `moveStatement` composes it -- the one place in the package that
-  writes the balance column -- and every branch of it carries the same
-  predicate: the wallet, the tenant, the two reasons a wallet is out of service,
-  and the condition on the balance. A basket of forty lines saves a hundred and
-  twenty round trips inside one transaction, with the row locks already held.
-  `TestEveryBalanceStatementCarriesItsOwnGuard` now asks that function for the
-  statement and reads it, and `TestOnlyOneStatementInThePackageWritesABalance`
-  holds that there is no second site.
-
-### Fixed
-
-- The published module carries its view sources. They were kept at
-  `resources/views/vendor/wallet/`, and `go mod` drops every path with a segment
-  named `vendor` when it packs a module, so the files were in the repository and
-  absent from the archive the proxy serves: a project that imported this package
-  failed to build with `pattern resources/views: no matching files found`, and
-  every gate that compiles this repository was green. The archive keeps them
-  under `resources/publish/` and the publication carries where they come from
-  and where they go, so the files still land at `resources/views/vendor/wallet/`
-  under the same view names.
-
-## [0.4.0] - 2026-09-05
+## [0.1.0] - 2026-09-05
 
 ### Added
 
-- `(*Module).Publishes` declares one `foundation.Publication`, tagged as a view.
-  The contract belongs to the framework, so whatever writes the files reads
-  every module through one interface instead of one this package defined for
-  itself.
-
-### Changed
-
-- The minimum Framework version is now `v0.46.0`, with Hesape `v0.25.0`.
-- `(*Module).Publishes` returns `[]foundation.Publication` instead of `io/fs.FS`.
-- `PublishCommand` is now `aru vendor:publish --apply`.
-- `(*Module).Boot` names the package whose import links the views, alongside the
-  view and the command.
-
-### Removed
-
-- `Publishable`, the contract this package declared for itself.
-  `foundation.Publishable` is the one it answers now.
-- `Publishes`, the package-level function. There was a second form because a
-  command with no database handle could not hold a `Module`; there is no such
-  command any more.
-- `publish`, the command of this module. `aru vendor:publish` reads the modules
-  an application registered and writes what each one declares, which is a
-  question only the application can answer.
-
-## [0.3.1] - 2026-09-03
-
-### Added
-
-- `Publishable`, the optional contract a module answers to hand files to the
-  application, and `Publishes()` on `Module`.
-- `PublishedPaths`, `ViewNames` and `ViewPackages`, the three spellings of one
-  view derived from the archive rather than written down separately.
-- `PublishCommand`, the one spelling of the command that copies the views.
-- `publish`, a command of this module: `go run <module>/publish@latest` writes
-  the views under `resources/views/vendor/<module>/`, refuses to replace a file
-  the project already has without `--force`, and prints the imports that link
-  them.
-- `(*Module).Boot` refuses to serve when a view this package renders was never
-  published, naming the view and the command instead of answering the first
-  request that reaches it with a 500.
-
-## [0.2.0] - 2026-08-29
-
-### Added
-
-- `Wallets(db)` exposes the configured, tenant-scoped Model used by the
-  Service after authorization.
-
-### Changed
-
-- `Config.CSRF` is required: every screen this module draws moves money, and a
-  page with no token is a page whose forms the application refuses.
-- `TransferRequest.Pending` is replaced by `TransferRequest.Withdrawal` and
-  `TransferRequest.Deposit`, each a `Leg`. The transfer route reads
-  `withdrawal_pending` and `deposit_pending` in place of `pending`.
-- `NewWalletService` takes listeners as a trailing variadic parameter, so every
-  existing call compiles unchanged.
-- A whole operation's ledger rows are appended in one statement rather than one
-  each. Nothing about what is written changed.
-
-- The minimum Framework version is now `v0.41.0`, with Hesape `v0.19.1`.
-- `NewWalletService` now accepts `*data.DB` instead of
-  `*WalletRepository`.
-- `(*WalletService).Create` now returns `(*Wallet, error)`.
-- `(*WalletService).Find` now returns `(*Wallet, error)`.
-- `(*WalletService).List` now returns `([]*Wallet, error)`.
-- `Wallet`: old is comparable; new is not because it embeds
-  `model.Model[Wallet]`. Compare stable fields such as `ID` instead.
-
-### Removed
-
-- `WalletRepository` and `NewWalletRepository`.
-- `(*WalletRepository).Create`, `(*WalletRepository).Delete`,
-  `(*WalletRepository).Find`, `(*WalletRepository).List`, and
-  `(*WalletRepository).Update`. Add a Repository only for specialized
-  queries, reports, projections, read models, exports, or external storage.
+- The package: `Wallet`, `Operation`, `Entry`, `WalletService` and `Module`,
+  with `Open`, `Find`, `List`, `History`, `Deposit`, `Withdraw`, `Transfer`
+  and `Reverse`, and the routes that reach them.
+- `Money` and `Amount`: an amount is an integer of minor units and a scale, so
+  nothing here is a float. What a wallet is counted in is a column.
+- `RateProvider` and `Config.Rates`, the seam that converts between two wallets
+  counted differently: `ConvertTo` answers the amount that arrives. The rate
+  behind it is not recorded at this version -- `wallet_conversions` and the
+  arithmetic this package owns arrive in `0.2.0` -- so an exchange settled here
+  leaves no row saying at what rate.
+- An append-only ledger. A balance is a column, and the ledger is what
+  explains it; nothing rewrites a row that was written.
+- The guard that moves a balance: the decision happens inside the statement
+  that writes, as a predicate on the update, rather than in a read before it.
+  A read-then-check loses money under a database that interleaves writers, and
+  the suite runs against one to hold that.
+- `WalletPolicy`, and the actions it answers about: `WalletView`, `WalletList`,
+  `WalletCreate`, `WalletHistory`, `WalletDeposit`, `WalletWithdraw`,
+  `WalletTransfer` and `WalletReverse`, plus the `OperatorRole` a person holds
+  to act on money that is not their own. Money is split finer than read and
+  write: somebody who may see a balance is not thereby somebody who may spend
+  it.
+- Idempotency: an operation carries a key, and a request that arrives twice is
+  answered by the receipt of the first rather than moving the money again.
+- `20260905_0001_create_wallets`, `20260905_0002_create_wallet_operations` and
+  `20260905_0003_create_wallet_entries`.
