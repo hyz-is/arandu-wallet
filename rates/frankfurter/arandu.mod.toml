@@ -1,0 +1,21 @@
+# What this package declares about itself.
+#
+# It is the half of the wallet that talks to a network, split into a module of
+# its own so that the other half can go on declaring network = false and mean
+# it. An application that never crosses a currency never imports this and never
+# compiles an HTTP client.
+
+name = "hyz-is/wallet-rates-frankfurter"
+framework = ">= 0.46"
+profiles = ["conventional", "performance"]
+
+[permissions]
+# It asks a public service for the rate between two currencies. That is the
+# whole reason this module exists apart from the one it serves.
+network = true
+# It keeps no state outside whatever cache the application hands it.
+filesystem = false
+# It runs no other program.
+exec = false
+# It owns no table.
+migrations = false

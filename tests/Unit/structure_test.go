@@ -359,6 +359,19 @@ func productionGoFiles(t *testing.T, root string) []parsedGoFile {
 		if entry.IsDir() && (entry.Name() == ".git" || entry.Name() == "testdata") {
 			return filepath.SkipDir
 		}
+		// A directory with a go.mod of its own is a module of its own, and
+		// nothing an application that installs this one compiles: `go get` of a
+		// module never pulls in a module nested inside it, so what such a
+		// directory does is not a capability anybody who installed this agreed
+		// to. It is the same reason a main package is left out -- see linked,
+		// in audit_test.go -- and it is what lets a submodule declare
+		// capabilities of its own without the parent's manifest becoming a lie
+		// in either direction.
+		if entry.IsDir() && path != root {
+			if _, err := os.Stat(filepath.Join(path, "go.mod")); err == nil {
+				return filepath.SkipDir
+			}
+		}
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") ||
 			strings.HasSuffix(entry.Name(), "_test.go") || strings.HasSuffix(entry.Name(), ".kyse.go") {
 			return nil

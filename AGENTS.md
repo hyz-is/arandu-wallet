@@ -85,6 +85,7 @@ this one must prove about itself it proves in its own suite or nowhere.
 | 16 routes | `grep -c 'm.register(r,' module.go` |
 | 17 actions the policy answers about | `grep -cE '^\t[A-Za-z]+ security.Action = ' policy.go` |
 | 5 direct dependencies, all under `arandu-io` | `go list -m -f '{{if and (not .Indirect) (not .Main)}}{{.Path}} {{.Version}}{{end}}' all` |
+| 1 nested module, `rates/frankfurter`, with gates of its own | `find . -mindepth 2 -name go.mod` |
 
 Two of those five are database connectors, imported by the test suite and by
 nothing the compiler links into an application: SQLite for the suite that runs
@@ -126,6 +127,16 @@ the default
 pointers intact because copying an embedded Model leaves its `Entity` pointer
 aimed at the original allocation. `Resource` and `Collection` are the deliberate
 response snapshot boundary.
+
+`rates/frankfurter` is a Go module of its own, and the four gates do not reach
+it: `./...` stops at a directory with its own `go.mod`, so it is built, vetted
+and tested from inside its own directory. It is separate because it is the only
+part of this repository that talks to a network and Go has no optional
+dependency -- a client held in the package above would be a client in the build
+of everybody who installed the wallet. Its manifest declares `network = true`
+and the parent's goes on declaring `network = false`; `productionGoFiles` skips
+nested modules for the same reason it skips a `main` package, which is that
+neither is something `go get` of this module compiles.
 
 ## What does not exist here
 
@@ -237,7 +248,7 @@ repository; the fifth property is what the answer has to be when a row says
 | transfer between two wallets | yes | `Transfer` |
 | exchange across currency or scale | yes | `Transfer` again: the wallets decide, and the operation is recorded as an exchange with its rate |
 | the rate, recorded and reproducible | yes | `wallet_conversions`: both currencies, both scales, both amounts, the fraction, the moment, the remainder |
-| a source that quotes rates | no | `RateProvider` is the seam; nothing here talks to a network, and `arandu.mod.toml` says `network = false` |
+| a source that quotes rates | yes, in a module of its own | `rates/frankfurter`, with its own `go.mod` and its own manifest saying `network = true`. The parent still says `network = false` and means it: an application that never crosses a currency never imports it and compiles no HTTP client |
 | overdraft, and moving past it | yes | `SetCredit`, the `credit_limit` column read by the guard, and `WalletForce` |
 | record without counting, then settle | yes | `Pending` on the request, then `Confirm` |
 | undo an operation | yes | `Reverse`, which appends the opposite and changes nothing already written |

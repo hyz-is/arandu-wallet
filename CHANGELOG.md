@@ -67,6 +67,15 @@ they describe releases of the template and not of this package.
 
 ### Added
 
+- `rates/frankfurter`, a `wallet.RateProvider` against a public source, as a Go
+  module of its own inside this repository. It reads the published decimal digit
+  by digit into the exact fraction it spells -- 5.4321 is 54321/10000, never a
+  float -- and wraps the five failure values above. A deadline is mandatory and
+  is this package's rather than the client's; caching is the application's own
+  `cache.Repository` or none. The parent's manifest is unchanged at
+  `network = false`: an application that never crosses a currency never imports
+  it. Its suite runs against a recorded answer, with one live check skipped
+  unless `ARANDU_TEST_LIVE_RATES` asks for it.
 - Sentences for what the new states and kinds are called, in both shipped
   locales: `wallet.kind.adjustment`, `wallet.state.open`, `wallet.state.frozen`,
   `wallet.state.closed`, `wallet.purchase.free`, `wallet.field.description`,
