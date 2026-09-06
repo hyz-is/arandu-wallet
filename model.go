@@ -776,6 +776,17 @@ var (
 	// would have moved the money, not of a check that ran before it.
 	ErrInsufficientFunds = errors.New("wallet: the balance and the credit limit are not enough for this withdrawal")
 
+	// ErrBalanceEmpty is returned beside ErrInsufficientFunds when the wallet
+	// had nothing at all: a balance of zero and no credit limit to spend
+	// against. It is a different thing for a caller to do -- an empty wallet is
+	// topped up, and one that is merely short is asked for a smaller amount --
+	// and it is read off the row the refusing statement matched nothing on.
+	//
+	// The error returned wraps both, so a caller that only asks whether the
+	// money was there goes on testing ErrInsufficientFunds and gets the same
+	// answer it always did.
+	ErrBalanceEmpty = errors.New("wallet: this wallet holds nothing and has no credit limit to spend against")
+
 	// ErrCreditNegative is returned when a credit limit is written as a
 	// negative number. The limit is how far below zero the wallet may go, so it
 	// is a magnitude; a negative one would read as a balance the wallet has to

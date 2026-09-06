@@ -2566,6 +2566,13 @@ func (s *WalletService) move(ctx context.Context, g security.Grant, operationID 
 			// gone: another statement in this transaction would have read it.
 			return Entry{}, ErrNotFound
 		case m.kind == EntryWithdraw:
+			// The row is already in hand, so telling "there was nothing" from
+			// "there was not enough" costs no statement. Both are returned, so
+			// a caller that only asks whether the money was there is answered
+			// exactly as before.
+			if after.Balance == 0 && after.CreditLimit == 0 {
+				return Entry{}, fmt.Errorf("%w: %w", ErrInsufficientFunds, ErrBalanceEmpty)
+			}
 			return Entry{}, ErrInsufficientFunds
 		}
 		return Entry{}, ErrAmountOverflow

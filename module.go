@@ -947,7 +947,12 @@ func (m *Module) answer(ctx *fhttp.Context, err error) error {
 		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusConflict, "another transaction was moving the same money; nothing was written, and this request can be sent again")
 		return nil
 
-	// The request cannot be carried out against the money as it stands.
+	// The request cannot be carried out against the money as it stands. The
+	// narrower answer comes first: an empty wallet wraps the wider one, so a
+	// caller reading this list top to bottom is told the more useful of the two.
+	case errors.Is(err, ErrBalanceEmpty):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, "that wallet holds nothing and has no credit limit to spend against")
+		return nil
 	case errors.Is(err, ErrInsufficientFunds):
 		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, "the balance and the credit limit are not enough")
 		return nil

@@ -59,6 +59,11 @@ they describe releases of the template and not of this package.
 
 ### Added
 
+- `ErrBalanceEmpty`. A withdrawal refused by a wallet holding nothing, with no
+  credit limit to spend against, answers with it beside `ErrInsufficientFunds`:
+  the two are different things for a caller to do, and the classification is
+  read off the row the refusing statement already matched nothing on. Both are
+  wrapped, so a caller testing `ErrInsufficientFunds` is answered as before.
 - `(*WalletService).Close`, `(*WalletService).Reopen`, `CloseRequest`,
   `WalletClose`, `Wallet.Closed`, the `closed` column, `ErrWalletClosed`,
   `ErrWalletHoldsMoney`, `WalletWasClosed`, `WalletWasReopened`, and
