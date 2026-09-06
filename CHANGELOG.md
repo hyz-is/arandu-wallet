@@ -16,6 +16,19 @@ name here. They are gone.
 
 ## [Unreleased]
 
+### Changed
+
+- The parity table says what the three engines change and what they do not: one
+  round trip on PostgreSQL and SQLite and two on MySQL, the isolation level
+  handed to `BeginTx` rather than set inside the transaction, and the measured
+  fact that the guard is exact on MySQL at both levels. Three rows described
+  `v0.4.1` and were left behind by `v0.5.0`.
+- The three differences from the reference are marked as verified against its
+  clone of 2026-08-29 at the lines named, and two of them are marked as
+  descriptions rather than defects: a platform that keeps its fee outside its
+  wallets is a defensible arrangement, and this package makes the other choice
+  for a reason of its own.
+
 ## [0.5.0] - 2026-09-06
 
 ### Added

@@ -254,7 +254,7 @@ repository; the fifth property is what the answer has to be when a row says
 | undo an operation | yes | `Reverse`, which appends the opposite and changes nothing already written |
 | basket, gift, refund by line | yes | `Pay` with a `Cart`, `BeneficiaryWalletID`, and `Refund` |
 | "has this wallet already bought that" | yes | `Bought`, `PurchasesOf` |
-| one round trip per balance moved | yes | the guarded update reports the row it left, so nothing reads it back; a forty-line basket saves a hundred and twenty statements inside its transaction |
+| one round trip per balance moved | yes on PostgreSQL and SQLite, two on MySQL | the guarded update reports the row it left through a `returning` clause, so nothing reads it back; a forty-line basket saves a hundred and twenty statements inside its transaction. MySQL has no such clause, so the row is read back inside the same transaction, where the update that matched holds an exclusive lock on it -- the guard is unchanged, and only the count of statements is |
 | a fee somebody charges to be paid | yes | `FeeProvider`, and the fee is credited to a third wallet |
 | a discount one payer is charged less | yes | `DiscountProvider`, recorded on the charge |
 | the same request twice moves money once | yes | the idempotency key, under a unique index, answered by replay |
@@ -262,8 +262,8 @@ repository; the fifth property is what the answer has to be when a row says
 | what a wallet is called and what it is for | yes | `Open` takes them, `Describe` changes them, and neither touches money |
 | a retry when the engine reports a conflict | yes | classified around `commit` by SQLSTATE, and `ErrConcurrencyConflict` when the attempts run out |
 | a balance repaired after it stops matching its ledger | yes | `Reconcile` reports and freezes the wallet; `Rebuild` closes the difference by appending one settled entry and touching no balance |
-| an isolation level the guard can be read against | yes | read committed, named as the first statement of every transaction this package opens |
-| an engine this package has not been run against | refused | `New` answers `ErrUnsupportedDialect`; the suite covers PostgreSQL, MySQL and SQLite, against real servers for the first two |
+| an isolation level the guard can be read against | yes | read committed, handed to `BeginTx` when the transaction opens. Not a `SET` inside it: PostgreSQL takes that and MySQL refuses it, since a transaction's characteristics cannot be changed once it is in progress. Measured, the guard is exact on MySQL at read committed and at InnoDB's repeatable read alike -- an update re-reads the row it is about to write at both -- so on that engine the level is not what makes the count exact. The predicate is |
+| PostgreSQL, MySQL and SQLite | all three | `New` admits them and refuses anything else with `ErrUnsupportedDialect`. The concurrency suite runs against real PostgreSQL and MySQL servers -- `ARANDU_TEST_POSTGRES_DSN` and `ARANDU_TEST_MYSQL_DSN` -- because SQLite serializes writers and would report the engine's behaviour as this package's. Identifiers are quoted by the connection's grammar rather than by a rule written here |
 | statement, ledger, running balance | yes | `History`, `Statement`, `Entry.BalanceAfter` |
 | told what the money did, after it did it | yes | `Listener` |
 | lookup by holder and slug, and a name for the default one | yes | `FindBySlug`, `DefaultSlug`, and `GET {prefix}/holders/{holder}/{slug}`. It opens nothing: a read that created what it did not find would guess a currency and a scale |
@@ -301,8 +301,15 @@ Three things the reference does that this package deliberately does not:
   `10^(to_dp − from_dp)`, so a conversion between two scales is wrong by that
   factor. `Rate.Convert` applies it.
 - **the quote is never stored there.** There is no rate column anywhere in its
-  source. `wallet_conversions` holds the fraction and the moment, so the row can
-  be recomputed long after the provider that answered it is gone.
+  source, and the swap package that supplies real rates persists nothing at all.
+  `wallet_conversions` holds the fraction and the moment, so the row can be
+  recomputed long after the provider that answered it is gone.
+
+Verified against the clone of 2026-08-29, at the lines named above. The first
+two are descriptions and not accusations: a platform that keeps its fee outside
+its wallets is a defensible arrangement, and this package makes the other choice
+because a ledger whose rows do not sum to its balances is one this package
+freezes. The third has no reading that makes it a choice.
 
 ## Writing code
 
