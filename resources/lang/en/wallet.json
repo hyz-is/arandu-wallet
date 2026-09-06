@@ -37,7 +37,9 @@
         "receiver": "Paid to",
         "reason": "Reason",
         "to_wallet": "Into this wallet",
-        "search": "Search"
+        "search": "Search",
+        "description": "Description",
+        "state": "State"
     },
     "control": {
         "open": "Open a wallet",
@@ -63,7 +65,8 @@
         "reversal": "Reversal",
         "confirmation": "Confirmation",
         "purchase": "Purchase",
-        "refund": "Refund"
+        "refund": "Refund",
+        "adjustment": "Adjustment"
     },
     "direction": {
         "deposit": "In",
@@ -72,7 +75,8 @@
     "purchase": {
         "paid": "Bought",
         "gift": "Given",
-        "refund": "Refunded"
+        "refund": "Refunded",
+        "free": "Free"
     },
     "screen": {
         "index_title": "Wallets",
@@ -98,12 +102,20 @@
         "insufficient": "The balance and the credit limit are not enough.",
         "forbidden": "You may not do that.",
         "not_found": "There is no such wallet.",
-        "exists": "That holder already has a wallet with this slug."
+        "exists": "That holder already has a wallet with this slug.",
+        "frozen": "This wallet is frozen: its ledger and its balance disagree, and no money moves until the difference is closed.",
+        "closed": "This wallet is closed and no money moves in or out of it.",
+        "empty": "This wallet holds nothing and has no credit limit to spend against."
     },
     "command": {
         "wallets": "list the wallets a customer holds",
         "statement": "print the ledger of one wallet",
         "purchases": "print what one wallet has bought",
         "audit": "check that every ledger adds up to the balance beside it"
+    },
+    "state": {
+        "open": "In service",
+        "frozen": "Frozen",
+        "closed": "Closed"
     }
 }

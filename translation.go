@@ -71,6 +71,17 @@ func mustShipped() (*translation.Translator, []string) {
 //
 // An application reads it to know which of its own it has to write, and a test
 // reads it to check that none of them is missing a line the others have.
+//
+// There are two, and the number is a decision rather than a stage something is
+// at. A sentence on a money screen has to be right in a way a label on a
+// dashboard does not -- "Withdraw", "Credit limit" and "Frozen" are the words
+// somebody reads before deciding whether their money is safe -- and a locale
+// this package cannot have checked by somebody who reads it is a locale that
+// says something nearly right, in a screen where nearly is wrong. What an
+// application that needs a third one does is write it in its own catalogue
+// under these keys, where the person who signs off on the wording is the person
+// who runs the product; its translator is asked before this one, so it needs no
+// release here and no fork of this file.
 func Locales() []string { return append([]string(nil), shippedLocales...) }
 
 // Lines are the sentences this package ships for one locale, keyed the way a

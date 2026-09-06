@@ -260,7 +260,7 @@ repository; the fifth property is what the answer has to be when a row says
 | a free line in a basket | yes | a price of zero writes the purchase row and moves nothing; only a negative price is refused |
 | an empty balance told apart from an insufficient one | yes | `ErrBalanceEmpty`, wrapped beside `ErrInsufficientFunds` so an existing caller reads it as it always did |
 | a slug derived from a name | yes | `Slugify`; an empty `OpenRequest.Slug` is derived from the name, and a name that derives to nothing is refused |
-| locales beyond `en` and `pt-BR` | no | **open**: `Locales()` is what ships |
+| locales beyond `en` and `pt-BR` | no, and that is the decision | a money screen's wording has to be checked by somebody who reads it; an application writes a third locale in its own catalogue under these keys, and its translator is asked first |
 
 These are limits this package chose, and they are part of the contract rather
 than gaps. A consumer that needs more asks here; a consumer that works around

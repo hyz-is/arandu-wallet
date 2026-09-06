@@ -37,7 +37,9 @@
         "receiver": "Pago para",
         "reason": "Motivo",
         "to_wallet": "Para esta carteira",
-        "search": "Buscar"
+        "search": "Buscar",
+        "description": "Descrição",
+        "state": "Situação"
     },
     "control": {
         "open": "Abrir carteira",
@@ -63,7 +65,8 @@
         "reversal": "Estorno",
         "confirmation": "Confirmação",
         "purchase": "Compra",
-        "refund": "Reembolso"
+        "refund": "Reembolso",
+        "adjustment": "Ajuste"
     },
     "direction": {
         "deposit": "Entrada",
@@ -72,7 +75,8 @@
     "purchase": {
         "paid": "Comprado",
         "gift": "Presenteado",
-        "refund": "Reembolsado"
+        "refund": "Reembolsado",
+        "free": "Gratuito"
     },
     "screen": {
         "index_title": "Carteiras",
@@ -98,12 +102,20 @@
         "insufficient": "O saldo e o limite de crédito não são suficientes.",
         "forbidden": "Você não pode fazer isso.",
         "not_found": "Não existe essa carteira.",
-        "exists": "Esse titular já tem uma carteira com este identificador."
+        "exists": "Esse titular já tem uma carteira com este identificador.",
+        "frozen": "Esta carteira está congelada: o razão e o saldo não batem, e nenhum dinheiro se move até a diferença ser fechada.",
+        "closed": "Esta carteira está encerrada e nenhum dinheiro entra ou sai dela.",
+        "empty": "Esta carteira não tem nada e não tem limite de crédito para gastar."
     },
     "command": {
         "wallets": "lista as carteiras de um cliente",
         "statement": "imprime o extrato de uma carteira",
         "purchases": "imprime o que uma carteira comprou",
         "audit": "verifica se cada extrato fecha com o saldo ao lado dele"
+    },
+    "state": {
+        "open": "Em uso",
+        "frozen": "Congelada",
+        "closed": "Encerrada"
     }
 }

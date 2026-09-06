@@ -63,7 +63,7 @@ func TestEveryKindThePackageRendersHasASentence(t *testing.T) {
 	for _, kind := range []wallet.OperationKind{
 		wallet.OperationDeposit, wallet.OperationWithdraw, wallet.OperationTransfer,
 		wallet.OperationExchange, wallet.OperationReversal, wallet.OperationConfirmation,
-		wallet.OperationPurchase, wallet.OperationRefund,
+		wallet.OperationPurchase, wallet.OperationRefund, wallet.OperationAdjustment,
 	} {
 		want := wallet.TranslationGroup + ".kind." + string(kind)
 		if !slices.Contains(keys, want) {
@@ -82,6 +82,17 @@ func TestEveryKindThePackageRendersHasASentence(t *testing.T) {
 		want := wallet.TranslationGroup + ".purchase." + string(kind)
 		if !slices.Contains(keys, want) {
 			t.Errorf("the purchase kind %q has no sentence at %s", kind, want)
+		}
+	}
+
+	// The states a wallet can be stopped in. They are not a Go enumeration --
+	// they are two columns -- so they are named here, and naming them is what
+	// makes a third one somebody adds fail this test instead of drawing its own
+	// key on a screen.
+	for _, state := range []string{"open", "frozen", "closed"} {
+		want := wallet.TranslationGroup + ".state." + state
+		if !slices.Contains(keys, want) {
+			t.Errorf("the wallet state %q has no sentence at %s", state, want)
 		}
 	}
 }

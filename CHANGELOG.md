@@ -67,6 +67,10 @@ they describe releases of the template and not of this package.
 
 ### Added
 
+- Sentences for what the new states and kinds are called, in both shipped
+  locales: `wallet.kind.adjustment`, `wallet.state.open`, `wallet.state.frozen`,
+  `wallet.state.closed`, `wallet.purchase.free`, `wallet.field.description`,
+  `wallet.field.state`, and the three messages a stopped or empty wallet says.
 - `ErrRatePairUnknown`, `ErrRateProviderUnavailable`, `ErrRateMomentUnsupported`,
   `ErrRateCacheFailed` and `ErrRateRequestRefused`: what a rate provider could
   not do, as five values a caller tests with `errors.Is` against this package
