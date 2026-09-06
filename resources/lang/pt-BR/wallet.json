@@ -1,0 +1,109 @@
+{
+    "noun": {
+        "wallet_one": "Carteira",
+        "wallet_many": "Carteiras",
+        "balance": "Saldo",
+        "entry_one": "Movimento",
+        "entry_many": "Movimentos",
+        "purchase_one": "Compra",
+        "purchase_many": "Compras",
+        "operation_one": "Operação",
+        "operation_many": "Operações"
+    },
+    "field": {
+        "holder": "Titular",
+        "slug": "Identificador",
+        "name": "Nome",
+        "currency": "Moeda",
+        "balance": "Saldo",
+        "credit_limit": "Limite de crédito",
+        "amount": "Valor",
+        "created": "Criada em",
+        "kind": "Tipo",
+        "direction": "Sentido",
+        "operation": "Operação",
+        "settled": "Liquidado",
+        "balance_after": "Saldo depois",
+        "rate": "Taxa de câmbio",
+        "quoted_at": "Cotada em",
+        "fee": "Tarifa",
+        "discount": "Desconto",
+        "requested": "Solicitado",
+        "base": "Base de cálculo",
+        "product": "Produto",
+        "quantity": "Quantidade",
+        "paid": "Pago",
+        "credited": "Creditado",
+        "receiver": "Pago para",
+        "reason": "Motivo",
+        "to_wallet": "Para esta carteira",
+        "search": "Buscar"
+    },
+    "control": {
+        "open": "Abrir carteira",
+        "deposit": "Depositar",
+        "withdraw": "Sacar",
+        "transfer": "Transferir",
+        "confirm": "Confirmar",
+        "reverse": "Estornar",
+        "refund": "Reembolsar",
+        "statement": "Extrato",
+        "purchases": "Compras",
+        "back": "Voltar",
+        "next": "Mais antigos",
+        "amount_placeholder": "0,00",
+        "wallet_placeholder": "O identificador da carteira",
+        "holder_placeholder": "De quem é este dinheiro"
+    },
+    "kind": {
+        "deposit": "Depósito",
+        "withdraw": "Saque",
+        "transfer": "Transferência",
+        "exchange": "Câmbio",
+        "reversal": "Estorno",
+        "confirmation": "Confirmação",
+        "purchase": "Compra",
+        "refund": "Reembolso"
+    },
+    "direction": {
+        "deposit": "Entrada",
+        "withdraw": "Saída"
+    },
+    "purchase": {
+        "paid": "Comprado",
+        "gift": "Presenteado",
+        "refund": "Reembolsado"
+    },
+    "screen": {
+        "index_title": "Carteiras",
+        "index_lead": "Os saldos deste cliente, e até onde cada um pode ficar negativo.",
+        "index_empty": "Nenhuma carteira aqui ainda.",
+        "statement_title": "Extrato",
+        "statement_lead": "Todos os movimentos desta carteira, dos mais antigos aos mais novos, com o saldo que cada um deixou.",
+        "statement_empty": "Nada se moveu nesta carteira.",
+        "operations_title": "Carteira",
+        "operations_lead": "O que esta carteira guarda, e o que se pode fazer com ela.",
+        "purchases_title": "Compras",
+        "purchases_empty": "Esta carteira não comprou nada."
+    },
+    "message": {
+        "opened": "A carteira foi aberta.",
+        "deposited": "O dinheiro foi depositado.",
+        "withdrawn": "O dinheiro foi sacado.",
+        "transferred": "O dinheiro foi movido.",
+        "reversed": "A operação foi estornada.",
+        "confirmed": "A operação passou a valer.",
+        "refunded": "A linha foi devolvida.",
+        "pending": "Registrado, aguardando confirmação.",
+        "insufficient": "O saldo e o limite de crédito não são suficientes.",
+        "forbidden": "Você não pode fazer isso.",
+        "not_found": "Não existe essa carteira.",
+        "exists": "Esse titular já tem uma carteira com este identificador."
+    },
+    "command": {
+        "wallets": "lista as carteiras de um cliente",
+        "statement": "imprime o extrato de uma carteira",
+        "purchases": "imprime o que uma carteira comprou",
+        "audit": "verifica se cada extrato fecha com o saldo ao lado dele"
+    }
+}

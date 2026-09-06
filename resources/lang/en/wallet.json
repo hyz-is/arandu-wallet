@@ -1,0 +1,109 @@
+{
+    "noun": {
+        "wallet_one": "Wallet",
+        "wallet_many": "Wallets",
+        "balance": "Balance",
+        "entry_one": "Movement",
+        "entry_many": "Movements",
+        "purchase_one": "Purchase",
+        "purchase_many": "Purchases",
+        "operation_one": "Operation",
+        "operation_many": "Operations"
+    },
+    "field": {
+        "holder": "Holder",
+        "slug": "Slug",
+        "name": "Name",
+        "currency": "Currency",
+        "balance": "Balance",
+        "credit_limit": "Credit limit",
+        "amount": "Amount",
+        "created": "Created",
+        "kind": "Kind",
+        "direction": "Direction",
+        "operation": "Operation",
+        "settled": "Settled",
+        "balance_after": "Balance after",
+        "rate": "Rate",
+        "quoted_at": "Quoted at",
+        "fee": "Fee",
+        "discount": "Discount",
+        "requested": "Requested",
+        "base": "Charged on",
+        "product": "Product",
+        "quantity": "Quantity",
+        "paid": "Paid",
+        "credited": "Credited",
+        "receiver": "Paid to",
+        "reason": "Reason",
+        "to_wallet": "Into this wallet",
+        "search": "Search"
+    },
+    "control": {
+        "open": "Open a wallet",
+        "deposit": "Deposit",
+        "withdraw": "Withdraw",
+        "transfer": "Transfer",
+        "confirm": "Confirm",
+        "reverse": "Reverse",
+        "refund": "Refund",
+        "statement": "Statement",
+        "purchases": "Purchases",
+        "back": "Back",
+        "next": "Older",
+        "amount_placeholder": "0.00",
+        "wallet_placeholder": "The identifier of the wallet",
+        "holder_placeholder": "Whose money this is"
+    },
+    "kind": {
+        "deposit": "Deposit",
+        "withdraw": "Withdrawal",
+        "transfer": "Transfer",
+        "exchange": "Exchange",
+        "reversal": "Reversal",
+        "confirmation": "Confirmation",
+        "purchase": "Purchase",
+        "refund": "Refund"
+    },
+    "direction": {
+        "deposit": "In",
+        "withdraw": "Out"
+    },
+    "purchase": {
+        "paid": "Bought",
+        "gift": "Given",
+        "refund": "Refunded"
+    },
+    "screen": {
+        "index_title": "Wallets",
+        "index_lead": "The balances this customer holds, and what each of them may go down to.",
+        "index_empty": "No wallet here yet.",
+        "statement_title": "Statement",
+        "statement_lead": "Every movement on this wallet, oldest first, with the balance it left behind.",
+        "statement_empty": "Nothing has moved on this wallet.",
+        "operations_title": "Wallet",
+        "operations_lead": "What this wallet holds, and what may be done with it.",
+        "purchases_title": "Purchases",
+        "purchases_empty": "This wallet has bought nothing."
+    },
+    "message": {
+        "opened": "The wallet was opened.",
+        "deposited": "The money was deposited.",
+        "withdrawn": "The money was withdrawn.",
+        "transferred": "The money was moved.",
+        "reversed": "The operation was undone.",
+        "confirmed": "The operation now counts.",
+        "refunded": "The line was given back.",
+        "pending": "Recorded, and waiting to be confirmed.",
+        "insufficient": "The balance and the credit limit are not enough.",
+        "forbidden": "You may not do that.",
+        "not_found": "There is no such wallet.",
+        "exists": "That holder already has a wallet with this slug."
+    },
+    "command": {
+        "wallets": "list the wallets a customer holds",
+        "statement": "print the ledger of one wallet",
+        "purchases": "print what one wallet has bought",
+        "audit": "check that every ledger adds up to the balance beside it"
+    }
+}

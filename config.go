@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/arandu-io/framework/security"
+	"github.com/arandu-io/hesape/translation"
 )
 
 // The defaults for the optional settings. They are constants rather than
@@ -80,6 +81,14 @@ type Config struct {
 	// gets one and why is a question about customers, which this package has
 	// no way to answer and no business answering.
 	Discounts DiscountProvider
+
+	// Translator is the application's own catalogue, asked before the one this
+	// package ships.
+	//
+	// It is optional. Nothing is asked of it when it is nil, and the screens are
+	// drawn in the locales this package carries -- which is what an application
+	// that renders in one language would have got anyway.
+	Translator *translation.Translator
 
 	// Listeners are told what the money did, after it did it.
 	//
