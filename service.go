@@ -2931,3 +2931,131 @@ func (s *WalletService) PurchasesOf(ctx context.Context, actor security.Subject,
 	}
 	return query.OrderByDesc("sequence").OrderByDesc("id").Limit(boundedLimit(page.Limit)).Get(ctx, g)
 }
+
+// Reconciliation is what one wallet's ledger adds up to, beside what its
+// balance column says.
+//
+// The balance is a projection of the entries, so the two have to agree; this is
+// the value that says whether they do, and by how much when they do not. It is
+// a read and nothing else -- what it finds is reported, never corrected. A
+// number this package quietly repaired would be a defect nobody ever heard
+// about, in the one table where the defect is money.
+type Reconciliation struct {
+	// Wallet is the wallet that was read.
+	Wallet Wallet
+	// Settled is the sum of the movements that counted, which is what the
+	// balance column has to equal.
+	Settled Amount
+	// Proposed is the sum of the movements that are waiting, read as what they
+	// would move. Nothing checks it against anything: it is here so that
+	// somebody looking at a difference can see how much is in flight.
+	Proposed Amount
+	// Entries is how many rows were read.
+	Entries int
+	// LastBalanceAfter is what the newest movement recorded the balance as, and
+	// LastSequence its position. The first has to equal the balance column too,
+	// which is the second half of the check: a ledger can sum correctly and
+	// still have been written in an order nobody can read down.
+	LastBalanceAfter Amount
+	LastSequence     int64
+	// Gaps is how many times the sequence skipped a number. A gap is not proof
+	// of a lost write -- a transaction that rolled back after taking a number
+	// leaves one -- but it is where somebody looks first.
+	Gaps int
+}
+
+// Balanced reports that the ledger and the balance column agree.
+func (r Reconciliation) Balanced() bool {
+	if r.Settled != r.Wallet.Balance {
+		return false
+	}
+	return r.Entries == 0 || r.LastBalanceAfter == r.Wallet.Balance
+}
+
+// Difference is what the balance column holds beyond what the ledger explains,
+// and zero where the two agree.
+func (r Reconciliation) Difference() Amount { return r.Wallet.Balance - r.Settled }
+
+// Reconcile reads a whole ledger and reports whether it adds up to the balance
+// beside it.
+//
+// It is a read like any other and asks the policy the same two questions: the
+// whole history of somebody's money is what it walks, so a path to it that
+// skipped the second would be the widest read in the package.
+//
+// It reads the entries in pages rather than in one statement, because a ledger
+// only grows and the wallet worth checking is the one with the longest one. What
+// it costs is a statement per page and nothing held in memory but the running
+// totals.
+func (s *WalletService) Reconcile(ctx context.Context, actor security.Subject, walletID string) (Reconciliation, error) {
+	g, err := security.Authorize(ctx, s.policy, actor, WalletHistory, Wallet{})
+	if err != nil {
+		return Reconciliation{}, err
+	}
+
+	rows := Wallets(s.db)
+	holder, err := rows.NewQuery().WhereKey(walletID).First(ctx, g)
+	if err != nil {
+		return Reconciliation{}, err
+	}
+	if holder == nil {
+		return Reconciliation{}, ErrNotFound
+	}
+	if _, err := security.Authorize(ctx, s.policy, actor, WalletHistory, *holder); err != nil {
+		return Reconciliation{}, err
+	}
+
+	out := Reconciliation{Wallet: *holder}
+	entries := Entries(s.db)
+	after := int64(0)
+	expected := int64(1)
+	for {
+		page, err := entries.NewQuery().
+			Where("wallet_id", "=", holder.ID).
+			Where("sequence", ">", after).
+			OrderBy("sequence").
+			Limit(maxLimit).
+			Get(ctx, g)
+		if err != nil {
+			return Reconciliation{}, err
+		}
+		if len(page) == 0 {
+			return out, nil
+		}
+		for _, entry := range page {
+			if entry == nil {
+				continue
+			}
+			if entry.Sequence != expected {
+				out.Gaps++
+			}
+			expected = entry.Sequence + 1
+
+			if entry.Settled {
+				sum, err := out.Settled.Add(entry.Signed())
+				if err != nil {
+					return Reconciliation{}, err
+				}
+				out.Settled = sum
+			} else {
+				direction := entry.Amount
+				if entry.Kind == EntryWithdraw {
+					direction = -entry.Amount
+				}
+				sum, err := out.Proposed.Add(direction)
+				if err != nil {
+					return Reconciliation{}, err
+				}
+				out.Proposed = sum
+			}
+
+			out.Entries++
+			out.LastBalanceAfter = entry.BalanceAfter
+			out.LastSequence = entry.Sequence
+			after = entry.Sequence
+		}
+		if len(page) < maxLimit {
+			return out, nil
+		}
+	}
+}
