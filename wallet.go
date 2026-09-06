@@ -434,6 +434,69 @@ func (s *WalletService) FindBySlug(ctx context.Context, actor security.Subject, 
 	return record, nil
 }
 
+// CanWithdraw reports whether a wallet could pay out an amount right now.
+//
+// It is a photograph, and saying so is the whole doc comment. Between this
+// answer and a withdrawal the balance can change, so a caller that treats a
+// true here as permission has written the read-then-check this package exists
+// to avoid: what decides a withdrawal is the predicate on the update inside
+// Withdraw, and nothing else ever will be.
+//
+// What it is for is the question a screen asks -- whether to draw a button as
+// enabled, whether to offer a payment method. Wrong occasionally and in one
+// direction is fine there; wrong in a ledger is not.
+//
+// It answers the same arithmetic the guard does: the balance plus the credit
+// limit, against the amount. A wallet that is frozen or closed answers false,
+// because those are the other two reasons the write refuses. Force is not a
+// parameter: a movement past the limit is a decision the policy makes at the
+// moment of the write, and asking about it here would be answering for a
+// subject this call has not authorized for it.
+//
+// Zero and negative amounts answer false, because Withdraw refuses them.
+//
+// It authorizes WalletView twice, on the empty candidate and then on the row,
+// which is what every read here does: the first refuses a subject who may not
+// look at wallets at all, and the second refuses one who may not look at this
+// one.
+func (s *WalletService) CanWithdraw(ctx context.Context, actor security.Subject, walletID, amount string) (bool, error) {
+	e := validation.Errors{}
+	validation.Required(e, "wallet_id", walletID)
+	validation.MaxLen(e, "wallet_id", walletID, maxIdentifierLen)
+	validation.Required(e, "amount", amount)
+	if e.Any() {
+		return false, e
+	}
+
+	g, err := security.Authorize(ctx, s.policy, actor, WalletView, Wallet{})
+	if err != nil {
+		return false, err
+	}
+
+	record, err := Wallets(s.db).NewQuery().WhereKey(walletID).First(ctx, g)
+	if err != nil {
+		return false, err
+	}
+	if record == nil {
+		return false, ErrNotFound
+	}
+	if _, err := security.Authorize(ctx, s.policy, actor, WalletView, *record); err != nil {
+		return false, err
+	}
+
+	asked, err := ParseAmount(amount, record.DecimalPlaces)
+	if err != nil {
+		return false, err
+	}
+	if asked <= 0 {
+		return false, nil
+	}
+	if bool(record.Frozen) || bool(record.Closed) {
+		return false, nil
+	}
+	return record.Balance-asked >= -record.CreditLimit, nil
+}
+
 // DescribeRequest is what changing a wallet's labels takes.
 //
 // Labels and nothing else. The slug, the currency and the scale are absent and

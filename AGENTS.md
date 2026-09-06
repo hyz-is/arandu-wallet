@@ -262,6 +262,23 @@ than a check in Go.
 
 ## Parity, and the limits that are not gaps
 
+`tests/Feature/parity_test.go` is this table made executable: one test per
+behaviour the reference offers, exercised against this package's API. A row here
+going stale is a paragraph nobody notices; a test there failing is a build that
+stops. Read them together, and add to both when a capability arrives.
+
+Three variants of the reference are not ported, and the reason is the same each
+time. It spells `safeX`, `X` and `forceX` for most operations: the first answers
+null instead of throwing, the second throws, the third skips the balance check.
+The first two are one thing in Go, where every method returns an error and the
+caller decides by reading it — porting the pair would be porting PHP's
+exception-or-return split. The third is here as a field on the request, so every
+later rule about a forced movement is written in one place instead of two. Its
+float variants are not here and will not be: money is an `int64` of minor units,
+and a float is how a cent goes missing.
+
+
+
 The table is here so that a consumer does not audit this package to find out
 what it does. Read it before writing anything that moves money outside this
 repository; the fifth property is what the answer has to be when a row says
@@ -298,6 +315,7 @@ repository; the fifth property is what the answer has to be when a row says
 | typed errors from a rate source | yes | five sentinels in `rate.go`, testable with `errors.Is` against this package without importing whichever provider is wired in |
 | a free line in a basket | yes | a price of zero writes the purchase row and moves nothing; only a negative price is refused |
 | an empty balance told apart from an insufficient one | yes | `ErrBalanceEmpty`, wrapped beside `ErrInsufficientFunds` so an existing caller reads it as it always did |
+| asking whether a wallet could pay out, without moving it | yes | `CanWithdraw`, and its doc comment says what it is: a photograph. What decides a withdrawal is the predicate on the update, and `TestCanWithdrawIsNotPermission` empties the wallet between the question and the answer to hold that |
 | a slug derived from a name | yes | `Slugify`; an empty `OpenRequest.Slug` is derived from the name, and a name that derives to nothing is refused |
 | locales beyond `en` and `pt-BR` | no, and that is the decision | a money screen's wording has to be checked by somebody who reads it; an application writes a third locale in its own catalogue under these keys, and its translator is asked first |
 

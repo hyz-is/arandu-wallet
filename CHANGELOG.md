@@ -16,6 +16,21 @@ name here. They are gone.
 
 ## [Unreleased]
 
+### Added
+
+- `(*WalletService).CanWithdraw`, which answers whether a wallet could pay out
+  an amount without moving it. It is the one behaviour of the reference that had
+  no expression here, and its absence was worse than its presence: a consumer
+  needing the question reads the balance and compares it in Go, which is the
+  read-then-check this package exists to avoid. Its doc comment says it is a
+  photograph, and `TestCanWithdrawIsNotPermission` empties the wallet between the
+  question and the withdrawal to hold that the guard is still what decides.
+- `tests/Feature/parity_test.go`: twelve tests, one per behaviour of
+  `bavix/laravel-wallet` and `bavix/laravel-wallet-swap`, exercised against this
+  API. The parity table was written by reading both packages; this is the same
+  claim made executable, so a capability that stops working fails a build
+  instead of leaving a paragraph wrong.
+
 ### Changed
 
 - `service.go` is seven files. It reached four thousand lines, which is not a
