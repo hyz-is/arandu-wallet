@@ -1754,8 +1754,18 @@ type purchaseLine struct {
 	// movements, which is how the row learns the position it took in a ledger:
 	// the sequence is decided by the statement that moved the balance, and only
 	// that statement knows what the row said at the moment it ran.
+	//
+	// It is noMovement on a line that cost nothing, which produced none.
 	movement int
 }
+
+// noMovement is what a line that moved no balance holds instead of a position
+// in the operation's movements.
+//
+// A named value rather than a bare minus one, because it is compared in three
+// places and a sentinel somebody has to recognise from its value is a sentinel
+// somebody writes as zero by mistake.
+const noMovement = -1
 
 // appliedRate is the conversion an operation performed, and nil where it
 // performed none.
@@ -2225,11 +2235,16 @@ func (s *WalletService) recordPurchases(ctx context.Context, g security.Grant, o
 			return nil, err
 		}
 		// The sequence is read off the movement this line produced, which is
-		// the position it took in a ledger. A line naming no movement would be
-		// a row nothing could order, so the index is checked rather than
-		// trusted.
-		if line.movement < 0 || line.movement >= len(entries) {
-			return nil, fmt.Errorf("wallet: the line at position %d names no movement", line.position)
+		// the position it took in a ledger. A line that cost nothing produced
+		// none and records a sequence of zero -- which is why the page of a
+		// wallet's purchases is anchored on the pair of the sequence and the
+		// identifier, and not on the sequence alone.
+		sequence := int64(0)
+		if line.movement != noMovement {
+			if line.movement < 0 || line.movement >= len(entries) {
+				return nil, fmt.Errorf("wallet: the line at position %d names a movement that is not there", line.position)
+			}
+			sequence = entries[line.movement].Sequence
 		}
 
 		row := Purchase{
@@ -2262,7 +2277,7 @@ func (s *WalletService) recordPurchases(ctx context.Context, g security.Grant, o
 			CreditedAmount:       line.credited,
 			Kind:                 line.kind,
 			SettlesID:            line.settles,
-			Sequence:             entries[line.movement].Sequence,
+			Sequence:             sequence,
 			CreatedAt:            time.Now().UTC(),
 		}
 		// A line settles exactly one thing: the line a refund gives back, or
@@ -3034,13 +3049,20 @@ func (s *WalletService) priceBasket(ctx context.Context, g security.Grant, payer
 		}
 
 		receiver := wallets[line.receiver]
-		line.movement = len(out.movements)
-		out.movements = append(out.movements, movement{
-			wallet: &receiver, kind: EntryDeposit, amount: line.credited, meta: line.meta,
-		})
-		out.movements = append(out.movements, movement{
-			wallet: &payer, kind: EntryWithdraw, amount: line.paid, force: line.force, meta: line.meta,
-		})
+		// A line that costs nothing writes its row and moves no balance. There
+		// is nothing to guard and nothing to record in a ledger: an entry of
+		// zero would be a movement saying something happened when nothing did,
+		// and it would take a position in a statement that reads as money.
+		line.movement = noMovement
+		if line.paid > 0 || line.credited > 0 {
+			line.movement = len(out.movements)
+			out.movements = append(out.movements, movement{
+				wallet: &receiver, kind: EntryDeposit, amount: line.credited, meta: line.meta,
+			})
+			out.movements = append(out.movements, movement{
+				wallet: &payer, kind: EntryWithdraw, amount: line.paid, force: line.force, meta: line.meta,
+			})
+		}
 		if collector != nil {
 			out.movements = append(out.movements, movement{
 				wallet: collector, kind: EntryDeposit, amount: line.fee.Amount,
@@ -3096,15 +3118,22 @@ func (s *WalletService) priceLine(ctx context.Context, g security.Grant, payer W
 
 	// What the payer is charged less comes off first, because everything after
 	// it is a share of what is being paid rather than of what was asked for.
-	discount, err := s.discount(ctx, g, payer, receiver, requested)
-	if err != nil {
-		return purchaseLine{}, err
+	// A line that costs nothing is not asked about: a share of nothing is
+	// nothing, and a provider answering anything else would be discounting a
+	// price that was never charged.
+	discount := Amount(0)
+	if requested > 0 {
+		answered, err := s.discount(ctx, g, payer, receiver, requested)
+		if err != nil {
+			return purchaseLine{}, err
+		}
+		discount = answered
 	}
 	base, err := requested.Sub(discount)
 	if err != nil {
 		return purchaseLine{}, err
 	}
-	if base <= 0 {
+	if base < 0 {
 		return purchaseLine{}, ErrAmountNotPositive
 	}
 
@@ -3130,7 +3159,10 @@ func (s *WalletService) priceLine(ctx context.Context, g security.Grant, payer W
 		line.kind = PurchaseGift
 	}
 
-	if s.fees == nil {
+	// And no fee on a line that moves nothing. A fee with a floor would charge
+	// the payer for something the shop gave away, which is a line that is not
+	// free however it was priced.
+	if s.fees == nil || base == 0 {
 		return line, nil
 	}
 	schedule, err := s.fees.Fee(ctx, g, receiver, payer.Money(base))
@@ -3181,15 +3213,28 @@ func (s *WalletService) priceLine(ctx context.Context, g security.Grant, payer W
 // A price written on the line wins over the one the product answers, because a
 // caller that says what something costs has already decided; asking the product
 // as well would be asking a question whose answer is thrown away.
+//
+// Zero is a price. A trial, a bundled item, a gift the shop is giving away is a
+// line that is bought and costs nothing, and refusing it would leave an
+// application with two ways to record what somebody has: through this package
+// when there was money and through a table of its own when there was not. What
+// is refused is a negative price, which is a payment pointing the wrong way.
 func (s *WalletService) priceOf(ctx context.Context, g security.Grant, payer, owner Wallet, item CartItem) (Amount, error) {
 	if item.PricePerItem != "" {
-		return positiveAmount(item.PricePerItem, payer.DecimalPlaces)
+		price, err := ParseAmount(item.PricePerItem, payer.DecimalPlaces)
+		if err != nil {
+			return 0, err
+		}
+		if price < 0 {
+			return 0, ErrAmountNotPositive
+		}
+		return price, nil
 	}
 	price, err := item.Product.Price(ctx, g, owner)
 	if err != nil {
 		return 0, err
 	}
-	if price <= 0 {
+	if price < 0 {
 		return 0, fmt.Errorf("%w: %s costs %s", ErrAmountNotPositive,
 			item.Product.ProductKey(), payer.Money(price))
 	}
@@ -3365,13 +3410,16 @@ func (s *WalletService) reverseLines(ctx context.Context, g security.Grant, acto
 			force:         in.Force,
 			meta:          in.Meta,
 		}
-		given.movement = len(out.movements)
-		out.movements = append(out.movements, movement{
-			wallet: &receiver, kind: EntryWithdraw, amount: line.CreditedAmount, force: in.Force, meta: in.Meta,
-		})
-		out.movements = append(out.movements, movement{
-			wallet: &payer, kind: EntryDeposit, amount: line.PaidAmount, meta: in.Meta,
-		})
+		given.movement = noMovement
+		if line.PaidAmount > 0 || line.CreditedAmount > 0 {
+			given.movement = len(out.movements)
+			out.movements = append(out.movements, movement{
+				wallet: &receiver, kind: EntryWithdraw, amount: line.CreditedAmount, force: in.Force, meta: in.Meta,
+			})
+			out.movements = append(out.movements, movement{
+				wallet: &payer, kind: EntryDeposit, amount: line.PaidAmount, meta: in.Meta,
+			})
+		}
 		if line.FeeAmount > 0 && line.FeeWalletID != "" {
 			collector := wallets[line.FeeWalletID]
 			out.movements = append(out.movements, movement{
@@ -3532,6 +3580,12 @@ func (s *WalletService) PurchasesOf(ctx context.Context, actor security.Subject,
 		return nil, err
 	}
 
+	// The page is anchored on the pair of the sequence and the identifier, which
+	// is the pair it is ordered by. The sequence alone is not unique here: a
+	// line that cost nothing produced no movement and records zero, and two
+	// lines of one basket take their sequences from the ledgers of two
+	// different wallets. Anchoring on it alone would skip every row that shares
+	// the sequence of the last one on a page.
 	rows := Purchases(s.db)
 	query := rows.NewQuery().Where("owner_wallet_id", "=", owner.ID)
 	if page.Cursor != "" {
@@ -3542,7 +3596,12 @@ func (s *WalletService) PurchasesOf(ctx context.Context, actor security.Subject,
 		if anchor == nil {
 			return nil, nil
 		}
-		query = query.Where("sequence", "<", anchor)
+		query = query.Where(func(before *model.Builder[Purchase]) {
+			before.Where("sequence", "<", anchor).
+				OrWhere(func(equal *model.Builder[Purchase]) {
+					equal.Where("sequence", "=", anchor).Where("id", "<", page.Cursor)
+				})
+		})
 	}
 	return query.OrderByDesc("sequence").OrderByDesc("id").Limit(boundedLimit(page.Limit)).Get(ctx, g)
 }

@@ -43,6 +43,14 @@ they describe releases of the template and not of this package.
   run against; PostgreSQL and SQLite are what it covers, and nothing here claims
   MySQL.
 
+### Fixed
+
+- `(*WalletService).PurchasesOf` pages on the pair of the sequence and the
+  identifier rather than on the sequence alone. The sequence is not unique in
+  that table -- two lines of one basket take theirs from the ledgers of two
+  different wallets, and a free line records zero -- so a page anchored on it
+  alone skipped every row sharing the last one's.
+
 ### Changed
 
 - Every transaction this package opens names its own isolation level -- read
@@ -59,6 +67,12 @@ they describe releases of the template and not of this package.
 
 ### Added
 
+- A line priced at zero is bought. It writes its purchase row, answers `Bought`
+  like any other, moves no balance and appends no ledger entry -- an entry of
+  zero would be a movement saying something happened when nothing did. No
+  discount and no fee is asked for on one, because a share of nothing is nothing
+  and a fee with a floor would charge the payer for something the shop gave
+  away. `Purchase.Free` reads it off the row. A negative price is still refused.
 - `ErrBalanceEmpty`. A withdrawal refused by a wallet holding nothing, with no
   credit limit to spend against, answers with it beside `ErrInsufficientFunds`:
   the two are different things for a caller to do, and the classification is

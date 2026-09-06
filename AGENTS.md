@@ -257,7 +257,7 @@ repository; the fifth property is what the answer has to be when a row says
 | lookup by holder and slug, and a name for the default one | yes | `FindBySlug`, `DefaultSlug`, and `GET {prefix}/holders/{holder}/{slug}`. It opens nothing: a read that created what it did not find would guess a currency and a scale |
 | closing a wallet, and putting it back | yes | `Close`, `Reopen`, `WalletClose`. The row and the ledger stay; one column leaves, and it requires a zero balance |
 | typed errors from a rate source | no | **open**: what the provider returns travels out as it came |
-| a free line in a basket | no | **open**: a price of zero or less is refused |
+| a free line in a basket | yes | a price of zero writes the purchase row and moves nothing; only a negative price is refused |
 | an empty balance told apart from an insufficient one | yes | `ErrBalanceEmpty`, wrapped beside `ErrInsufficientFunds` so an existing caller reads it as it always did |
 | a slug derived from a name | yes | `Slugify`; an empty `OpenRequest.Slug` is derived from the name, and a name that derives to nothing is refused |
 | locales beyond `en` and `pt-BR` | no | **open**: `Locales()` is what ships |

@@ -198,6 +198,14 @@ func (p Purchase) Refunds() string {
 // Gift reports that the money was one wallet's and the thing bought another's.
 func (p Purchase) Gift() bool { return p.Kind == PurchaseGift }
 
+// Free reports that this line moved no money.
+//
+// It is what the row says rather than a kind of its own: a free line is bought
+// or given exactly as a paid one is, and what makes it free is the price on it.
+// A second kind would mean two answers to "has this person got one", which is
+// the question the record exists for.
+func (p Purchase) Free() bool { return p.PaidAmount == 0 && p.CreditedAmount == 0 }
+
 // Price is what one of the product cost, read at the scale it was counted at.
 func (p Purchase) Price() Money {
 	return Money{Amount: p.PricePerItem, Currency: p.Currency, DecimalPlaces: p.DecimalPlaces}
