@@ -10,9 +10,15 @@
 coverage.*
 
 # What `aru view:build` writes when it compiles the views in this repository as
-# a check. The application compiles its own copy of them after publishing, so
-# nothing here is ever shipped or imported.
+# a check. It mirrors a project's view tree into storage/ when it finds one, and
+# writes the compiled form beside the source when it does not -- which is this
+# repository, where the sources are kept at a path go mod will publish. Both are
+# build output: the application compiles its own copy after publishing, so
+# nothing here is ever shipped or imported, and a compiled view that reached the
+# archive would be published over a page the project owns.
 storage/
+resources/publish/*.go
+!resources/publish/*.kyse.go
 
 # Local module resolution while something in the graph is not published.
 go.work

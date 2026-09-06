@@ -25,11 +25,21 @@ go test -race ./...
 
 The third filter is the staging directory `tests/Unit/published_views_compile_test.go`
 writes and removes. It exists because the go command skips any directory named
-`vendor` at any depth, and that is where the view compiler writes -- so
-`go build ./...` never sees a generated view, and a type error in one would
-surface when somebody opened the page and nowhere earlier. The test copies the
-tree to a path with no such segment and compiles it there. It skips when nothing
-has been built, so `aru view:build` is what makes that gate say anything.
+`vendor` at any depth, and the view compiler mirrors a project's view tree into
+`storage/framework/views/vendor/<module>` -- so `go build ./...` never sees a
+generated view there, and a type error in one would surface when somebody opened
+the page and nowhere earlier. The test copies the tree to a path with no such
+segment and compiles it there, and skips when nothing has been built.
+
+Nothing is built there in this repository any more. The view sources are kept at
+`resources/publish`, because go mod publishes no path with a segment named
+`vendor` and the address a project keeps them at has one; a directory that is not
+a project's view directory makes `aru view:build` write the compiled view beside
+the source it read. That output is gitignored and compiled by `go build ./...`
+like any other file, so running the command is still what puts a type error in
+front of a compiler -- what changed is which command reports it. It is never
+committed: the archive carries the sources by name, and a compiled view in it
+would be published over a page the project owns.
 
 `GOWORK=off` is not borrowed from somewhere else, and here it is not a
 preference either. This checkout may sit beside a Go workspace that lists the

@@ -25,7 +25,14 @@ import (
 // tree kept at the destination is in the repository and missing from what
 // anybody downloads, and the pattern below then matches nothing.
 //
-//go:embed resources/publish
+// The pattern names the sources and not the directory holding them, because the
+// view compiler writes its output beside a source it did not find under a
+// project's own view directory -- which is what this repository is. A
+// directory-wide pattern would carry that output into the archive, and
+// publishing would write a compiled view over somebody's project. A source the
+// pattern does not reach is what a test refuses.
+//
+//go:embed resources/publish/*.kyse.go
 var viewSources embed.FS
 
 // Where a view is kept, where it is written, and what it is called.
