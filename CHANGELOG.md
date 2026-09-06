@@ -43,6 +43,18 @@ they describe releases of the template and not of this package.
   run against; PostgreSQL and SQLite are what it covers, and nothing here claims
   MySQL.
 
+### Changed
+
+- The statement that moves a balance reports the row it left, so nothing reads
+  it back. `moveStatement` composes it -- the one place in the package that
+  writes the balance column -- and every branch of it carries the same
+  predicate: the wallet, the tenant, the two reasons a wallet is out of service,
+  and the condition on the balance. A basket of forty lines saves a hundred and
+  twenty round trips inside one transaction, with the row locks already held.
+  `TestEveryBalanceStatementCarriesItsOwnGuard` now asks that function for the
+  statement and reads it, and `TestOnlyOneStatementInThePackageWritesABalance`
+  holds that there is no second site.
+
 ### Fixed
 
 - `(*WalletService).PurchasesOf` pages on the pair of the sequence and the
@@ -337,6 +349,18 @@ they describe releases of the template and not of this package.
   its message says so.
 - An entry answers with `operation_kind`, a receipt with `conversion`, and a
   page of a ledger with `conversions` beside its items.
+
+### Changed
+
+- The statement that moves a balance reports the row it left, so nothing reads
+  it back. `moveStatement` composes it -- the one place in the package that
+  writes the balance column -- and every branch of it carries the same
+  predicate: the wallet, the tenant, the two reasons a wallet is out of service,
+  and the condition on the balance. A basket of forty lines saves a hundred and
+  twenty round trips inside one transaction, with the row locks already held.
+  `TestEveryBalanceStatementCarriesItsOwnGuard` now asks that function for the
+  statement and reads it, and `TestOnlyOneStatementInThePackageWritesABalance`
+  holds that there is no second site.
 
 ### Fixed
 

@@ -14,7 +14,6 @@ import (
 	"github.com/arandu-io/framework/security"
 	"github.com/arandu-io/framework/validation"
 	"github.com/arandu-io/hesape/database/model"
-	"github.com/arandu-io/hesape/database/query"
 )
 
 // Pagination bounds for the listings. A request that asks for everything gets
@@ -1848,71 +1847,11 @@ type movement struct {
 // The amount goes into the SQL rather than into a placeholder because it stands
 // beside a column on the right of a comparison. It is an int64 this package
 // parsed, never text a caller wrote.
-func withdrawalFloor(amount Amount, force bool) query.Expression {
+func withdrawalFloor(amount Amount, force bool) string {
 	if force {
-		return query.Raw(strconv.FormatInt(math.MinInt64+int64(amount), 10))
+		return strconv.FormatInt(math.MinInt64+int64(amount), 10)
 	}
-	return query.Raw(strconv.FormatInt(int64(amount), 10) + ` - "credit_limit"`)
-}
-
-// servable is the gate on money, and it has exactly two reasons.
-//
-// Every statement that moves a balance carries it, so a wallet that stopped
-// being servable between the read that loaded it and the write that would move
-// it is refused at the write. That is the same arrangement the credit limit
-// has, for the same reason: an answer read a moment earlier is an answer two
-// concurrent movements both saw.
-//
-// # The two reasons, and why they are two columns
-//
-// Frozen means this package no longer knows what the wallet holds: its ledger
-// stopped adding up to its balance. Closed means somebody took the wallet out
-// of service. They are kept apart because they are lifted by different things
-// and answered to different people -- a freeze is lifted by Rebuild, which
-// appends the row that explains the balance, and a closure is lifted by Reopen,
-// which decides. A single "unavailable" column would make those two one, and
-// the first person to look at a stopped wallet would not be able to tell
-// whether it needs an investigation or a decision.
-//
-// # A third reason does not belong here
-//
-// This is the shape that invites one: a gate with two entries reads like a list
-// somebody may add to. It is not. Everything this package refuses about money
-// is refused for a reason it can name in the row -- not enough balance, past
-// the credit limit, past the range of the column -- and each of those is a
-// predicate about the movement rather than a state of the wallet. A third
-// column here would mean a third state a wallet can be stuck in, with a third
-// way out that somebody has to write, and a stopped wallet would need three
-// questions asked before anybody could say what is wrong with it. What looks
-// like a third reason is nearly always the application's own: an application
-// that wants to stop a wallet for a reason of its own writes that rule in its
-// own policy, where it can also say who may lift it.
-func servable(rows *model.Builder[Wallet]) *model.Builder[Wallet] {
-	return rows.Where("frozen", "=", int64(0)).Where("closed", "=", int64(0))
-}
-
-// stepped is the extra column every balance statement carries: the wallet's
-// entry counter, moved in the same statement as the balance.
-//
-// It is an expression rather than a value read and incremented in Go for the
-// same reason the balance is: the number an entry ends up with has to be one
-// nothing else can be holding, and only the statement that writes it knows what
-// the row said at that moment.
-func stepped() map[string]any {
-	return map[string]any{"last_sequence": query.Raw(`"last_sequence" + 1`)}
-}
-
-// released is what an adjustment writes: its own position in the ledger, and
-// the freeze lifted.
-//
-// One statement and not two, because a wallet stops being frozen for exactly
-// the reason the row was appended. Two statements would leave a moment in which
-// one of the two had happened, and the moment where the freeze is gone and the
-// row is not is a wallet serving a balance nothing explains.
-func released() map[string]any {
-	values := stepped()
-	values["frozen"] = int64(0)
-	return values
+	return strconv.FormatInt(int64(amount), 10) + ` - "credit_limit"`
 }
 
 // maxCommitAttempts is how many times one movement is sent again after the
@@ -2492,35 +2431,57 @@ func entryRow(entry Entry) map[string]any {
 	}
 }
 
-// move applies one movement: the guarded balance update, then the row it
-// produced.
+// moveStatement is the one statement in this package that writes a balance, and
+// the only place the guard on one is composed.
 //
-// It does not write the row. What comes back is the entry the batch above
-// appends, so that the statement which moves a balance and the statement which
-// records that it moved stay one per wallet and one per operation.
-func (s *WalletService) move(ctx context.Context, g security.Grant, operationID string, position int, m movement) (Entry, error) {
-	rows := Wallets(s.db)
-
-	var affected int64
-	var err error
+// It is written out rather than built through the Model, and the reason is the
+// clause at the end of it. The row a movement produces has to record the
+// balance the wallet was left at and the position the entry takes, and both are
+// decided by this write -- so either the statement reports them or something
+// reads the row again afterwards. Reading again is a second round trip per
+// movement with the row lock already held, which on a basket of forty lines is
+// a hundred and twenty extra of them inside one transaction, on the wallets two
+// other payments are queueing for. The returning clause makes it one statement.
+//
+// # The guard is not optional, and cannot be
+//
+// Every branch below composes the same predicate: the wallet, the tenant, the
+// two reasons a wallet may be out of service, and -- where money moves -- the
+// condition on the balance itself. There is no path through this function that
+// emits an update without them, and TestEveryBalanceStatementCarriesItsOwnGuard
+// asks this function for each of them and reads what comes back.
+//
+// That is what the reference gets wrong at exactly this point. It batches every
+// wallet of a basket into one update with a CASE over the identifiers and no
+// per-row condition at all, which is a balance nothing stopped from going
+// negative; the round trips it saves are the ones saved here by the clause at
+// the end instead.
+//
+// The amounts go into the SQL rather than into placeholders, because they stand
+// beside a column on the right of an assignment or a comparison. They are
+// int64s this package parsed, never text a caller wrote.
+//
+// The tenant is a placeholder and comes from the Grant, like every other tenant
+// here. It is in the predicate rather than left to the Model's scope because
+// this statement does not go through the Model: a row of another customer has
+// to be unreachable by this write for the same reason it is unreachable by
+// every other one.
+func moveStatement(m movement, tenant string) (string, []any) {
+	var set, guard string
 	switch {
 	case m.adjust:
 		// The one statement that writes while a wallet is frozen, because it is
 		// what lifts the freeze. It moves no balance: the column already holds
-		// the number and what was missing is the row explaining it.
+		// the number, and what was missing is the row explaining it.
 		//
 		// What it guards on is that nothing has moved since the difference was
 		// measured. The balance and the position are both named, so a movement
 		// that got in between leaves this matching no row, and the whole
 		// transaction rolls back rather than writing an adjustment computed
 		// from numbers that have changed.
-		affected, err = rows.NewQuery().
-			WhereKey(m.wallet.ID).
-			Where("frozen", "=", int64(1)).
-			Where("closed", "=", int64(0)).
-			Where("balance", "=", int64(m.wallet.Balance)).
-			Where("last_sequence", "=", m.wallet.LastSequence).
-			Update(ctx, g, released())
+		set = `"last_sequence" = "last_sequence" + 1, "frozen" = 0`
+		guard = fmt.Sprintf(`"frozen" = 1 and "closed" = 0 and "balance" = %d and "last_sequence" = %d`,
+			int64(m.wallet.Balance), m.wallet.LastSequence)
 	case m.pending:
 		// A movement that has not settled moves no balance, so its statement
 		// touches none. It still takes a position in the ledger, because the
@@ -2528,69 +2489,98 @@ func (s *WalletService) move(ctx context.Context, g security.Grant, operationID 
 		// in order -- and the position has to be one nothing else can be
 		// holding, which is why it comes from the statement rather than from a
 		// number read here.
-		affected, err = servable(rows.NewQuery().WhereKey(m.wallet.ID)).
-			Update(ctx, g, stepped())
+		set = `"last_sequence" = "last_sequence" + 1`
+		guard = servableGuard
 	case m.kind == EntryWithdraw:
 		// The balance has to still be enough at the moment of the write, and
-		// what "enough" is comes off the same row in the same statement. The
-		// freeze is in the same predicate for the same reason: a wallet whose
-		// ledger stopped explaining its balance is refused by the write, not by
-		// a flag somebody read before it.
-		affected, err = servable(rows.NewQuery().WhereKey(m.wallet.ID)).
-			Where("balance", ">=", withdrawalFloor(m.amount, m.force)).
-			Decrement(ctx, g, "balance", int64(m.amount), stepped())
+		// what "enough" is comes off the same row in the same statement: the
+		// amount less the wallet's own credit limit, named rather than read,
+		// because a limit fetched a moment earlier is a limit two concurrent
+		// withdrawals both spend.
+		set = fmt.Sprintf(`"balance" = "balance" - %d, "last_sequence" = "last_sequence" + 1`, int64(m.amount))
+		guard = servableGuard + ` and "balance" >= ` + withdrawalFloor(m.amount, m.force)
 	case m.kind == EntryDeposit:
 		// And it has to still have room, or the column wraps into a negative
 		// balance that no rule in this package would ever have allowed.
-		affected, err = servable(rows.NewQuery().WhereKey(m.wallet.ID)).
-			Where("balance", "<=", int64(m.amount.Ceiling())).
-			Increment(ctx, g, "balance", int64(m.amount), stepped())
+		set = fmt.Sprintf(`"balance" = "balance" + %d, "last_sequence" = "last_sequence" + 1`, int64(m.amount))
+		guard = servableGuard + fmt.Sprintf(` and "balance" <= %d`, int64(m.amount.Ceiling()))
 	default:
-		return Entry{}, fmt.Errorf("wallet: %q is not a direction money moves in", m.kind)
-	}
-	if err != nil {
-		return Entry{}, err
+		return "", nil
 	}
 
-	// Read back inside the transaction, which is the balance the entry records,
-	// the position it takes in the ledger, and the answer to why an update
-	// matched nothing.
-	after, err := rows.NewQuery().WhereKey(m.wallet.ID).First(ctx, g)
+	return `update "` + walletsTable + `" set ` + set +
+			` where "id" = ? and "tenant_id" = ? and ` + guard +
+			` returning "balance", "credit_limit", "last_sequence", "frozen", "closed"`,
+		[]any{m.wallet.ID, tenant}
+}
+
+// servableGuard is the gate on money as a statement spells it, and it has
+// exactly two reasons.
+//
+// Every statement that moves a balance carries it, so a wallet that stopped
+// being servable between the read that loaded it and the write that would move
+// it is refused at the write. That is the same arrangement the credit limit
+// has, for the same reason: an answer read a moment earlier is an answer two
+// concurrent movements both saw.
+//
+// # The two reasons, and why they are two columns
+//
+// Frozen means this package no longer knows what the wallet holds: its ledger
+// stopped adding up to its balance. Closed means somebody took the wallet out
+// of service. They are kept apart because they are lifted by different things
+// and answered to different people -- a freeze is lifted by Rebuild, which
+// appends the row that explains the balance, and a closure is lifted by Reopen,
+// which decides. A single "unavailable" column would make those two one, and
+// the first person to look at a stopped wallet would not be able to tell
+// whether it needs an investigation or a decision.
+//
+// # A third reason does not belong here
+//
+// This is the shape that invites one: a gate with two entries reads like a list
+// somebody may add to. It is not. Everything this package refuses about money
+// is refused for a reason it can name in the row -- not enough balance, past
+// the credit limit, past the range of the column -- and each of those is a
+// predicate about the movement rather than a state of the wallet. A third
+// column here would mean a third state a wallet can be stuck in, with a third
+// way out that somebody has to write, and a stopped wallet would need three
+// questions asked before anybody could say what is wrong with it. What looks
+// like a third reason is nearly always the application's own: an application
+// that wants to stop a wallet for a reason of its own writes that rule in its
+// own policy, where it can also say who may lift it.
+const servableGuard = `"frozen" = 0 and "closed" = 0`
+
+// moved is what a balance statement answers with: the row as it left it.
+//
+// It is the whole reason the statement carries a returning clause. Every field
+// here was decided by that write, at that instant, with the row lock already
+// held -- so what an entry records is what happened rather than what a second
+// read found afterwards.
+type moved struct {
+	balance     Amount
+	creditLimit Amount
+	sequence    int64
+	frozen      Flag
+	closed      Flag
+}
+
+// move applies one movement: the guarded balance update, which reports what it
+// left behind.
+//
+// It does not write the ledger row. What comes back is the entry the batch in
+// apply appends, so that the statement which moves a balance stays one per
+// wallet and the rows it produced go in one per operation.
+func (s *WalletService) move(ctx context.Context, g security.Grant, operationID string, position int, m movement) (Entry, error) {
+	statement, bindings := moveStatement(m, data.Tenant(g))
+	if statement == "" {
+		return Entry{}, fmt.Errorf("wallet: %q is not a direction money moves in", m.kind)
+	}
+
+	after, matched, err := s.moving(ctx, statement, bindings)
 	if err != nil {
 		return Entry{}, err
 	}
-	if after == nil {
-		return Entry{}, ErrNotFound
-	}
-	if affected == 0 {
-		switch {
-		case m.adjust:
-			// The row is still there and it did not match, so either the wallet
-			// moved since the difference was measured or somebody lifted the
-			// freeze. Either way the number this adjustment carries is about a
-			// state the wallet has left.
-			return Entry{}, ErrLedgerMoved
-		case bool(after.Frozen):
-			// Read off the row this transaction just failed to update, so the
-			// answer is the column's and not a flag from before the statement.
-			return Entry{}, ErrWalletFrozen
-		case bool(after.Closed):
-			return Entry{}, ErrWalletClosed
-		case m.pending:
-			// Nothing about the money can have refused this one, so the row is
-			// gone: another statement in this transaction would have read it.
-			return Entry{}, ErrNotFound
-		case m.kind == EntryWithdraw:
-			// The row is already in hand, so telling "there was nothing" from
-			// "there was not enough" costs no statement. Both are returned, so
-			// a caller that only asks whether the money was there is answered
-			// exactly as before.
-			if after.Balance == 0 && after.CreditLimit == 0 {
-				return Entry{}, fmt.Errorf("%w: %w", ErrInsufficientFunds, ErrBalanceEmpty)
-			}
-			return Entry{}, ErrInsufficientFunds
-		}
-		return Entry{}, ErrAmountOverflow
+	if !matched {
+		return Entry{}, s.whyNothingMoved(ctx, g, m)
 	}
 
 	id, err := data.NewID()
@@ -2607,14 +2597,76 @@ func (s *WalletService) move(ctx context.Context, g security.Grant, operationID 
 	written.OperationID = operationID
 	written.WalletID = m.wallet.ID
 	written.Kind = m.kind
-	written.Sequence = after.LastSequence
+	written.Sequence = after.sequence
 	written.Position = position
 	written.Amount = m.amount
-	written.BalanceAfter = after.Balance
+	written.BalanceAfter = after.balance
 	written.Settled = Flag(!m.pending)
 	written.Meta = m.meta
 	written.CreatedAt = time.Now().UTC()
 	return *written, nil
+}
+
+// moving runs one balance statement and reads the row it returned.
+//
+// It reports whether the statement matched anything, which is the only thing
+// the caller decides on: a guard that was false at the instant of the write
+// matches nothing, and that is an answer rather than a failure.
+func (s *WalletService) moving(ctx context.Context, statement string, bindings []any) (moved, bool, error) {
+	rows, err := s.db.QueryContext(ctx, statement, bindings...)
+	if err != nil {
+		return moved{}, false, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	if !rows.Next() {
+		return moved{}, false, rows.Err()
+	}
+	var after moved
+	if err := rows.Scan(&after.balance, &after.creditLimit, &after.sequence, &after.frozen, &after.closed); err != nil {
+		return moved{}, false, err
+	}
+	return after, true, rows.Err()
+}
+
+// whyNothingMoved says which condition of a balance statement was false.
+//
+// After the statement and never instead of it. The write is what decided; this
+// only turns "no row" into a sentence, and it reads the row through the Model
+// so the answer is scoped and authorized exactly as every other read is.
+func (s *WalletService) whyNothingMoved(ctx context.Context, g security.Grant, m movement) error {
+	after, err := Wallets(s.db).NewQuery().WhereKey(m.wallet.ID).First(ctx, g)
+	if err != nil {
+		return err
+	}
+	if after == nil {
+		return ErrNotFound
+	}
+	switch {
+	case m.adjust:
+		// The row is still there and it did not match, so either the wallet
+		// moved since the difference was measured or somebody lifted the
+		// freeze. Either way the number this adjustment carries is about a
+		// state the wallet has left.
+		return ErrLedgerMoved
+	case bool(after.Frozen):
+		return ErrWalletFrozen
+	case bool(after.Closed):
+		return ErrWalletClosed
+	case m.pending:
+		// Nothing about the money can have refused this one, so the row is
+		// gone: another statement in this transaction would have read it.
+		return ErrNotFound
+	case m.kind == EntryWithdraw:
+		// Telling "there was nothing" from "there was not enough" costs no
+		// statement here either. Both are returned, so a caller that only asks
+		// whether the money was there is answered exactly as before.
+		if after.Balance == 0 && after.CreditLimit == 0 {
+			return fmt.Errorf("%w: %w", ErrInsufficientFunds, ErrBalanceEmpty)
+		}
+		return ErrInsufficientFunds
+	}
+	return ErrAmountOverflow
 }
 
 // replay answers with what this idempotency key already did, if anything.

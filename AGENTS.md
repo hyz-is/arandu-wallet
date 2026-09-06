@@ -80,8 +80,8 @@ this one must prove about itself it proves in its own suite or nowhere.
 
 | | measured with |
 | --- | --- |
-| 15 Go files, one per role, all in one package at the root | `grep -l '^package wallet' *.go` |
-| 27 test files, 200 passing tests and subtests, and 12 more when `ARANDU_TEST_POSTGRES_DSN` names a server | `find tests -name '*_test.go'` · `go test -count=1 ./... -v \| grep -cE '^( *)--- PASS'` |
+| 15 Go files, one per role, all in one package at the root, and one test beside them | `grep -l '^package wallet' *.go` |
+| 34 test files under `tests/` and one `_internal_test.go` beside the code, 237 passing tests and subtests, and 12 more when `ARANDU_TEST_POSTGRES_DSN` names a server | `find tests -name '*_test.go'` · `go test -count=1 ./... -v \| grep -cE '^( *)--- PASS'` |
 | 16 routes | `grep -c 'm.register(r,' module.go` |
 | 17 actions the policy answers about | `grep -cE '^\t[A-Za-z]+ security.Action = ' policy.go` |
 | 5 direct dependencies, all under `arandu-io` | `go list -m -f '{{if and (not .Indirect) (not .Main)}}{{.Path}} {{.Version}}{{end}}' all` |
@@ -254,6 +254,7 @@ repository; the fifth property is what the answer has to be when a row says
 | undo an operation | yes | `Reverse`, which appends the opposite and changes nothing already written |
 | basket, gift, refund by line | yes | `Pay` with a `Cart`, `BeneficiaryWalletID`, and `Refund` |
 | "has this wallet already bought that" | yes | `Bought`, `PurchasesOf` |
+| one round trip per balance moved | yes | the guarded update reports the row it left, so nothing reads it back; a forty-line basket saves a hundred and twenty statements inside its transaction |
 | a fee somebody charges to be paid | yes | `FeeProvider`, and the fee is credited to a third wallet |
 | a discount one payer is charged less | yes | `DiscountProvider`, recorded on the charge |
 | the same request twice moves money once | yes | the idempotency key, under a unique index, answered by replay |

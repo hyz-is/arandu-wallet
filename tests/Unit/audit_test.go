@@ -515,44 +515,94 @@ func qualifiedName(call *ast.CallExpr, standard map[string]string) string {
 // syntax, and a mutation that removed either of them passed every behavioural
 // test this package runs against SQLite.
 
-// TestEveryBalanceStatementCarriesItsOwnGuard holds the decision that makes
-// concurrent spending safe: the balance is never read, judged in Go and written
-// back. The judgement is a predicate on the update, so a balance that changed
-// between the read and the write changes the answer.
+// TestOnlyOneStatementInThePackageWritesABalance holds the reach half of the
+// decision that makes concurrent spending safe.
 //
-// It was written after the mutation that proves it is worth having. Replacing
-// the predicate with a read and an if left every SQLite test passing, because
-// SQLite serializes writers; on PostgreSQL the same code let twenty-six
-// withdrawals of one unit through against a balance of twenty. Syntax catches
-// it wherever the suite runs.
-func TestEveryBalanceStatementCarriesItsOwnGuard(t *testing.T) {
+// The other half -- that the one statement carries its predicate -- is held
+// beside the code, in statement_internal_test.go, because it asks an unexported
+// function for the string the database is sent. What that one cannot see is a
+// second place that moves a balance some other way, and this is that: whatever
+// composes an update of the balance column has to be moveStatement, and nothing
+// may reach the column through the Model's increment and decrement either.
+//
+// Both halves were written after the mutation that proves they are worth
+// having. Replacing the predicate with a read and an if left every SQLite test
+// passing, because SQLite serializes writers; on PostgreSQL the same code let
+// twenty-six withdrawals of one unit through against a balance of twenty.
+func TestOnlyOneStatementInThePackageWritesABalance(t *testing.T) {
 	t.Parallel()
 
-	audited := 0
+	writers := map[string]int{}
+	for _, source := range auditedFiles(t) {
+		for _, declaration := range source.file.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if !ok || function.Body == nil {
+				continue
+			}
+			ast.Inspect(function.Body, func(node ast.Node) bool {
+				literal, ok := node.(*ast.BasicLit)
+				if !ok || literal.Kind != token.STRING {
+					return true
+				}
+				// An assignment to the column, in whatever quoting the
+				// statement uses. It is the left of a SET and not a comparison,
+				// which is what tells a write from a guard.
+				if strings.Contains(literal.Value, `"balance" = `) {
+					writers[function.Name.Name]++
+				}
+				return true
+			})
+		}
+	}
+
+	if len(writers) == 0 {
+		t.Fatal("nothing in this package composes a write to the balance column, so this test proved nothing")
+	}
+	if len(writers) != 1 || writers["moveStatement"] == 0 {
+		t.Errorf("the balance column is written from %v, and it is written from moveStatement or from nowhere: a second site is a second guard to keep right",
+			writers)
+	}
+}
+
+// TestNothingReachesTheBalanceThroughTheModel is the other way in, closed.
+//
+// Increment and Decrement compose their own assignment to the column, so a call
+// to either on "balance" would move money through a statement the audit above
+// cannot read and the test beside the code never sees. There is no such call
+// and there is not meant to be one.
+func TestNothingReachesTheBalanceThroughTheModel(t *testing.T) {
+	t.Parallel()
+
 	for _, source := range auditedFiles(t) {
 		ast.Inspect(source.file, func(node ast.Node) bool {
 			call, ok := node.(*ast.CallExpr)
 			if !ok {
 				return true
 			}
-			name := calledName(call)
-			if name != "Increment" && name != "Decrement" {
-				return true
-			}
-			// Increment(ctx, g, column, amount, extra): the column is third.
-			if len(call.Args) < 3 || !isStringLiteral(call.Args[2], "balance") {
-				return true
-			}
-			audited++
-			if !chainGuards(call, "balance") {
-				t.Errorf("%s: a statement moves the balance without a where on the balance, so it decides on a value somebody read a moment earlier",
-					source.path)
+			switch name := calledName(call); name {
+			case "Increment", "Decrement":
+				// Increment(ctx, g, column, amount, extra): the column is third.
+				if len(call.Args) >= 3 && isStringLiteral(call.Args[2], "balance") {
+					t.Errorf("%s: %s moves the balance through the Model, and the one statement that moves it is moveStatement",
+						source.path, name)
+				}
+			case "Update":
+				for _, argument := range call.Args {
+					composite, ok := argument.(*ast.CompositeLit)
+					if !ok {
+						continue
+					}
+					for _, element := range composite.Elts {
+						pair, ok := element.(*ast.KeyValueExpr)
+						if ok && isStringLiteral(pair.Key, "balance") {
+							t.Errorf("%s: an Update writes the balance column, and the one statement that writes it is moveStatement",
+								source.path)
+						}
+					}
+				}
 			}
 			return true
 		})
-	}
-	if audited == 0 {
-		t.Fatal("no balance statement was found, so this test proved nothing")
 	}
 }
 
