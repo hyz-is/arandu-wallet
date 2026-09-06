@@ -20,8 +20,3 @@ require (
 	golang.org/x/crypto v0.55.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 )
-
-// Until the parent version this needs is on the proxy. It names the five
-// failures a provider reports with, which is what this wraps, and a submodule
-// cannot require a version that does not exist yet.
-replace github.com/hyz-is/arandu-wallet => ../..

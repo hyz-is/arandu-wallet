@@ -2,6 +2,8 @@ github.com/arandu-io/framework v0.46.0 h1:yy/uMGOiAWJGPAzK80TF6oALvCUA6McdO7LiKg
 github.com/arandu-io/framework v0.46.0/go.mod h1:NvrVhe8XGcyyGOkeh+UixZdl5vByfiIW+jlj592eIVY=
 github.com/arandu-io/hesape v0.25.2 h1:03iVVLGxfI7Er0GhY615LUlG3DP5P7N5B9B3GUzn+sY=
 github.com/arandu-io/hesape v0.25.2/go.mod h1:KNXJJuKrDIpWvJgNbE2LxtHkOqO4J6cqPkmMcNlxrL0=
+github.com/hyz-is/arandu-wallet v0.4.0 h1:EXFaZ3QkGwxeHHsKNELvN6VfY6QuPhg29Ds5z5vlpnY=
+github.com/hyz-is/arandu-wallet v0.4.0/go.mod h1:DvQ6QY9mxN/5RDBrcDQMZJrWg1z7uDIXtBRsAAxicrA=
 golang.org/x/crypto v0.55.0 h1:+KWHjbgOaAQ66dh/YlkZKHlz9ZUlq61AFirAR9ntP8M=
 golang.org/x/crypto v0.55.0/go.mod h1:uq0V9dE/fzQuJtbnL+2EhWOE63vo164FY8xqEnV9xis=
 golang.org/x/sys v0.47.0 h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=
