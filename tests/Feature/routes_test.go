@@ -148,6 +148,7 @@ func TestTheModuleRegistersItsRoutesUnderItsPrefix(t *testing.T) {
 	// answering with a panic.
 	want := []string{
 		"GET /widgets",
+		"GET /widgets/holders/{holder}/{slug}",
 		"GET /widgets/{id}",
 		"GET /widgets/{id}/entries",
 		"GET /widgets/{id}/purchases",

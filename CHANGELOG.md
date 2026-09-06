@@ -59,6 +59,16 @@ they describe releases of the template and not of this package.
 
 ### Added
 
+- `(*WalletService).FindBySlug`, `DefaultSlug` and
+  `GET {prefix}/holders/{holder}/{slug}`. The pair of holder and slug is what
+  names a wallet and has been under a unique index since the table was created;
+  what was missing was the read. It opens nothing -- a read that created what it
+  did not find would open a wallet under a currency and a scale this package
+  would have had to guess.
+- `Slugify`, and an `OpenRequest.Slug` left empty is derived from the name. The
+  fold keeps letters and digits, lowers the ASCII ones and turns every other run
+  into one hyphen; it translates nothing, and a name that derives to nothing is
+  refused rather than opened under a slug nobody chose.
 - `description` and `meta` on `wallets`, `Wallet.Description`, `Wallet.Meta`,
   and both on `Resource`. A fact that is true of every movement -- the account
   a wallet settles to, the contract it belongs to -- is a fact about the wallet,

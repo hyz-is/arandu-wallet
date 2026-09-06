@@ -197,6 +197,7 @@ func (m *Module) Routes(r *fhttp.Router) {
 	m.register(r, "wallet.entries", m.entries)
 	m.register(r, "wallet.credit", m.credit)
 	m.register(r, "wallet.describe", m.describe)
+	m.register(r, "wallet.named", m.named)
 	m.register(r, "wallet.deposit", m.deposit)
 	m.register(r, "wallet.withdraw", m.withdraw)
 	m.register(r, "wallet.transfer", m.transfer)
@@ -416,6 +417,23 @@ func (m *Module) store(ctx *fhttp.Context) error {
 		return ctx.Redirect(m.cfg.Prefix + "/" + record.ID)
 	}
 	return ctx.JSON(stdhttp.StatusCreated, resourceFromPointer(record))
+}
+
+// named answers the wallet a holder keeps under one slug.
+//
+// The holder and the slug are the pair that names a wallet, and both arrive in
+// the path because both are the caller's own words for it. Neither is a tenant:
+// what customer this is comes from the Grant, which came from the session, and
+// the read is scoped by it before either of these is compared.
+func (m *Module) named(ctx *fhttp.Context) error {
+	record, err := m.svc.FindBySlug(ctx.Ctx(), m.subject(ctx.Request), ctx.Param("holder"), ctx.Param("slug"))
+	if err != nil {
+		return m.answer(ctx, err)
+	}
+	if !ctx.WantsJSON() {
+		return ctx.Redirect(m.cfg.Prefix + "/" + record.ID)
+	}
+	return ctx.JSON(stdhttp.StatusOK, resourceFromPointer(record))
 }
 
 // describe changes what one wallet is called and what it is for.

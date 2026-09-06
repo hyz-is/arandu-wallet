@@ -181,6 +181,7 @@ var routePatterns = []routePattern{
 	{http.MethodGet, "", "wallet.index"},
 	{http.MethodPost, "", "wallet.store"},
 	{http.MethodGet, "/{id}", "wallet.show"},
+	{http.MethodGet, "/holders/{holder}/{slug}", "wallet.named"},
 	{http.MethodGet, "/{id}/entries", "wallet.entries"},
 	{http.MethodPut, "/{id}/credit", "wallet.credit"},
 	{http.MethodPut, "/{id}/description", "wallet.describe"},

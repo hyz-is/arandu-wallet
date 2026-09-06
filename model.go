@@ -150,6 +150,50 @@ func Wallets(db *data.DB) *model.Model[Wallet] {
 	return m
 }
 
+// Slugify returns the slug to use, deriving one from a name where none was
+// given.
+//
+// A slug already written is returned untouched. It is the caller's key -- it is
+// under the unique index that says which of a holder's wallets this is, and
+// folding one somebody wrote would silently rename a wallet they meant to open
+// under a name they chose.
+//
+// Deriving is a fold and never a translation: letters and digits are kept and
+// lowered, everything else becomes a single hyphen, and the ends are trimmed.
+// Only ASCII letters are lowered, so a name in a script with no case comes
+// through as its own runes rather than through a table this package would have
+// to keep. What derives to nothing comes back empty, and the caller refuses it
+// -- a wallet named by punctuation would be a wallet whose slug nobody chose.
+func Slugify(slug, name string) string {
+	if slug != "" {
+		return slug
+	}
+
+	var out strings.Builder
+	out.Grow(len(name))
+	hyphen := false
+	for _, r := range name {
+		switch {
+		case r >= 'A' && r <= 'Z':
+			r += 'a' - 'A'
+			fallthrough
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			if hyphen && out.Len() > 0 {
+				out.WriteByte('-')
+			}
+			hyphen = false
+			out.WriteRune(r)
+		default:
+			hyphen = true
+		}
+	}
+	derived := out.String()
+	if len(derived) > maxIdentifierLen {
+		derived = strings.TrimRight(derived[:maxIdentifierLen], "-")
+	}
+	return derived
+}
+
 // Money returns an amount read at this wallet's currency and scale.
 func (w Wallet) Money(amount Amount) Money {
 	return Money{Amount: amount, Currency: w.Currency, DecimalPlaces: w.DecimalPlaces}

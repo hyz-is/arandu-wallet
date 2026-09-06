@@ -82,7 +82,7 @@ this one must prove about itself it proves in its own suite or nowhere.
 | --- | --- |
 | 15 Go files, one per role, all in one package at the root | `grep -l '^package wallet' *.go` |
 | 27 test files, 200 passing tests and subtests, and 12 more when `ARANDU_TEST_POSTGRES_DSN` names a server | `find tests -name '*_test.go'` · `go test -count=1 ./... -v \| grep -cE '^( *)--- PASS'` |
-| 13 routes | `grep -c 'm.register(r,' module.go` |
+| 14 routes | `grep -c 'm.register(r,' module.go` |
 | 16 actions the policy answers about | `grep -cE '^\t[A-Za-z]+ security.Action = ' policy.go` |
 | 5 direct dependencies, all under `arandu-io` | `go list -m -f '{{if and (not .Indirect) (not .Main)}}{{.Path}} {{.Version}}{{end}}' all` |
 
@@ -254,12 +254,12 @@ repository; the fifth property is what the answer has to be when a row says
 | an engine this package has not been run against | refused | `New` answers `ErrUnsupportedDialect`; the suite covers PostgreSQL and SQLite, and nothing claims MySQL |
 | statement, ledger, running balance | yes | `History`, `Statement`, `Entry.BalanceAfter` |
 | told what the money did, after it did it | yes | `Listener` |
-| a default wallet, or lookup by holder and slug | no | **open**: the unique index exists, the read does not |
+| lookup by holder and slug, and a name for the default one | yes | `FindBySlug`, `DefaultSlug`, and `GET {prefix}/holders/{holder}/{slug}`. It opens nothing: a read that created what it did not find would guess a currency and a scale |
 | closing or archiving a wallet | no | **open** |
 | typed errors from a rate source | no | **open**: what the provider returns travels out as it came |
 | a free line in a basket | no | **open**: a price of zero or less is refused |
 | an empty balance told apart from an insufficient one | no | **open**: both answer `ErrInsufficientFunds` |
-| a slug derived from a name | no | **open**: the caller supplies both |
+| a slug derived from a name | yes | `Slugify`; an empty `OpenRequest.Slug` is derived from the name, and a name that derives to nothing is refused |
 | locales beyond `en` and `pt-BR` | no | **open**: `Locales()` is what ships |
 
 These are limits this package chose, and they are part of the contract rather

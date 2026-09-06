@@ -103,6 +103,11 @@ type OpenRequest struct {
 	// HolderID is whose wallet this will be.
 	HolderID string
 	// Slug names which of the holder's wallets it is.
+	//
+	// Empty is derived from Name, so an application that has one word for a
+	// wallet writes it once. What it derives to is Slugify's answer, and a name
+	// that derives to nothing -- punctuation, or a script this package cannot
+	// fold -- is refused rather than turned into a slug nobody chose.
 	Slug string
 	// Name is what a person will call it.
 	Name string
@@ -511,6 +516,7 @@ type Statement struct {
 // the policy sees -- so a rule about whose wallet may be opened is a rule about
 // the wallet being opened, and not about the person alone.
 func (s *WalletService) Open(ctx context.Context, actor security.Subject, in OpenRequest) (*Wallet, error) {
+	in.Slug = Slugify(in.Slug, in.Name)
 	if errs := in.Validate(); errs.Any() {
 		return nil, errs
 	}
@@ -644,6 +650,68 @@ func (s *WalletService) SetCredit(ctx context.Context, actor security.Subject, i
 		Balance:       written.Balance,
 	})
 	return written, nil
+}
+
+// DefaultSlug is the slug of the wallet a holder has when nobody said which.
+//
+// A constant rather than a rule: this package opens no wallet by itself and
+// never falls back to one, so what this names is a convention an application
+// can share with its own code and with anybody reading its rows. An application
+// whose holders have exactly one wallet opens it under this and never writes the
+// word again.
+const DefaultSlug = "default"
+
+// FindBySlug returns the wallet a holder keeps under this slug.
+//
+// It is the read for the caller who knows whose money it is and what they call
+// it, which is most callers: the pair is what names a wallet, it is under the
+// unique index the table was created with, and an application that had to keep
+// a generated identifier beside its own user row would be keeping a second key
+// for a row it can already name.
+//
+// It opens nothing. A read that created the wallet it did not find would be a
+// write behind a name that promises a read -- and the first caller to ask about
+// a holder who has none would silently open one, under a currency and a scale
+// this package would have had to guess.
+//
+// It asks the policy the same two questions Find asks, in the same order and for
+// the same reason: the first decides whether this subject reads wallets, and the
+// second is the one a rule about the holder answers.
+func (s *WalletService) FindBySlug(ctx context.Context, actor security.Subject, holderID, slug string) (*Wallet, error) {
+	if errs := validateName(holderID, slug); errs.Any() {
+		return nil, errs
+	}
+
+	g, err := security.Authorize(ctx, s.policy, actor, WalletView, Wallet{})
+	if err != nil {
+		return nil, err
+	}
+
+	record, err := Wallets(s.db).NewQuery().
+		Where("holder_id", "=", holderID).
+		Where("slug", "=", slug).
+		First(ctx, g)
+	if err != nil {
+		return nil, err
+	}
+	if record == nil {
+		return nil, ErrNotFound
+	}
+
+	if _, err := security.Authorize(ctx, s.policy, actor, WalletView, *record); err != nil {
+		return nil, err
+	}
+	return record, nil
+}
+
+// validateName reports why a holder and a slug cannot name a wallet.
+func validateName(holderID, slug string) validation.Errors {
+	e := validation.Errors{}
+	validation.Required(e, "holder_id", holderID)
+	validation.MaxLen(e, "holder_id", holderID, maxIdentifierLen)
+	validation.Required(e, "slug", slug)
+	validation.MaxLen(e, "slug", slug, maxIdentifierLen)
+	return e
 }
 
 // DescribeRequest is what changing a wallet's labels takes.
