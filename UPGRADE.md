@@ -11,6 +11,39 @@ changed at each of its own versions is below.
 
 Nothing yet.
 
+## v0.6.0
+
+### One new method, and one thing it is not
+
+`(*WalletService).CanWithdraw` answers whether a wallet could pay out an amount,
+without moving it. Nothing else changes, and nothing that exists behaves
+differently.
+
+```go
+can, err := service.CanWithdraw(ctx, actor, walletID, "10.00")
+```
+
+It is a photograph. Between the answer and a withdrawal the balance can change,
+so a caller that treats a `true` as permission has written the read-then-check
+this package exists to avoid. What decides a withdrawal is still the predicate
+on the update inside `Withdraw`. Use it to draw a button, not to decide whether
+money may move.
+
+It answers the same arithmetic the guard does -- the balance plus the credit
+limit, against the amount -- and answers false for a wallet that is frozen or
+closed, because those are the other two reasons the write refuses. It authorizes
+`WalletView`, so a subject who may read the wallet may ask.
+
+### Nothing else moved
+
+The Service is split across seven files instead of one, all of them still
+`package wallet`. `go doc -all` is what it was, so a project that compiled
+against `v0.5.0` compiles against this unchanged.
+
+Every column width now names the bound that validates the same field. A schema
+already applied keeps the columns it has, and no value this package would write
+is refused by either.
+
 ## v0.5.0
 
 ### MySQL is supported

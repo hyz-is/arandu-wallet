@@ -16,6 +16,8 @@ name here. They are gone.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-06
+
 ### Added
 
 - `(*WalletService).CanWithdraw`, which answers whether a wallet could pay out
