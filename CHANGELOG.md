@@ -16,6 +16,17 @@ name here. They are gone.
 
 ## [Unreleased]
 
+### Added
+
+- `TestAReplayPricesNothing`, which counts. Moving the replay lookup past the
+  wallet authorization moved it further into each method, and the risk of that
+  is a duplicate request doing work before it discovers it is a duplicate --
+  asking a catalogue for a price, a provider for a rate, a seam for a fee. None
+  of those is free of consequence. The catalogue is asked once across two calls
+  under one key, and putting the lookup after `priceBasket` fails it with "the
+  catalogue was asked 2 times". The same claim about the rate and the fee seams
+  was already held by `exchange_test.go` and `fee_test.go`.
+
 ## [0.7.0] - 2026-09-06
 
 ### Fixed

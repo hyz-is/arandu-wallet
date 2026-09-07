@@ -219,3 +219,63 @@ func TestAKeySpentOnAnotherKindIsStillAConflict(t *testing.T) {
 		t.Fatalf("a deposit's key reused for a withdrawal answered %v, want ErrOperationConflict", err)
 	}
 }
+
+// TestAReplayPricesNothing holds the property the ownership check had to be
+// added without breaking: the same key twice pays once, at one price.
+//
+// Moving the replay lookup after the wallet is authorized moved it past more of
+// each method, and the risk of that is a duplicate request doing work before it
+// discovers it is a duplicate -- asking a catalogue for a price, a provider for
+// a rate, a seam for a fee. None of those is free of consequence: a Price that
+// reserves stock, a rate that costs a request, a fee that is metered.
+//
+// So this counts. The catalogue is asked once across two calls under one key,
+// and the second answer is the first call's rows read back rather than priced
+// again.
+//
+// The same claim about the rate and the fee seams is held elsewhere, because
+// they belong to other methods: exchange_test.go counts the rate provider
+// across a replayed exchange, and fee_test.go counts the fee and discount
+// providers across a replayed payment.
+func TestAReplayPricesNothing(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
+	buyer := openWallet(t, service, "bob", "main", 2)
+	shop := openWallet(t, service, "shop", "till", 2)
+	deposit(t, service, buyer.ID, "seed", "100.00")
+
+	book := &item{key: "book", wallet: shop.ID, price: 1000}
+	basket := wallet.NewCart(wallet.CartItem{Product: book, Quantity: 1})
+
+	first, err := service.Pay(ctx, staff(), wallet.PayRequest{
+		IdempotencyKey: "one-basket", PayerWalletID: buyer.ID, Cart: basket,
+	})
+	if err != nil {
+		t.Fatalf("paying: %v", err)
+	}
+	if book.askedFor != 1 {
+		t.Fatalf("the catalogue was asked %d times for one payment", book.askedFor)
+	}
+
+	second, err := service.Pay(ctx, staff(), wallet.PayRequest{
+		IdempotencyKey: "one-basket", PayerWalletID: buyer.ID, Cart: basket,
+	})
+	if err != nil {
+		t.Fatalf("paying again under the same key: %v", err)
+	}
+	if !second.Replayed {
+		t.Fatal("the second call paid again instead of answering with the first receipt")
+	}
+	if book.askedFor != 1 {
+		t.Errorf("the catalogue was asked %d times across two calls under one key, want 1: "+
+			"a replay discovered itself too late and priced the basket again", book.askedFor)
+	}
+	if len(second.Purchases) != 1 || second.Purchases[0].ID != first.Purchases[0].ID {
+		t.Error("the replay answered with lines the first call did not record")
+	}
+	if got := balanceOf(t, service, buyer.ID); got != 9000 {
+		t.Errorf("the buyer holds %d, want 9000: the basket was paid for twice", got)
+	}
+}
