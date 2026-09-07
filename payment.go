@@ -86,10 +86,6 @@ func (s *WalletService) Pay(ctx context.Context, actor security.Subject, in PayR
 		return Receipt{}, err
 	}
 
-	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationPurchase); err != nil || found {
-		return receipt, err
-	}
-
 	payer, err := Wallets(s.db).NewQuery().WhereKey(in.PayerWalletID).First(ctx, g)
 	if err != nil {
 		return Receipt{}, err
@@ -102,6 +98,13 @@ func (s *WalletService) Pay(ctx context.Context, actor security.Subject, in PayR
 	}
 	if err := s.allowForce(ctx, actor, in.Force, *payer); err != nil {
 		return Receipt{}, err
+	}
+
+	// After the wallet, and never before it. A replay hands back money that
+	// moved -- and here the lines of a basket besides -- so who is entitled to
+	// see it is the same question as who may spend from this wallet.
+	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationPurchase, payer.ID); err != nil || found {
+		return receipt, err
 	}
 
 	priced, err := s.priceBasket(ctx, g, *payer, in.Cart)
@@ -144,10 +147,6 @@ func (s *WalletService) Refund(ctx context.Context, actor security.Subject, in R
 		return Receipt{}, err
 	}
 
-	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationRefund); err != nil || found {
-		return receipt, err
-	}
-
 	ids := make([]any, 0, len(in.PurchaseIDs))
 	for _, id := range in.PurchaseIDs {
 		ids = append(ids, id)
@@ -179,6 +178,12 @@ func (s *WalletService) Refund(ctx context.Context, actor security.Subject, in R
 	priced, err := s.reverseLines(ctx, g, actor, in, lines)
 	if err != nil {
 		return Receipt{}, err
+	}
+
+	// After the lines have been read and the wallets giving the money back have
+	// been authorized, which reverseLines does.
+	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationRefund, settledFor(priced.movements)); err != nil || found {
+		return receipt, err
 	}
 
 	receipt, err := s.commit(ctx, g, operation{

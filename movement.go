@@ -254,10 +254,6 @@ func (s *WalletService) Deposit(ctx context.Context, actor security.Subject, in 
 		return Receipt{}, err
 	}
 
-	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationDeposit); err != nil || found {
-		return receipt, err
-	}
-
 	target, err := Wallets(s.db).NewQuery().WhereKey(in.WalletID).First(ctx, g)
 	if err != nil {
 		return Receipt{}, err
@@ -267,6 +263,14 @@ func (s *WalletService) Deposit(ctx context.Context, actor security.Subject, in 
 	}
 	if _, err := security.Authorize(ctx, s.policy, actor, WalletDeposit, *target); err != nil {
 		return Receipt{}, err
+	}
+
+	// After the wallet, and never before it. A replay hands back money that
+	// moved; asking who is entitled to see it is the same question as asking
+	// who may move it, and the answer is the one the policy just gave about
+	// this wallet.
+	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationDeposit, target.ID); err != nil || found {
+		return receipt, err
 	}
 
 	amount, err := positiveAmount(in.Amount, target.DecimalPlaces)
@@ -297,10 +301,6 @@ func (s *WalletService) Withdraw(ctx context.Context, actor security.Subject, in
 		return Receipt{}, err
 	}
 
-	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationWithdraw); err != nil || found {
-		return receipt, err
-	}
-
 	source, err := Wallets(s.db).NewQuery().WhereKey(in.WalletID).First(ctx, g)
 	if err != nil {
 		return Receipt{}, err
@@ -313,6 +313,14 @@ func (s *WalletService) Withdraw(ctx context.Context, actor security.Subject, in
 	}
 	if err := s.allowForce(ctx, actor, in.Force, *source); err != nil {
 		return Receipt{}, err
+	}
+
+	// After the wallet, and never before it. A replay hands back money that
+	// moved; asking who is entitled to see it is the same question as asking
+	// who may move it, and the answer is the one the policy just gave about
+	// this wallet.
+	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationWithdraw, source.ID); err != nil || found {
+		return receipt, err
 	}
 
 	amount, err := positiveAmount(in.Amount, source.DecimalPlaces)
@@ -394,7 +402,7 @@ func (s *WalletService) Transfer(ctx context.Context, actor security.Subject, in
 	if converts(*source, *target) {
 		kind = OperationExchange
 	}
-	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, kind); err != nil || found {
+	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, kind, source.ID); err != nil || found {
 		return receipt, err
 	}
 
@@ -510,10 +518,6 @@ func (s *WalletService) Reverse(ctx context.Context, actor security.Subject, in 
 		return Receipt{}, err
 	}
 
-	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationReversal); err != nil || found {
-		return receipt, err
-	}
-
 	original, err := Operations(s.db).NewQuery().WhereKey(in.OperationID).First(ctx, g)
 	if err != nil {
 		return Receipt{}, err
@@ -540,6 +544,14 @@ func (s *WalletService) Reverse(ctx context.Context, actor security.Subject, in 
 	movements, err := s.mirror(ctx, g, actor, original.ID)
 	if err != nil {
 		return Receipt{}, err
+	}
+
+	// After the operation being settled has been read and every wallet it
+	// touches has been authorized, which mirror and settle do. Before that, a
+	// replay would be answering about somebody else's operation to whoever
+	// knows the key.
+	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationReversal, settledFor(movements)); err != nil || found {
+		return receipt, err
 	}
 
 	receipt, err := s.commit(ctx, g, operation{
@@ -595,10 +607,6 @@ func (s *WalletService) Confirm(ctx context.Context, actor security.Subject, in 
 		return Receipt{}, err
 	}
 
-	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationConfirmation); err != nil || found {
-		return receipt, err
-	}
-
 	original, err := Operations(s.db).NewQuery().WhereKey(in.OperationID).First(ctx, g)
 	if err != nil {
 		return Receipt{}, err
@@ -610,6 +618,14 @@ func (s *WalletService) Confirm(ctx context.Context, actor security.Subject, in 
 	movements, err := s.settle(ctx, g, actor, in, original.ID)
 	if err != nil {
 		return Receipt{}, err
+	}
+
+	// After the operation being settled has been read and every wallet it
+	// touches has been authorized, which mirror and settle do. Before that, a
+	// replay would be answering about somebody else's operation to whoever
+	// knows the key.
+	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationConfirmation, settledFor(movements)); err != nil || found {
+		return receipt, err
 	}
 
 	receipt, err := s.commit(ctx, g, operation{

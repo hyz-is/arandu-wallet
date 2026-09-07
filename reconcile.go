@@ -173,10 +173,6 @@ func (s *WalletService) Rebuild(ctx context.Context, actor security.Subject, in 
 		return Receipt{}, err
 	}
 
-	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationAdjustment); err != nil || found {
-		return receipt, err
-	}
-
 	holder, err := Wallets(s.db).NewQuery().WhereKey(in.WalletID).First(ctx, g)
 	if err != nil {
 		return Receipt{}, err
@@ -186,6 +182,12 @@ func (s *WalletService) Rebuild(ctx context.Context, actor security.Subject, in 
 	}
 	if _, err := security.Authorize(ctx, s.policy, actor, WalletReconcile, *holder); err != nil {
 		return Receipt{}, err
+	}
+
+	// After the wallet, and never before it: knowing the key of a repair
+	// somebody else asked for is not being allowed to read what it wrote.
+	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationAdjustment, holder.ID); err != nil || found {
+		return receipt, err
 	}
 	if !holder.Frozen {
 		return Receipt{}, ErrWalletNotFrozen

@@ -11,6 +11,76 @@ changed at each of its own versions is below.
 
 Nothing yet.
 
+## v0.7.0
+
+Three defects, and one of them is a disclosure. Take this release before serving
+money.
+
+### A replay is answered to the holder, and to nobody else
+
+An idempotency key is a name the caller chose, in a column that is unique per
+tenant rather than per holder. Until this version, a caller who knew somebody
+else's key was answered with that operation, its entries and the lines of its
+basket, and no policy had seen the wallet: the lookup ran before the wallet was
+loaded.
+
+Nothing in an application changes. What changes is who is answered:
+
+- the holder replaying their own key is answered exactly as before, with the
+  same operation and the same quote;
+- either side of a transfer may replay it, because the receipt describes a
+  movement their own ledger already shows;
+- anybody else is answered `ErrNotFound`, whichever wallet they name.
+
+An application that used one key across several wallets on purpose will now see
+`ErrNotFound` on the second wallet instead of a receipt for the first. That was
+never a replay -- it was a deposit that silently did not happen -- so the fix is
+to give each wallet its own key.
+
+### A listener is called after the outermost transaction commits
+
+`notify` ran where the write returned, which is the commit only when this
+package opened the transaction. An application that wrapped a deposit in its own
+transaction was told the money moved, and could then roll back.
+
+```go
+// Before: the listener heard about this, and then it did not happen.
+data.Transaction(ctx, db, func(ctx context.Context) error {
+	if _, err := service.Deposit(ctx, actor, in); err != nil {
+		return err
+	}
+	return errors.New("something else failed")
+})
+```
+
+Now the listener is called once the outermost transaction has committed, and not
+at all if it rolls back. The context it receives reports no transaction, so a
+listener that writes must open its own.
+
+**A listener that relied on running inside the transaction has to change.** One
+that wrote a row expecting it to be rolled back with the movement is now writing
+outside the transaction, and its write survives.
+
+**This is not durable delivery.** A process that dies between the commit and the
+listener loses the event. What is removed is the announcement of a write that
+was rolled back; what is not added is a guarantee that the announcement arrives.
+An application that needs one writes the event into the same transaction as the
+row and reads it out afterwards -- an outbox -- and this is not that.
+
+### `Amount.Sub` stops refusing results that fit
+
+`-1 - MinInt64` is `MaxInt64` and `MinInt64 - MinInt64` is zero. Both were
+answered `ErrAmountOverflow`. They are answered with the difference now.
+`0 - MinInt64`, `MaxInt64 - (-1)` and `MinInt64 - 1` still overflow.
+
+Code that treated the old refusal as a signal was reading a defect as a rule.
+
+### Upgrade the floor
+
+```sh
+go get github.com/arandu-io/hesape@v0.27.0
+```
+
 ## v0.6.0
 
 ### One new method, and one thing it is not

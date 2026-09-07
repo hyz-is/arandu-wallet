@@ -16,6 +16,43 @@ name here. They are gone.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-06
+
+### Fixed
+
+- A replay reauthorizes. Every method authorized its action on an empty
+  candidate, asked the idempotency key, and only then loaded the wallet and
+  authorized on the row -- so a caller who knew somebody else's key was handed
+  that operation, its entries and, on a basket, the lines it bought, without any
+  policy ever seeing the wallet. The key is unique per tenant, not per holder,
+  so this reached everybody in one tenant. The lookup now runs after the wallet
+  has been authorized, at all nine call sites, and the operation it finds has to
+  have written an entry on that wallet. Both sides of a transfer are owners, and
+  that is a choice the code states: the receipt describes a movement the wallet's
+  own ledger already shows.
+- The fallback after a lost race reauthorizes too. When two callers pick one
+  key, the unique index refuses the second operation row and the loser looks up
+  what the winner did -- a second place the key could stand in for permission. A
+  loser who was not in the winner's operation is answered with `ErrNotFound`.
+- A listener waits for the outermost commit. `notify` ran where the write
+  returned, which is the commit only when this package opened the transaction.
+  An application that had already opened one was told that money moved, and
+  could then roll back -- leaving somebody told about a thing that did not
+  happen. It goes through `AfterCommit` in Hesape `v0.27.0` now: registered at
+  any depth, run once the outermost transaction has committed, discarded on
+  rollback, and handed a context that reports no transaction. It is not durable
+  delivery, and the doc comment says so.
+- `Amount.Sub` answers every difference that fits. It was `a.Add(-b)`, and
+  `-MinInt64` does not fit in an int64, so it refused every subtraction of
+  `MinInt64` -- including `-1 - MinInt64 = MaxInt64` and `MinInt64 - MinInt64 =
+  0`, which are both representable. Overflow is detected on the result now, the
+  way `Add` does it, and the three that really overflow still answer
+  `ErrAmountOverflow`.
+
+### Changed
+
+- The minimum Hesape version is now `v0.27.0`.
+
 ## [0.6.0] - 2026-09-06
 
 ### Added

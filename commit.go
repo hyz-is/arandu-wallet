@@ -313,7 +313,16 @@ func (s *WalletService) commit(ctx context.Context, g security.Grant, op operati
 
 		// A key already spent answers with what it did, whatever this attempt
 		// failed on.
-		if replayed, found, lookupErr := s.replay(ctx, g, op.key, op.kind); lookupErr == nil && found {
+		//
+		// The wallet named here is the one this call is moving money out of,
+		// and the caller authorized it before reaching this function. Without
+		// it, two callers who picked the same key would be answered by
+		// whichever wrote first -- and losing that race is exactly the path
+		// this branch is: the unique index refused the second operation row, so
+		// the loser looks up what the winner did. A loser who is not in the
+		// winner's operation is answered with ErrNotFound rather than with
+		// somebody else's money.
+		if replayed, found, lookupErr := s.replay(ctx, g, op.key, op.kind, settledFor(movements)); lookupErr == nil && found {
 			return replayed, nil
 		}
 		if !conflicted(err) {
@@ -1076,7 +1085,61 @@ func (s *WalletService) whyNothingMoved(ctx context.Context, g security.Grant, m
 // back off the row rather than asked for again. That is what makes idempotency
 // mean the same thing for a conversion as for anything else: the same key twice
 // converts once, at one rate, and the second answer is the first answer.
-func (s *WalletService) replay(ctx context.Context, g security.Grant, key string, kind OperationKind) (Receipt, bool, error) {
+// settledFor is the wallet a settlement of an existing operation belongs to.
+//
+// The first movement, because mirror and settle build them from the entries of
+// the operation being undone or confirmed, in the order that operation wrote
+// them -- so the first is the wallet that operation started at. Every wallet in
+// the list has already been authorized by the time this is asked; what it names
+// is which one the replay is about.
+func settledFor(movements []movement) string {
+	for _, m := range movements {
+		if m.wallet != nil {
+			return m.wallet.ID
+		}
+	}
+	return ""
+}
+
+// movedFor reports whether an operation wrote an entry on the given wallet.
+//
+// It is the whole of the ownership check on a replay, and it is deliberately
+// this and not more. An idempotency key is a name the caller chose, stored in a
+// column that is unique per tenant; two people in one tenant can pick the same
+// string, and one of them can guess the other's. So a lookup by key alone
+// answers with whoever wrote first, and the caller who lost the race is handed
+// somebody else's operation, entries and purchases.
+//
+// The wallet compared against is the one the calling method authorized before
+// asking -- the wallet in the request, or the one the operation being settled
+// belongs to. That ordering is what makes this enough: the policy has already
+// said this subject may act on that wallet, and this says the key names an
+// operation that touched it.
+//
+// # Both sides of a transfer are owners here
+//
+// A transfer writes an entry on the payer and one on the payee, so either of
+// them replaying under that key is answered. That is a choice rather than an
+// oversight: the receipt describes a movement that this wallet's own ledger
+// already shows, and refusing it would mean the payee cannot ask what a payment
+// they received consisted of. What it does not do is answer somebody who was
+// not in the operation at all.
+//
+// An empty owner never matches, which is what keeps a caller that has no wallet
+// to name from being answered by accident.
+func movedFor(owner string, entries []Entry) bool {
+	if owner == "" {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.WalletID == owner {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *WalletService) replay(ctx context.Context, g security.Grant, key string, kind OperationKind, owner string) (Receipt, bool, error) {
 	record, err := Operations(s.db).NewQuery().Where("idempotency_key", "=", key).First(ctx, g)
 	if err != nil {
 		return Receipt{}, false, err
@@ -1101,6 +1164,17 @@ func (s *WalletService) replay(ctx context.Context, g security.Grant, key string
 			entries = append(entries, *entry)
 		}
 	}
+
+	// The key is not the permission. Everything below this line is somebody's
+	// money, and what says it is this caller's is the wallet the caller was
+	// authorized for a moment ago -- not the fact that they know a string.
+	if !movedFor(owner, entries) {
+		return Receipt{}, false, ErrNotFound
+	}
+
+	// The key is not the permission. Everything below this line is somebody's
+	// money, and what says it is this caller's is the wallet the caller was
+	// authorized for a moment ago -- not the fact that they know a string.
 
 	// Only an exchange has one, so only an exchange is asked for one. A read
 	// on every replay would be a statement per deposit that answers nothing.

@@ -6,6 +6,7 @@ import (
 
 	"github.com/arandu-io/framework/data"
 	"github.com/arandu-io/framework/security"
+	"github.com/arandu-io/hesape/database"
 )
 
 // EventKind names what happened.
@@ -118,19 +119,52 @@ type Listener func(context.Context, Event)
 // happen, and there is no message that takes it back -- which is the whole
 // reason the events of an operation are collected while it runs and handed over
 // only once the database has kept them.
+//
+// # The transaction that counts is the outermost one
+//
+// This used to be called where the write returned, which is the commit only
+// when this package opened the transaction. An application that had already
+// opened one is joined rather than interrupted, so the write returned with
+// nothing committed yet -- and a rollback afterwards left the caller having
+// been told that money moved when the balance was back where it started.
+//
+// database.AfterCommit is what settles it: registered at any depth, it belongs
+// to the outermost transaction and runs once that has committed. Outside a
+// transaction it runs immediately, which is the same promise under the only
+// circumstances there are. The context it hands over reports no transaction, so
+// a listener cannot open a statement that joins one that has ended.
+//
+// # What this is not
+//
+// It is not durable delivery. A process that dies between the commit and the
+// listener loses the event, and no ordering inside one process fixes that. What
+// is removed is the announcement of a write that was rolled back; what is not
+// added is a guarantee that the announcement arrives. An application that needs
+// one writes the event into the same transaction as the row and reads it out
+// afterwards, which is an outbox and not this.
 func (s *WalletService) notify(ctx context.Context, g security.Grant, events ...Event) {
 	if len(s.listeners) == 0 || len(events) == 0 {
 		return
 	}
 	at := time.Now().UTC()
+	ready := make([]Event, 0, len(events))
 	for _, event := range events {
 		event.At = at
 		event.Tenant = data.Tenant(g)
 		event.ActorID = g.Subject().ID
-		for _, listen := range s.listeners {
-			listen(ctx, event)
-		}
+		ready = append(ready, event)
 	}
+
+	// The error is the one AfterCommit answers for a handle or a callback that
+	// is missing, and neither is reachable from here: the Service cannot exist
+	// without a handle, and the function is written above.
+	_ = database.AfterCommit(ctx, s.db, func(after context.Context) {
+		for _, event := range ready {
+			for _, listen := range s.listeners {
+				listen(after, event)
+			}
+		}
+	})
 }
 
 // movedEvents is what an operation's movements are told as, once they have

@@ -67,11 +67,27 @@ func (a Amount) Add(b Amount) (Amount, error) {
 }
 
 // Sub returns a - b, or ErrAmountOverflow.
+//
+// It is written out rather than expressed as a.Add(-b), and the reason is the
+// one value that has no negative: -MinInt64 does not fit in an int64, so the
+// shorthand had to refuse every subtraction of MinInt64 to avoid computing it.
+// Two of those are representable and were being refused --
+//
+//	-1 - MinInt64 = MaxInt64
+//	MinInt64 - MinInt64 = 0
+//
+// -- which is a money primitive answering "does not fit" about results that do.
+//
+// Overflow is detected the way Add detects it, on the result: it happened when
+// the operands differ in sign and the difference does not agree with a. The
+// three that really overflow -- 0 - MinInt64, MaxInt64 - (-1) and MinInt64 - 1
+// -- still answer ErrAmountOverflow.
 func (a Amount) Sub(b Amount) (Amount, error) {
-	if b == math.MinInt64 {
+	difference := a - b
+	if (a >= 0 && b < 0 && difference < 0) || (a < 0 && b > 0 && difference >= 0) {
 		return 0, ErrAmountOverflow
 	}
-	return a.Add(-b)
+	return difference, nil
 }
 
 // Times returns a multiplied by a count, or ErrAmountOverflow.
