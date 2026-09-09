@@ -1,9 +1,9 @@
 filippo.io/edwards25519 v1.2.0 h1:crnVqOiS4jqYleHd9vaKZ+HKtHfllngJIiOpNpoJsjo=
 filippo.io/edwards25519 v1.2.0/go.mod h1:xzAOLCNug/yB62zG1bQ8uziwrIqIuxhctzJT18Q77mc=
-github.com/arandu-io/framework v0.46.1 h1:IXxJWecnf1ToM0y8hBKJNm8LVGreBsFa3WxEjoeJuIc=
-github.com/arandu-io/framework v0.46.1/go.mod h1:oHrPixv3aTisCVeJEuRyjK01imJmpE0PapMQTyzpIxs=
-github.com/arandu-io/hesape v0.27.0 h1:LaKaEo6kaTdhTcxVaJgQG7eQw9z24bR402BWUZD5J/k=
-github.com/arandu-io/hesape v0.27.0/go.mod h1:KNXJJuKrDIpWvJgNbE2LxtHkOqO4J6cqPkmMcNlxrL0=
+github.com/arandu-io/framework v0.46.4 h1:C3fPx9l1IBfFIBwNLyBsyMNcA0O2jPDhFN6byBSf2IU=
+github.com/arandu-io/framework v0.46.4/go.mod h1:YbQEG1utV2e4CJeCfevL53J2A3I+cmhiA06EsR61+iY=
+github.com/arandu-io/hesape v0.37.0 h1:2xGVaVkqWy87UtU58pEYTneksTsNZDp6BG8kaHXSN3A=
+github.com/arandu-io/hesape v0.37.0/go.mod h1:KNXJJuKrDIpWvJgNbE2LxtHkOqO4J6cqPkmMcNlxrL0=
 github.com/arandu-io/hesape/database/connectors/mysql v0.7.1 h1:VZ4oRIdgjGntJUi2vVnKe89qtOS7lv9hHs+VYGEn+H8=
 github.com/arandu-io/hesape/database/connectors/mysql v0.7.1/go.mod h1:C/uOUXwKFSipvd/e8ZSoh3H/fgZju3uVeGvk3Ww3Ero=
 github.com/arandu-io/hesape/database/connectors/pgx v0.7.1 h1:QcK27YxrIlbctnsMS6CXygHrD0Rtukfp47w/GDY5QOA=

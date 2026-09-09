@@ -26,7 +26,7 @@ go test -race ./...
 The third filter is the staging directory `tests/Unit/published_views_compile_test.go`
 writes and removes. It exists because the go command skips any directory named
 `vendor` at any depth, and the view compiler mirrors a project's view tree into
-`storage/framework/views/vendor/<module>` -- so `go build ./...` never sees a
+`storage/framework/views/modules/<module>` -- so `go build ./...` never sees a
 generated view there, and a type error in one would surface when somebody opened
 the page and nowhere earlier. The test copies the tree to a path with no such
 segment and compiles it there, and skips when nothing has been built.
