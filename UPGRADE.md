@@ -29,9 +29,16 @@ in the module zip: a file under a directory named `vendor` is dropped from it at
 any depth. That fixed the source side and left the destination carrying the
 word, and the destination is the address the application looks the views up at.
 
-The view name constants moved with it: `vendor.wallet.index` is now `modules.wallet.index`.
-The constant names are unchanged, so code that renders through them keeps
-compiling.
+The value of every view name constant moved with it. The constant names are
+unchanged, so code that renders through them keeps compiling, and each one now
+answers `modules.wallet.…` where it answered `vendor.wallet.…`:
+
+- `ViewIndex`
+- `ViewStatement`
+- `ViewOperations`
+
+A string written out by hand instead of through the constant stops matching, and
+what that produces is a 500 saying no view is registered under the old name.
 
 **A project that already published the old tree** publishes again and removes
 the old one by hand:
