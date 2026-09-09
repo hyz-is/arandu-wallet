@@ -1,6 +1,392 @@
 # Upgrade Guide
 
+Every heading below is a tag of this repository. Up to `v0.4.0` this file also
+carried two sections describing releases of the package template this repository
+was configured from -- `v0.4.0` and `v0.2.0`, with the entity renamed into them,
+describing a publishing migration and a Repository removal that both happened
+before `v0.1.0` of this package. They are gone, and what this package actually
+changed at each of its own versions is below.
+
 ## Unreleased
+
+### Published views move out of `vendor/`
+
+The views this package publishes land in `resources/views/modules/wallet/` and
+compile to `storage/framework/views/modules/wallet`. It used to be `vendor/` in
+both, and that address could not work: the go command refuses to import a
+package whose path carries a `vendor` element —
+
+```
+bootstrap/app.go:98:2: use of vendored package not allowed
+```
+
+— and a published view is compiled into a Go package the application has to
+import for its `init()` to register anything. So the last step of the install,
+the import `(*Module).Boot` asks for, did not build.
+
+The archive was already under `resources/publish`, which is what keeps the files
+in the module zip: a file under a directory named `vendor` is dropped from it at
+any depth. That fixed the source side and left the destination carrying the
+word, and the destination is the address the application looks the views up at.
+
+The view name constants moved with it: `vendor.wallet.index` is now `modules.wallet.index`.
+The constant names are unchanged, so code that renders through them keeps
+compiling.
+
+**A project that already published the old tree** publishes again and removes
+the old one by hand:
+
+```sh
+aru vendor:publish --tag=view --apply
+aru view:build
+rm -rf resources/views/vendor/wallet storage/framework/views/vendor/wallet
+```
+
+then deletes the old lines from `vendor-publish.lock` and changes the import in
+`bootstrap/app.go` from `storage/framework/views/vendor/wallet` to
+`storage/framework/views/modules/wallet`.
+
+Framework `v0.46.4` and Hesape `v0.37.0` refuse a publication that carries the
+reserved name, so this cannot come back quietly.
+
+Nothing yet.
+
+## v0.7.0
+
+Three defects, and one of them is a disclosure. Take this release before serving
+money.
+
+### A replay is answered to the holder, and to nobody else
+
+An idempotency key is a name the caller chose, in a column that is unique per
+tenant rather than per holder. Until this version, a caller who knew somebody
+else's key was answered with that operation, its entries and the lines of its
+basket, and no policy had seen the wallet: the lookup ran before the wallet was
+loaded.
+
+Nothing in an application changes. What changes is who is answered:
+
+- the holder replaying their own key is answered exactly as before, with the
+  same operation and the same quote;
+- either side of a transfer may replay it, because the receipt describes a
+  movement their own ledger already shows;
+- anybody else is answered `ErrNotFound`, whichever wallet they name.
+
+An application that used one key across several wallets on purpose will now see
+`ErrNotFound` on the second wallet instead of a receipt for the first. That was
+never a replay -- it was a deposit that silently did not happen -- so the fix is
+to give each wallet its own key.
+
+### A listener is called after the outermost transaction commits
+
+`notify` ran where the write returned, which is the commit only when this
+package opened the transaction. An application that wrapped a deposit in its own
+transaction was told the money moved, and could then roll back.
+
+```go
+// Before: the listener heard about this, and then it did not happen.
+data.Transaction(ctx, db, func(ctx context.Context) error {
+	if _, err := service.Deposit(ctx, actor, in); err != nil {
+		return err
+	}
+	return errors.New("something else failed")
+})
+```
+
+Now the listener is called once the outermost transaction has committed, and not
+at all if it rolls back. The context it receives reports no transaction, so a
+listener that writes must open its own.
+
+**A listener that relied on running inside the transaction has to change.** One
+that wrote a row expecting it to be rolled back with the movement is now writing
+outside the transaction, and its write survives.
+
+**This is not durable delivery.** A process that dies between the commit and the
+listener loses the event. What is removed is the announcement of a write that
+was rolled back; what is not added is a guarantee that the announcement arrives.
+An application that needs one writes the event into the same transaction as the
+row and reads it out afterwards -- an outbox -- and this is not that.
+
+### `Amount.Sub` stops refusing results that fit
+
+`-1 - MinInt64` is `MaxInt64` and `MinInt64 - MinInt64` is zero. Both were
+answered `ErrAmountOverflow`. They are answered with the difference now.
+`0 - MinInt64`, `MaxInt64 - (-1)` and `MinInt64 - 1` still overflow.
+
+Code that treated the old refusal as a signal was reading a defect as a rule.
+
+### Upgrade the floor
+
+```sh
+go get github.com/arandu-io/hesape@v0.27.0
+```
+
+## v0.6.0
+
+### One new method, and one thing it is not
+
+`(*WalletService).CanWithdraw` answers whether a wallet could pay out an amount,
+without moving it. Nothing else changes, and nothing that exists behaves
+differently.
+
+```go
+can, err := service.CanWithdraw(ctx, actor, walletID, "10.00")
+```
+
+It is a photograph. Between the answer and a withdrawal the balance can change,
+so a caller that treats a `true` as permission has written the read-then-check
+this package exists to avoid. What decides a withdrawal is still the predicate
+on the update inside `Withdraw`. Use it to draw a button, not to decide whether
+money may move.
+
+It answers the same arithmetic the guard does -- the balance plus the credit
+limit, against the amount -- and answers false for a wallet that is frozen or
+closed, because those are the other two reasons the write refuses. It authorizes
+`WalletView`, so a subject who may read the wallet may ask.
+
+### Nothing else moved
+
+The Service is split across seven files instead of one, all of them still
+`package wallet`. `go doc -all` is what it was, so a project that compiled
+against `v0.5.0` compiles against this unchanged.
+
+Every column width now names the bound that validates the same field. A schema
+already applied keeps the columns it has, and no value this package would write
+is refused by either.
+
+## v0.5.0
+
+### MySQL is supported
+
+`New` refused it, and the refusal was wrong: `hesape` supports the engine, and
+this framework's own rule treats PostgreSQL, MySQL and SQLite as one repository
+behind one interface rather than as three modes. Nothing in an application
+changes to take this release on PostgreSQL or SQLite.
+
+An application on MySQL upgrades to `v0.5.0` and runs `aru migrate` from
+scratch: two of the migrations could not have applied there before this, so a
+MySQL installation of an earlier version does not exist.
+
+### Existing schemas are unchanged, and new ones are narrower
+
+Three migrations declare narrower columns than they did. An installation that
+already applied them does not run them again and keeps the columns it has; a new
+installation gets the narrower ones. Nothing about either behaves differently,
+because the bounds are ones this package already enforced in Go before the
+statement was built:
+
+- `meta` on `wallet_operations`, `wallet_entries` and `wallets` is bounded at
+  `MaxMetaBytes` (4096) rather than unbounded. `ErrMetaTooLarge` already refused
+  anything larger.
+- The identifier columns are declared at 64 characters, and the two application
+  keys -- `idempotency_key` and `product_key` -- at 191. An identifier here is a
+  version 4 UUID as text, which is thirty-six characters.
+
+To bring an existing PostgreSQL schema in line, which is optional:
+
+```sql
+alter table wallet_operations alter column meta type varchar(4096);
+alter table wallet_entries    alter column meta type varchar(4096);
+alter table wallets           alter column meta type varchar(4096);
+```
+
+### The isolation level moved to where the transaction opens
+
+It was a `SET TRANSACTION ISOLATION LEVEL READ COMMITTED` as the first statement
+inside the transaction. It is `TransactionAt` now, which hands the level to
+`BeginTx`. Applications see no difference; what changes is that MySQL is
+expressible at all, since it refuses a `SET` once a transaction is in progress.
+
+An application that opened its own transaction and let this package join it is
+unaffected: the joined transaction keeps the level it was opened at, exactly as
+before.
+
+### Upgrade the two floors
+
+```sh
+go get github.com/arandu-io/hesape@v0.26.0
+go get github.com/arandu-io/framework@v0.46.1
+```
+
+## v0.4.1
+
+Nothing to change in an application. This release corrects what the previous
+ones said about themselves.
+
+`CHANGELOG.md` and this file described the releases of the package template this
+repository was configured from, with the entity renamed into them: `v0.4.0`
+shipped a changelog whose `## [0.4.0]` section described a publishing migration
+of the template, and filed everything that version actually added -- the two new
+actions among them -- under `[Unreleased]`. Every heading in both files is now a
+tag of this repository, and three tests hold it: an action or a migration this
+package declares has to be named under a version heading rather than an
+unreleased one, and the two files have to describe the same set of versions.
+
+`rates/frankfurter` requires its parent from the proxy instead of replacing it
+with the directory above. A consumer ignored that replace -- Go applies one only
+from the main module -- but this repository's own gates did not, so the
+submodule was being tested against the parent on disk rather than against what
+was published.
+
+## v0.4.0
+
+### Answer two new actions
+
+`WalletDescribe` and `WalletClose`. An application using `WalletPolicy` as it
+ships needs no change -- the rules travel with it. An application that wrote its
+own `security.Policy[Wallet]` refuses both until it answers them, and a refusal
+is what a caller sees:
+
+```go
+// After, in the application's own policy.
+case wallet.WalletDescribe:
+	// relabelling: not creating, and it moves no money
+	return holderOrOperator(s, record)
+case wallet.WalletClose:
+	// taking a wallet out of service, and putting it back
+	return operatorOnly(s)
+```
+
+`WalletDescribe` is separate from `WalletCreate` because relabelling an existing
+wallet and opening a new one are different things to be trusted with.
+`WalletClose` is one action for both directions: an action per direction would
+let somebody hold the half that stops other people's money moving.
+
+### Run the two new migrations
+
+`20260906_0011_add_wallet_description` and `20260906_0012_add_wallet_closure`
+have to be applied with `aru migrate` before this version serves. The first adds
+`description` and `meta` to `wallets`, both defaulting to empty; the second adds
+`closed`, defaulting to the wallet being in service. Every row written before
+them keeps exactly what it meant.
+
+### A closed wallet refuses a movement, at the write
+
+`ErrWalletClosed` joins `ErrWalletFrozen` as a reason a balance does not move,
+and both are read by the statement that writes rather than by a check before it.
+A caller that tested only `ErrWalletFrozen` now has a second value to test:
+
+```go
+// Before.
+if errors.Is(err, wallet.ErrWalletFrozen) { /* out of service */ }
+
+// After.
+if errors.Is(err, wallet.ErrWalletFrozen) { /* the ledger stopped explaining it */ }
+if errors.Is(err, wallet.ErrWalletClosed) { /* somebody took it out of service */ }
+```
+
+The two are different to act on: a freeze is lifted by `Rebuild`, a closure by
+`Reopen`. `Resource` answers with both.
+
+### Tell an empty wallet from a wallet that is merely short
+
+A withdrawal from a wallet holding nothing, with no credit limit, now answers
+`ErrBalanceEmpty` as well as `ErrInsufficientFunds`. Both are wrapped, so code
+testing `ErrInsufficientFunds` reads exactly as it did; code that wants to tell a
+first-time holder from an overdrawn one tests the new value first.
+
+### Quote real rates, if you want them
+
+`rates/frankfurter` is a Go module of its own inside this repository, and it is
+the only part of it that talks to a network. An application that never crosses a
+currency imports nothing new; one that does adds a second dependency:
+
+```sh
+go get github.com/hyz-is/arandu-wallet/rates/frankfurter@latest
+```
+
+The parent's manifest still says `network = false` and means it.
+
+## v0.3.0
+
+### Check the engine before upgrading
+
+`New` now refuses a database handle speaking an engine this package's suite has
+never run against, and it refuses it at construction rather than at the first
+withdrawal:
+
+```go
+module, err := wallet.New(cfg, db, sessions)
+// err wraps ErrUnsupportedDialect on anything but PostgreSQL and SQLite
+```
+
+The value is `ErrUnsupportedDialect`, and it is testable with `errors.Is`.
+
+PostgreSQL and SQLite are what it covers. **An application on MySQL that upgrades
+to this version fails to boot**, and that is deliberate: the guard on a
+withdrawal is a predicate on an update, what an update sees of a row another
+transaction is changing is the engine's answer, and an engine no test here has
+interleaved two withdrawals on is an engine whose answer nobody has read. The SQL
+would compile; the guarantee would not travel.
+
+### Answer one new action
+
+`WalletReconcile`, which `Reconcile` and `Rebuild` ask about. It is the
+operator's and not the holder's: what those two write is a wallet that no longer
+moves, or a ledger row no request produced. `Reconcile` asked about
+`WalletHistory` before this version, when all it did was read and report; it
+freezes now, so the decision it needs is no longer a share of reading a ledger.
+
+```go
+// After, in the application's own policy.
+case wallet.WalletReconcile:
+	return operatorOnly(s)
+```
+
+### Run the new migration
+
+`20260906_0010_add_wallet_freeze` adds the `frozen` column to `wallets`,
+defaulting to the wallet being in service. `aru migrate` before serving.
+
+### A conflict is retried, and what survives it has a name
+
+A movement the engine refuses as a conflict with another transaction --
+serialization failure or deadlock -- is sent again with a widening random pause.
+Sending it again is safe: the operation and the movements reach the transaction
+as values, so no rate, fee, discount or product is asked twice, and an attempt
+that did commit is answered by its own idempotency key rather than repeated.
+
+A conflict surviving four attempts is `ErrConcurrencyConflict`, which says
+nothing was written and the same request can be sent again:
+
+```go
+if errors.Is(err, wallet.ErrConcurrencyConflict) {
+	// nothing moved; send it again
+}
+```
+
+Code that caught the driver's own error to detect this can stop.
+
+### A wallet whose ledger stopped explaining it stops moving
+
+`Reconcile` now freezes a wallet whose ledger and balance disagree, and every
+balance statement carries the column in its own predicate -- so a wallet frozen
+between a read and a write is refused at the write, not before it.
+
+`Rebuild` closes the difference by **appending** the settled entry the ledger was
+missing. The balance column is not touched: the repair is a row somebody can
+read rather than a value somebody changed. It refuses a wallet that is not
+frozen (`ErrWalletNotFrozen`), one whose ledger already balances
+(`ErrLedgerBalanced`), and one that moved between the reconciliation and the
+repair (`ErrLedgerMoved`).
+
+### Isolation is declared, not inherited
+
+Every transaction this package opens now names read committed as its first
+statement instead of taking the engine's default, which an operator can change
+for a whole cluster. A transaction the application had already opened is joined
+and left at the level it chose.
+
+## v0.2.1
+
+Nothing to change, and everything to reinstall. The published `v0.2.0` archive
+was missing its view sources -- `go mod` drops every path with a segment named
+`vendor` when it packs a module, so a project that imported the package failed to
+build with `pattern resources/views: no matching files found`. The files land at
+the same addresses under the same view names; what changed is where the archive
+carries them.
+
+## v0.2.0
 
 ### Give the module a token issuer
 
@@ -63,6 +449,39 @@ have to be applied with `aru migrate` before this version serves. The first adds
 a `meta` column to the operations table and to the ledger, defaulting to the
 empty string, so every row written before it keeps exactly what it meant. The
 second creates the table a purchase is recorded in, which nothing older wrote.
+
+### Read a rate, and let this package apply it
+
+`RateProvider` answers with a rate instead of a converted amount. Applying it,
+rounding it and recording it belong here now, so every exchange in an
+application is rounded the same way and leaves the same row behind whatever the
+provider is -- a provider that returned the amount left no rate to record.
+
+```go
+// Before.
+ConvertTo(ctx context.Context, g security.Grant, m Money, to Currency, places int) (Money, error)
+
+// After.
+Rate(ctx context.Context, g security.Grant, from, to Currency) (Rate, error)
+```
+
+### Give the response builders what an exchange needs
+
+An exchange writes two entries counted differently, and one scale for both moves
+the decimal point on one of them. `NewEntryResource`, `NewEntryCollection` and
+`NewReceiptResource` take what they were missing:
+
+```go
+// Before.
+NewEntryResource(entry, scale)
+NewEntryCollection(entries, scale, path)
+NewReceiptResource(receipt, scale)
+
+// After.
+NewEntryResource(entry, scale, operationKind)
+NewEntryCollection(statement, path)
+NewReceiptResource(receipt, map[string]int{walletID: scale})
+```
 
 ### Hand the service its two new seams
 
@@ -135,126 +554,6 @@ if entry.Kind == wallet.EntryWithdraw {
 that leaves every existing row meaning exactly what it meant -- a floor of zero,
 and a movement that counted -- and the third is a new table nothing reads until
 something charges.
+## v0.1.0
 
-## v0.4.0
-
-Version 0.4.0 hands publishing to the framework. The package no longer defines
-the contract or carries the command that writes the files. Upgrade Framework to
-`v0.46.0` and Hesape to `v0.25.0` before changing anything below.
-
-### Publish with the CLI
-
-```sh
-# Before.
-go run github.com/hyz-is/arandu-wallet/publish@latest
-go run github.com/hyz-is/arandu-wallet/publish@latest --force
-
-# After.
-aru vendor:publish --tag=view
-aru vendor:publish --tag=view --apply
-aru vendor:publish --tag=view --apply --force
-```
-
-The `publish` command of this module was removed. `aru vendor:publish` asks the
-application which modules it registered and writes what each of them declares,
-so one command publishes every installed package instead of one command per
-package. Without `--apply` it writes nothing and prints what each file would
-become; running it twice changes nothing the second time.
-
-`PublishCommand` changed from `go run <module>/publish@latest` to
-`aru vendor:publish --apply`. It is what `(*Module).Boot` names in its refusal,
-and an application that prints it anywhere of its own gets the new spelling by
-recompiling.
-
-### Answer the framework's publishing contract
-
-`Publishable`, declared by this package, was removed. The contract is
-`foundation.Publishable` from `github.com/arandu-io/framework/foundation`, and
-what it asks for is a list rather than a tree:
-
-```go
-// Before.
-type Publishable interface {
-	Name() string
-	Publishes() fs.FS
-}
-
-// After.
-type Publishable interface {
-	Publishes() []foundation.Publication
-}
-```
-
-`Module.Publishes` changed from `func() io/fs.FS` to
-`func() []foundation.Publication`. A `Publication` carries the tag — one of
-`view`, `component`, `config`, `migration`, `translation`, `asset` — the tree,
-and optionally the directory to read it from and the directory it lands in. This
-package declares one, tagged `foundation.PublishView`, with neither directory
-set, because every path in its archive is already the path the file takes in the
-project.
-
-The package-level `Publishes` function was removed with the command that needed
-it: it existed because a `package main` with no database handle could never hold
-a `Module`, and there is no such command any more. Reach the declaration through
-the module.
-
-### Contracts that did not move
-
-`PublishedPaths`, `ViewNames` and `ViewPackages` are unchanged, and so are the
-paths the views land under. A project that already published them is holding the
-same files at the same addresses; `aru vendor:publish` reports them as
-unchanged rather than rewriting them.
-
-## v0.2.0
-
-Version 0.2.0 replaces the generic CRUD Repository with the configured
-Model-first data path. Upgrade Framework to `v0.41.0` and Hesape to `v0.19.1`
-before changing the package wiring.
-
-### Replace Repository wiring
-
-Construct the Service with the application database handle:
-
-```go
-// Before.
-repository := NewWalletRepository(db)
-service := NewWalletService(repository)
-
-// After.
-service := NewWalletService(db)
-```
-
-`WalletRepository` and `NewWalletRepository` were removed. The removed
-generic CRUD methods are `(*WalletRepository).Create`,
-`(*WalletRepository).Delete`, `(*WalletRepository).Find`,
-`(*WalletRepository).List`, and `(*WalletRepository).Update`. Use
-`Wallets(db)` after authorization for generic CRUD. Add a Repository only for
-a specialized query, report, projection, read model, export, or external
-storage boundary.
-
-### Keep Model results as pointers
-
-The Service now returns the entities owned by the configured Model:
-
-- `(*WalletService).Create` changed from `(Wallet, error)` to
-  `(*Wallet, error)`;
-- `(*WalletService).Find` changed from `(Wallet, error)` to
-  `(*Wallet, error)`;
-- `(*WalletService).List` changed from `([]Wallet, error)` to
-  `([]*Wallet, error)`;
-- `NewWalletService` changed from accepting `*WalletRepository` to
-  accepting `*data.DB`.
-
-Keep those pointers intact until converting them to `Resource` or `Collection`.
-Copying an entity with an embedded Model can leave its internal entity pointer
-attached to the original allocation.
-
-`Wallet`: old is comparable; new is not because it embeds
-`model.Model[Wallet]`. Do not use the entity as a map key or compare it with
-`==`; compare stable fields such as `ID` instead.
-
-### Contracts that did not move
-
-`ErrNotFound`, route names, migration identity, `DefaultPrefix`, and
-`DefaultPageSize` remain unchanged. Existing URLs and applied migrations do not
-need translation.
+The first release. Nothing to upgrade from.

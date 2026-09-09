@@ -144,7 +144,7 @@ func TestEveryPublishedFileLandsUnderTheModuleNamespace(t *testing.T) {
 	t.Parallel()
 
 	m := module(t)
-	prefix := "resources/views/vendor/" + m.Name() + "/"
+	prefix := "resources/views/modules/" + m.Name() + "/"
 
 	paths := wallet.PublishedPaths()
 	if len(paths) == 0 {

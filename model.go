@@ -893,7 +893,7 @@ var (
 	// update, and what an update sees of a row another transaction is changing
 	// is the engine's answer rather than this package's -- so an engine no test
 	// here runs against is an engine whose answer nobody has read.
-	ErrUnsupportedDialect = errors.New("wallet: this package is verified on PostgreSQL and SQLite, and refuses an engine its suite has never run against")
+	ErrUnsupportedDialect = errors.New("wallet: this package is verified on PostgreSQL, MySQL and SQLite, and refuses an engine its suite has never run against")
 )
 
 // Resource is the list of fields one Wallet is allowed to answer with.

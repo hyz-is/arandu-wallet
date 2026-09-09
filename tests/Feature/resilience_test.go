@@ -2,15 +2,15 @@ package feature_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/arandu-io/framework/data"
-	"github.com/arandu-io/hesape/log"
+	hedb "github.com/arandu-io/hesape/database"
 
 	wallet "github.com/hyz-is/arandu-wallet"
 )
@@ -142,56 +142,54 @@ func TestADeadlockIsSentAgainAndTheMovementSurvives(t *testing.T) {
 // libpq-style startup options, which pgx reads off the connection string.
 var serializableDefault = map[string]string{"options": "-c default_transaction_isolation=serializable"}
 
-// TestThisPackageNamesTheIsolationLevelOfEveryTransactionItOpens holds the
-// level, by reading the statements that were issued.
+// TestThisPackageOpensEveryTransactionAtTheLevelItNames holds that a
+// transaction of this package reads committed, whatever the server was
+// configured for.
 //
-// The pool here is opened against a server whose default is serializable. What
-// has to be true is that the transaction does not run at that level: the guard
-// on a balance was written against read committed, where an update
-// re-evaluates its predicate against the row the other transaction left, and a
-// level chosen by whoever configured the server is not the level a guard was
-// written for.
+// It asks by behaviour and not by statement, because there is no statement to
+// find: the level is handed to BeginTx when the transaction opens, which is the
+// only place every engine takes it. It used to be a SET as the first thing
+// inside the transaction, and that form is unportable -- MySQL refuses to
+// change a transaction's characteristics once it is in progress -- so a package
+// written that way named its level on one engine and inherited the operator's
+// on another.
 //
-// It asserts the statement rather than an outcome, and that is deliberate. The
-// outcome is the same either way, because the retry beside this absorbs the
-// conflicts a stricter level produces -- which is exactly why the level has to
-// be checked directly. The test below asserts the outcome, and passes with the
-// naming removed; this one does not.
-func TestThisPackageNamesTheIsolationLevelOfEveryTransactionItOpens(t *testing.T) {
+// The server here is configured for serializable, so an inherited level is a
+// level this test can see: at serializable the second read below would be the
+// value the transaction first saw, and at read committed it is the value
+// somebody else committed in between.
+func TestThisPackageOpensEveryTransactionAtTheLevelItNames(t *testing.T) {
 	t.Parallel()
 
-	service := wallet.NewWalletService(postgresWith(t, serializableDefault), nil, nil, nil)
+	db := postgresWith(t, serializableDefault)
+	service := wallet.NewWalletService(db, nil, nil, nil)
 	account := openWallet(t, service, "user-1", "main", 2)
+	deposit(t, service, account.ID, "opening", "10.00")
 
-	collected := log.NewCollector("isolation")
-	ctx := log.WithCollector(context.Background(), collected)
-	if _, err := service.Deposit(ctx, staff(), wallet.DepositRequest{
-		IdempotencyKey: "opening", WalletID: account.ID, Amount: "10.00",
-	}); err != nil {
-		t.Fatalf("depositing: %v", err)
+	// Inside a transaction opened the way this package opens one.
+	var first, second wallet.Amount
+	err := hedb.TransactionAt(context.Background(), db, sql.LevelReadCommitted,
+		func(ctx context.Context) error {
+			if err := db.QueryRowContext(ctx,
+				`select "balance" from "wallets" where "id" = ?`, account.ID).Scan(&first); err != nil {
+				return err
+			}
+			// Committed by somebody else, on the context this transaction does
+			// not travel on.
+			if _, err := db.ExecContext(context.Background(),
+				`update "wallets" set "balance" = "balance" + 1 where "id" = ?`, account.ID); err != nil {
+				return err
+			}
+			return db.QueryRowContext(ctx,
+				`select "balance" from "wallets" where "id" = ?`, account.ID).Scan(&second)
+		})
+	if err != nil {
+		t.Fatalf("reading a balance twice inside one transaction: %v", err)
 	}
 
-	statements := collected.Queries()
-	named := -1
-	for i, query := range statements {
-		if strings.Contains(query.SQL, "SET TRANSACTION ISOLATION LEVEL READ COMMITTED") {
-			named = i
-			break
-		}
-	}
-	if named < 0 {
-		t.Fatalf("no statement named the isolation level, so this transaction ran at whatever the server was configured for; %d statements were issued", len(statements))
-	}
-	if named+1 >= len(statements) {
-		t.Fatal("the isolation level was named and nothing followed it, so no transaction was opened around it")
-	}
-
-	// It has to be the first statement of the transaction, because that is the
-	// only place an engine takes it. What follows is the operation row, which is
-	// the first thing every movement writes.
-	next := statements[named+1].SQL
-	if !strings.Contains(next, "wallet_operations") {
-		t.Errorf("the statement after the isolation level is %q, and it has to be the operation row: anything in between means the level was named after the transaction had already read something", next)
+	if second != first+1 {
+		t.Errorf("the second read is %d and the first was %d: this transaction is not reading committed, "+
+			"so it took the level the server was configured for instead of the one it names", second, first)
 	}
 }
 

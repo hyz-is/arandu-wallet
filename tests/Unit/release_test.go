@@ -39,33 +39,128 @@ func TestTheReleaseSkillUsesTheManifestFrameworkFloor(t *testing.T) {
 	}
 }
 
-func TestVersion020NamesEveryModelFirstIncompatibility(t *testing.T) {
+// releasedChangelog is CHANGELOG.md with the [Unreleased] section removed.
+//
+// Everything a tag shipped has to be under a version heading. The section above
+// the first one is where work waits, and a release that forgets to move it is a
+// published version whose own changelog calls its contents unreleased -- which
+// is what v0.4.0 of this package did.
+func releasedChangelog(t *testing.T) string {
+	t.Helper()
+	body := readReleaseFile(t, packageRoot(t), "CHANGELOG.md")
+	first := regexp.MustCompile(`(?m)^## \[[0-9]`).FindStringIndex(body)
+	if first == nil {
+		t.Fatal("CHANGELOG.md has no version heading")
+	}
+	return body[first[0]:]
+}
+
+// TestEveryActionIsNamedInAReleasedChangelogEntry is the gate that catches a
+// tag pushed without filing what it shipped.
+//
+// An action is added in the same change that adds the capability behind it, so
+// an action still sitting in [Unreleased] means the version that introduced it
+// went out undocumented. It is the cheapest signal of that, and it needs no git
+// history to read.
+func TestEveryActionIsNamedInAReleasedChangelogEntry(t *testing.T) {
+	policy := readReleaseFile(t, packageRoot(t), "policy.go")
+	released := releasedChangelog(t)
+
+	names := regexp.MustCompile(`(?m)^\t([A-Z][A-Za-z]*) security\.Action = `).FindAllStringSubmatch(policy, -1)
+	if len(names) == 0 {
+		t.Fatal("policy.go declares no actions")
+	}
+	for _, name := range names {
+		if !strings.Contains(released, "`"+name[1]+"`") {
+			t.Errorf("no released changelog entry names %s", name[1])
+		}
+	}
+}
+
+// TestEveryMigrationIsNamedInAReleasedChangelogEntry holds the same for schema.
+//
+// A migration is the one thing an operator has to run before a version serves,
+// so a version that shipped one and did not say so is a version that fails at
+// the first request against a column that is not there.
+func TestEveryMigrationIsNamedInAReleasedChangelogEntry(t *testing.T) {
+	module := readReleaseFile(t, packageRoot(t), "module.go")
+	released := releasedChangelog(t)
+
+	ids := regexp.MustCompile(`"([0-9]{8}_[0-9]{4}_[a-z_]+)"`).FindAllStringSubmatch(module, -1)
+	if len(ids) == 0 {
+		t.Fatal("module.go declares no migrations")
+	}
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if seen[id[1]] {
+			continue
+		}
+		seen[id[1]] = true
+		if !strings.Contains(released, id[1]) {
+			t.Errorf("no released changelog entry names migration %s", id[1])
+		}
+	}
+}
+
+// TestEveryChangelogVersionHasUpgradeNotes keeps the two files describing the
+// same set of releases.
+//
+// They drifted once in the other direction: this repository carried three
+// changelog sections and two upgrade sections belonging to the package template
+// it was configured from, numbered over the tags of the same name here.
+func TestEveryChangelogVersionHasUpgradeNotes(t *testing.T) {
+	root := packageRoot(t)
+	changelog := readReleaseFile(t, root, "CHANGELOG.md")
+	upgrade := readReleaseFile(t, root, "UPGRADE.md")
+
+	inChangelog := regexp.MustCompile(`(?m)^## \[([0-9]+\.[0-9]+\.[0-9]+)\] - `).FindAllStringSubmatch(changelog, -1)
+	inUpgrade := regexp.MustCompile(`(?m)^## v([0-9]+\.[0-9]+\.[0-9]+)$`).FindAllStringSubmatch(upgrade, -1)
+	if len(inChangelog) == 0 || len(inUpgrade) == 0 {
+		t.Fatal("one of the two release files has no version heading")
+	}
+
+	versions := func(matches [][]string) map[string]bool {
+		out := map[string]bool{}
+		for _, m := range matches {
+			out[m[1]] = true
+		}
+		return out
+	}
+	logged, upgraded := versions(inChangelog), versions(inUpgrade)
+	for v := range logged {
+		if !upgraded[v] {
+			t.Errorf("CHANGELOG.md has %s and UPGRADE.md has no notes for it", v)
+		}
+	}
+	for v := range upgraded {
+		if !logged[v] {
+			t.Errorf("UPGRADE.md has notes for %s and CHANGELOG.md has no entry for it", v)
+		}
+	}
+}
+
+// TestVersion020NamesEveryIncompatibility holds the promise for the release
+// that gave the package rates, fees, settlement and a credit limit.
+func TestVersion020NamesEveryIncompatibility(t *testing.T) {
 	root := packageRoot(t)
 	upgrade := readReleaseFile(t, root, "UPGRADE.md")
 	changelog := readReleaseFile(t, root, "CHANGELOG.md")
 
 	if got := strings.Count(changelog, "## [0.2.0] - "); got != 1 {
-		t.Fatalf("v0.2.0 changelog headings = %d, want exactly one pre-versioned entry", got)
+		t.Fatalf("v0.2.0 changelog headings = %d, want exactly one", got)
 	}
 	if !strings.Contains(upgrade, "## v0.2.0") {
 		t.Fatal("UPGRADE.md has no v0.2.0 entry")
 	}
 
-	incompatibilities := []string{
-		"`(*WalletService).Create`",
-		"`(*WalletService).Find`",
-		"`(*WalletService).List`",
-		"`(*WalletRepository).Create`",
-		"`(*WalletRepository).Delete`",
-		"`(*WalletRepository).Find`",
-		"`(*WalletRepository).List`",
-		"`(*WalletRepository).Update`",
-		"`NewWalletRepository`",
+	for _, incompatibility := range []string{
+		"`Config.CSRF`",
 		"`NewWalletService`",
-		"`WalletRepository`",
-		"`Wallet`: old is comparable; new is not",
-	}
-	for _, incompatibility := range incompatibilities {
+		"`RateProvider`",
+		"`Operation.ReversesID`",
+		"`NewEntryResource`",
+		"`NewReceiptResource`",
+	} {
 		if !strings.Contains(upgrade, incompatibility) {
 			t.Errorf("UPGRADE.md does not name %s", incompatibility)
 		}
@@ -75,33 +170,61 @@ func TestVersion020NamesEveryModelFirstIncompatibility(t *testing.T) {
 	}
 }
 
-// TestVersion040NamesEveryPublishingIncompatibility holds the same promise for
-// the release that moved publishing to the framework contract.
+// TestVersion030NamesEveryIncompatibility holds it for the release that refused
+// an unverified engine and started freezing a wallet its ledger stopped
+// explaining.
 //
-// The CI job that runs apidiff makes it as well, and only there: it needs the
-// release tag and the git history, so a working tree that dropped a symbol
+// The CI job that runs apidiff makes the same promise, and only there: it needs
+// the release tag and the git history, so a working tree that dropped a symbol
 // without saying so is green locally until a pull request opens. This is the
 // half that fails where the change is written.
-func TestVersion040NamesEveryPublishingIncompatibility(t *testing.T) {
+func TestVersion030NamesEveryIncompatibility(t *testing.T) {
+	root := packageRoot(t)
+	upgrade := readReleaseFile(t, root, "UPGRADE.md")
+	changelog := readReleaseFile(t, root, "CHANGELOG.md")
+
+	if got := strings.Count(changelog, "## [0.3.0] - "); got != 1 {
+		t.Fatalf("v0.3.0 changelog headings = %d, want exactly one", got)
+	}
+	if !strings.Contains(upgrade, "## v0.3.0") {
+		t.Fatal("UPGRADE.md has no v0.3.0 entry")
+	}
+
+	for _, incompatibility := range []string{
+		"`ErrUnsupportedDialect`",
+		"`WalletReconcile`",
+		"`ErrConcurrencyConflict`",
+		"`ErrWalletFrozen`",
+	} {
+		if !strings.Contains(upgrade, incompatibility) {
+			t.Errorf("UPGRADE.md does not name %s", incompatibility)
+		}
+		if !strings.Contains(changelog, incompatibility) {
+			t.Errorf("v0.3.0 notes do not name %s", incompatibility)
+		}
+	}
+}
+
+// TestVersion040NamesEveryIncompatibility holds it for the release that let a
+// wallet be named, described and taken out of service.
+func TestVersion040NamesEveryIncompatibility(t *testing.T) {
 	root := packageRoot(t)
 	upgrade := readReleaseFile(t, root, "UPGRADE.md")
 	changelog := readReleaseFile(t, root, "CHANGELOG.md")
 
 	if got := strings.Count(changelog, "## [0.4.0] - "); got != 1 {
-		t.Fatalf("v0.4.0 changelog headings = %d, want exactly one pre-versioned entry", got)
+		t.Fatalf("v0.4.0 changelog headings = %d, want exactly one", got)
 	}
 	if !strings.Contains(upgrade, "## v0.4.0") {
 		t.Fatal("UPGRADE.md has no v0.4.0 entry")
 	}
 
-	incompatibilities := []string{
-		"`Publishable`",
-		"`Publishes`",
-		"`PublishCommand`",
-		"`foundation.Publishable`",
-		"aru vendor:publish",
-	}
-	for _, incompatibility := range incompatibilities {
+	for _, incompatibility := range []string{
+		"`WalletDescribe`",
+		"`WalletClose`",
+		"`ErrWalletClosed`",
+		"`ErrBalanceEmpty`",
+	} {
 		if !strings.Contains(upgrade, incompatibility) {
 			t.Errorf("UPGRADE.md does not name %s", incompatibility)
 		}

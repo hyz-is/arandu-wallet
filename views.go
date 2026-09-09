@@ -53,7 +53,14 @@ const (
 	// module's own name. Two packages with a view called index are two files
 	// under two names there, and neither shadows the other or the
 	// application's own.
-	viewPrefix = "resources/views/vendor/wallet"
+	//
+	// It is not named vendor either, and for the other of the two rules: a
+	// package whose import path carries that element cannot be imported at all
+	// -- "use of vendored package not allowed". A published view is compiled
+	// into a Go package the application has to import for its init() to
+	// register anything, so the destination is the half that moving the archive
+	// could not fix.
+	viewPrefix = "resources/views/modules/wallet"
 	viewSuffix = ".kyse.go"
 )
 
@@ -70,12 +77,12 @@ const compiledRoot = "storage/framework/views"
 // same set from the archive, and a test holds the two together.
 const (
 	// ViewIndex is the listing of a customer's wallets.
-	ViewIndex = "vendor.wallet.index"
+	ViewIndex = "modules.wallet.index"
 	// ViewStatement is one wallet's ledger, with the rates its exchanges were
 	// made at and what its payments were charged.
-	ViewStatement = "vendor.wallet.statement"
+	ViewStatement = "modules.wallet.statement"
 	// ViewOperations is one wallet and what may be done with its money.
-	ViewOperations = "vendor.wallet.operations"
+	ViewOperations = "modules.wallet.operations"
 )
 
 // Compile-time proof that every screen can be drawn inside the application's

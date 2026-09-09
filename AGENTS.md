@@ -26,7 +26,7 @@ go test -race ./...
 The third filter is the staging directory `tests/Unit/published_views_compile_test.go`
 writes and removes. It exists because the go command skips any directory named
 `vendor` at any depth, and the view compiler mirrors a project's view tree into
-`storage/framework/views/vendor/<module>` -- so `go build ./...` never sees a
+`storage/framework/views/modules/<module>` -- so `go build ./...` never sees a
 generated view there, and a type error in one would surface when somebody opened
 the page and nowhere earlier. The test copies the tree to a path with no such
 segment and compiles it there, and skips when nothing has been built.
@@ -113,7 +113,13 @@ cart.go        the basket, and the seams that say what is for sale
 model.go       the entities, and what they may answer with
 purchase.go    the record of what was bought, and its own read model
 policy.go      who may do what
-service.go     the rules and authorized Model access
+service.go     the Service, its seams, and the reads
+request.go     what every request has to be for the Service to take it
+wallet.go      opening a wallet, naming it, finding it, taking it out of service
+movement.go    deposit, withdrawal, transfer, reversal, confirmation, statement
+payment.go     a basket paid for, and a line given back
+reconcile.go   a ledger that stopped explaining its balance, and its repair
+commit.go      the engine: one operation, one transaction, the guarded write
 event.go       what a listener is told, once the write has committed
 commands.go    what an operator runs from a terminal
 translation.go the sentences the screens say
@@ -233,7 +239,45 @@ reads syntax, so dynamic dispatch, reflection, and wrappers around the named
 seams are invisible to it. A green run means no such thing was found written
 down, not that none exists.
 
+## One package, several files
+
+Everything above is `package wallet`. The files divide a subject, not a layer:
+there is no directory per Service, per Interface or per DTO, and adding one
+would be adding a shape this language does not need. A method moved between two
+of these files changes nothing at all, and the guarantee is checkable -- the
+output of `go doc -all` is the same before and after.
+
+They were one file until they were seven. `service.go` reached four thousand
+lines, which is not a property of Go and not a decision anybody wrote down: it
+is what happens when every new capability is appended where the last one went.
+The reference this package is measured against holds a comparable surface --
+12,921 lines to 10,867 -- in 194 files whose largest is 591 lines, and the shape
+of that comparison is the only part of it worth taking. Its layers are not: half
+of them exist because PHP has no types to pass, no embedding, and a container
+that needs an interface for everything it resolves.
+
+`commit.go` is the one to read first. Every movement of money in this package
+goes through it, and the guard that decides is a predicate on the update rather
+than a check in Go.
+
 ## Parity, and the limits that are not gaps
+
+`tests/Feature/parity_test.go` is this table made executable: one test per
+behaviour the reference offers, exercised against this package's API. A row here
+going stale is a paragraph nobody notices; a test there failing is a build that
+stops. Read them together, and add to both when a capability arrives.
+
+Three variants of the reference are not ported, and the reason is the same each
+time. It spells `safeX`, `X` and `forceX` for most operations: the first answers
+null instead of throwing, the second throws, the third skips the balance check.
+The first two are one thing in Go, where every method returns an error and the
+caller decides by reading it — porting the pair would be porting PHP's
+exception-or-return split. The third is here as a field on the request, so every
+later rule about a forced movement is written in one place instead of two. Its
+float variants are not here and will not be: money is an `int64` of minor units,
+and a float is how a cent goes missing.
+
+
 
 The table is here so that a consumer does not audit this package to find out
 what it does. Read it before writing anything that moves money outside this
@@ -254,7 +298,7 @@ repository; the fifth property is what the answer has to be when a row says
 | undo an operation | yes | `Reverse`, which appends the opposite and changes nothing already written |
 | basket, gift, refund by line | yes | `Pay` with a `Cart`, `BeneficiaryWalletID`, and `Refund` |
 | "has this wallet already bought that" | yes | `Bought`, `PurchasesOf` |
-| one round trip per balance moved | yes | the guarded update reports the row it left, so nothing reads it back; a forty-line basket saves a hundred and twenty statements inside its transaction |
+| one round trip per balance moved | yes on PostgreSQL and SQLite, two on MySQL | the guarded update reports the row it left through a `returning` clause, so nothing reads it back; a forty-line basket saves a hundred and twenty statements inside its transaction. MySQL has no such clause, so the row is read back inside the same transaction, where the update that matched holds an exclusive lock on it -- the guard is unchanged, and only the count of statements is |
 | a fee somebody charges to be paid | yes | `FeeProvider`, and the fee is credited to a third wallet |
 | a discount one payer is charged less | yes | `DiscountProvider`, recorded on the charge |
 | the same request twice moves money once | yes | the idempotency key, under a unique index, answered by replay |
@@ -262,8 +306,8 @@ repository; the fifth property is what the answer has to be when a row says
 | what a wallet is called and what it is for | yes | `Open` takes them, `Describe` changes them, and neither touches money |
 | a retry when the engine reports a conflict | yes | classified around `commit` by SQLSTATE, and `ErrConcurrencyConflict` when the attempts run out |
 | a balance repaired after it stops matching its ledger | yes | `Reconcile` reports and freezes the wallet; `Rebuild` closes the difference by appending one settled entry and touching no balance |
-| an isolation level the guard can be read against | yes | read committed, named as the first statement of every transaction this package opens |
-| an engine this package has not been run against | refused | `New` answers `ErrUnsupportedDialect`; the suite covers PostgreSQL and SQLite, and nothing claims MySQL |
+| an isolation level the guard can be read against | yes | read committed, handed to `BeginTx` when the transaction opens. Not a `SET` inside it: PostgreSQL takes that and MySQL refuses it, since a transaction's characteristics cannot be changed once it is in progress. Measured, the guard is exact on MySQL at read committed and at InnoDB's repeatable read alike -- an update re-reads the row it is about to write at both -- so on that engine the level is not what makes the count exact. The predicate is |
+| PostgreSQL, MySQL and SQLite | all three | `New` admits them and refuses anything else with `ErrUnsupportedDialect`. The concurrency suite runs against real PostgreSQL and MySQL servers -- `ARANDU_TEST_POSTGRES_DSN` and `ARANDU_TEST_MYSQL_DSN` -- because SQLite serializes writers and would report the engine's behaviour as this package's. Identifiers are quoted by the connection's grammar rather than by a rule written here |
 | statement, ledger, running balance | yes | `History`, `Statement`, `Entry.BalanceAfter` |
 | told what the money did, after it did it | yes | `Listener` |
 | lookup by holder and slug, and a name for the default one | yes | `FindBySlug`, `DefaultSlug`, and `GET {prefix}/holders/{holder}/{slug}`. It opens nothing: a read that created what it did not find would guess a currency and a scale |
@@ -271,6 +315,7 @@ repository; the fifth property is what the answer has to be when a row says
 | typed errors from a rate source | yes | five sentinels in `rate.go`, testable with `errors.Is` against this package without importing whichever provider is wired in |
 | a free line in a basket | yes | a price of zero writes the purchase row and moves nothing; only a negative price is refused |
 | an empty balance told apart from an insufficient one | yes | `ErrBalanceEmpty`, wrapped beside `ErrInsufficientFunds` so an existing caller reads it as it always did |
+| asking whether a wallet could pay out, without moving it | yes | `CanWithdraw`, and its doc comment says what it is: a photograph. What decides a withdrawal is the predicate on the update, and `TestCanWithdrawIsNotPermission` empties the wallet between the question and the answer to hold that |
 | a slug derived from a name | yes | `Slugify`; an empty `OpenRequest.Slug` is derived from the name, and a name that derives to nothing is refused |
 | locales beyond `en` and `pt-BR` | no, and that is the decision | a money screen's wording has to be checked by somebody who reads it; an application writes a third locale in its own catalogue under these keys, and its translator is asked first |
 
@@ -301,8 +346,15 @@ Three things the reference does that this package deliberately does not:
   `10^(to_dp − from_dp)`, so a conversion between two scales is wrong by that
   factor. `Rate.Convert` applies it.
 - **the quote is never stored there.** There is no rate column anywhere in its
-  source. `wallet_conversions` holds the fraction and the moment, so the row can
-  be recomputed long after the provider that answered it is gone.
+  source, and the swap package that supplies real rates persists nothing at all.
+  `wallet_conversions` holds the fraction and the moment, so the row can be
+  recomputed long after the provider that answered it is gone.
+
+Verified against the clone of 2026-08-29, at the lines named above. The first
+two are descriptions and not accusations: a platform that keeps its fee outside
+its wallets is a defensible arrangement, and this package makes the other choice
+because a ledger whose rows do not sum to its balances is one this package
+freezes. The third has no reading that makes it a choice.
 
 ## Writing code
 

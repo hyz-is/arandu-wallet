@@ -744,8 +744,14 @@ func TestAChargedPaymentIsReadableInTheStatement(t *testing.T) {
 	}
 
 	// A page with nothing charged on it says nothing rather than an empty list.
+	//
+	// The key here is its own. It used to be "opening", which this test had
+	// already spent on another wallet, and the replay answered with that first
+	// operation instead of depositing -- so this line moved no money and the
+	// assertion below passed for the wrong reason. A key is unique per tenant,
+	// not per wallet.
 	plain := openWallet(t, service, "user-9", "main", 2)
-	deposit(t, service, plain.ID, "opening", "10.00")
+	deposit(t, service, plain.ID, "plain-opening", "10.00")
 	if _, named := wallet.NewEntryCollection(statementOf(t, service, plain.ID), "").With()["charges"]; named {
 		t.Error("a page with nothing charged on it still answers with charges")
 	}
