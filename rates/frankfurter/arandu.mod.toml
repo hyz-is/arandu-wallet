@@ -6,7 +6,7 @@
 # compiles an HTTP client.
 
 name = "hyz-is/wallet-rates-frankfurter"
-framework = ">= 0.46"
+framework = ">= 0.47"
 profiles = ["conventional", "performance"]
 
 [permissions]
