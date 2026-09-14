@@ -1,3 +1,7 @@
+<p align="center">
+  <img src=".github/logo.svg" alt="Arandu" width="180">
+</p>
+
 # Arandu Wallet
 
 An Arandu package. It registers its own routes, owns its own tables, and decides
