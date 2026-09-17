@@ -27,6 +27,14 @@ name here. They are gone.
   catalogue was asked 2 times". The same claim about the rate and the fee seams
   was already held by `exchange_test.go` and `fee_test.go`.
 
+## [0.8.1] - 2026-09-17
+
+### Fixed
+
+- Pin Framework v0.47.1, Hesape v0.41.1 and Kyse v0.29.1 so consumers receive the corrected native UI initialization.
+- Run the existing CI checks on develop before promoting to main.
+- Keep the package APIs, authorization decisions and tenant isolation unchanged.
+
 ## [0.7.0] - 2026-09-06
 
 ### Fixed

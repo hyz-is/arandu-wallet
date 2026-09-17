@@ -58,6 +58,10 @@ reserved name, so this cannot come back quietly.
 
 Nothing yet.
 
+## v0.8.1
+
+No package API, route or migration changes. Update the module normally to select Framework v0.47.1, Hesape v0.41.1 and Kyse v0.29.1. Existing authorization and tenant policies are unchanged. Application-owned published views are not overwritten by this dependency update.
+
 ## v0.7.0
 
 Three defects, and one of them is a disclosure. Take this release before serving
