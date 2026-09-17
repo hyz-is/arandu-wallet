@@ -72,6 +72,16 @@ jobs:
       # A v0 release may break, but every break must tell an installer exactly
       # what to replace. Module mode also sees a deleted package or type that a
       # loop over the current package list would miss.
+      - name: rate adapter pinned-module gates
+        working-directory: rates/frankfurter
+        env:
+          GOWORK: "off"
+          ARANDU_TEST_LIVE_RATES: ""
+        run: |
+          go build ./...
+          go vet ./...
+          go test -race -count=1 ./...
+
       - name: api diff against the last release
         run: |
           set -euo pipefail
