@@ -4,11 +4,11 @@ go 1.26
 
 require (
 	github.com/arandu-io/framework v0.47.1
-	github.com/arandu-io/hesape v0.41.1
+	github.com/arandu-io/hesape v0.41.3
 	github.com/arandu-io/hesape/database/connectors/mysql v0.10.1
 	github.com/arandu-io/hesape/database/connectors/pgx v0.10.1
 	github.com/arandu-io/hesape/database/connectors/sqlite v0.10.1
-	github.com/arandu-io/kyse v0.29.1
+	github.com/arandu-io/kyse v0.29.4
 	modernc.org/sqlite v1.57.0
 )
 

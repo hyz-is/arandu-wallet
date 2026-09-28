@@ -56,7 +56,13 @@ then deletes the old lines from `vendor-publish.lock` and changes the import in
 Framework `v0.46.4` and Hesape `v0.37.0` refuse a publication that carries the
 reserved name, so this cannot come back quietly.
 
-Nothing yet.
+### The statement renders through the Kyse DataTable
+
+No API, route, ledger or migration changes. Republish the wallet views to adopt the native Kyse DataTable on the statement screen:
+
+    aru vendor:publish --tag=view
+    aru vendor:publish --tag=view --apply
+    aru view:build
 
 ## v0.8.1
 

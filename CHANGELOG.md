@@ -27,6 +27,12 @@ name here. They are gone.
   catalogue was asked 2 times". The same claim about the rate and the fee seams
   was already held by `exchange_test.go` and `fee_test.go`.
 
+### Fixed
+
+- Render the wallet statement through the native Kyse DataTable instead of a hand-written HTML table.
+- Keep statement columns, empty state and responsive table behavior on the shared Kyse component contract.
+- Select Kyse v0.29.4 for the corrected native DataTable query and markup behavior.
+
 ## [0.8.1] - 2026-09-17
 
 ### Fixed

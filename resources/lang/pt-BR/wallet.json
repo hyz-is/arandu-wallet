@@ -53,6 +53,7 @@
         "purchases": "Compras",
         "back": "Voltar",
         "next": "Mais antigos",
+        "columns": "Colunas",
         "amount_placeholder": "0,00",
         "wallet_placeholder": "O identificador da carteira",
         "holder_placeholder": "De quem é este dinheiro"

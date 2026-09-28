@@ -53,6 +53,7 @@
         "purchases": "Purchases",
         "back": "Back",
         "next": "Older",
+        "columns": "Columns",
         "amount_placeholder": "0.00",
         "wallet_placeholder": "The identifier of the wallet",
         "holder_placeholder": "Whose money this is"
