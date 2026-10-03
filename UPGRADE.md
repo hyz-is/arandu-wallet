@@ -9,6 +9,984 @@ changed at each of its own versions is below.
 
 ## Unreleased
 
+### Each entity is a concrete type over the non-generic model
+
+Hesape `v0.47.0` removes the generic model layer, and this release moves to it
+with Framework `v0.50.2`. The six entities embed the non-generic `model.Model`,
+each table is declared once beside its entity with `model.NewTable`, and the
+query that starts from it is generated beside it by `aru model:build`, in
+`WalletQuery.go`, `OperationQuery.go`, `EntryQuery.go`, `ConversionQuery.go`,
+`ChargeQuery.go` and `PurchaseQuery.go`. No route, migration, action, policy
+decision, tenant rule, amount, idempotency key or transaction changed.
+
+**The constructors return the generated queries.** `Wallets`, `Operations`,
+`Entries`, `Conversions`, `Charges` and `Purchases` take a `model.DB` -- a
+`*data.DB` passes unchanged -- and return `*WalletQuery`, `*OperationQuery`,
+`*EntryQuery`, `*ConversionQuery`, `*ChargeQuery` and `*PurchaseQuery` instead
+of `*model.Model[T]`. A chain that started from them keeps its text, minus the
+calls that no longer exist:
+
+| before | now |
+|---|---|
+| `wallet.Wallets(db).NewQuery().Where(…)` | `wallet.Wallets(db).Where(…)` |
+| `wallet.Wallets(db).NewInstance(nil, false)` and `.Entity` | `wallet.Wallets(db).New()`, which returns `*Wallet` |
+| `Get` → `model.Collection[wallet.Wallet]` | `Get` → `wallet.WalletCollection` (`[]*Wallet`) |
+| `func(q *model.Builder[wallet.Wallet])` in a grouped `Where` | `func(q *wallet.WalletQuery)` |
+
+`First`, `Find` and the other row terminals still return `*Wallet`, and still
+take the Grant. Every `WalletService` method keeps its signature: `List` still
+returns `[]*Wallet`, `Bought` and `PurchasesOf` still return `[]*Purchase`.
+
+**The entities no longer carry the model's configuration.** `Wallet`,
+`Operation`, `Entry`, `Conversion`, `Charge` and `Purchase` embed `model.Model`,
+so the fields and methods `model.Model[T]` promoted onto them are gone: the
+configuration fields (`PrimaryKey`, `KeyType`, `Incrementing`, `Timestamps`,
+`TenantColumn`, `Table` and the rest) live in the table, which this package
+keeps unexported, and `Exists` and `WasRecentlyCreated` are methods,
+`row.Exists()`. A copied row refuses every write with `model.ErrUnwired`, so
+keep the pointers the queries return.
+
+**Upgrade the floor.** The module requires Hesape `v0.48.0` and Framework
+`v0.50.2`, and `arandu.mod.toml` declares `framework = ">= 0.50"`. An
+application that pins a Hesape below `v0.47.0` cannot compile this release:
+every generic model type it would need is gone from Hesape itself. The
+published views are unchanged and need no republish.
+
+<details>
+<summary>Every incompatible symbol <code>apidiff</code> reports against v0.8.1</summary>
+
+Most of these are the methods and fields `model.Model[T]` promoted onto the six
+entities, which left with the generic type. The five renamed types are the
+section below.
+
+```text
+Charge.ConnectionName
+Charge.CreatedAtColumn
+Charge.DeletedAtColumn
+Charge.Entity
+Charge.Exists
+Charge.Grammar
+Charge.Incrementing
+Charge.KeyType
+Charge.NamedScopes
+Charge.PerPage
+Charge.PrimaryKey
+Charge.Processor
+Charge.RelationResolvers
+Charge.SoftDeletes
+Charge.Table
+Charge.TenantColumn
+Charge.Timestamps
+Charge.UpdatedAtColumn
+Charge.WasRecentlyCreated
+Charges
+Conversion.ConnectionName
+Conversion.CreatedAtColumn
+Conversion.DeletedAtColumn
+Conversion.Entity
+Conversion.Exists
+Conversion.Grammar
+Conversion.Incrementing
+Conversion.KeyType
+Conversion.NamedScopes
+Conversion.PerPage
+Conversion.PrimaryKey
+Conversion.Processor
+Conversion.RelationResolvers
+Conversion.SoftDeletes
+Conversion.Table
+Conversion.TenantColumn
+Conversion.Timestamps
+Conversion.UpdatedAtColumn
+Conversion.WasRecentlyCreated
+Conversions
+Entries
+Entry.ConnectionName
+Entry.CreatedAtColumn
+Entry.DeletedAtColumn
+Entry.Entity
+Entry.Exists
+Entry.Grammar
+Entry.Incrementing
+Entry.KeyType
+Entry.NamedScopes
+Entry.PerPage
+Entry.PrimaryKey
+Entry.Processor
+Entry.RelationResolvers
+Entry.SoftDeletes
+Entry.Table
+Entry.TenantColumn
+Entry.Timestamps
+Entry.UpdatedAtColumn
+Entry.WasRecentlyCreated
+EntryCollection
+NewEntryCollection
+NewPurchaseCollection
+Operation.ConnectionName
+Operation.CreatedAtColumn
+Operation.DeletedAtColumn
+Operation.Entity
+Operation.Exists
+Operation.Grammar
+Operation.Incrementing
+Operation.KeyType
+Operation.NamedScopes
+Operation.PerPage
+Operation.PrimaryKey
+Operation.Processor
+Operation.RelationResolvers
+Operation.SoftDeletes
+Operation.Table
+Operation.TenantColumn
+Operation.Timestamps
+Operation.UpdatedAtColumn
+Operation.WasRecentlyCreated
+Operations
+Purchase.ConnectionName
+Purchase.CreatedAtColumn
+Purchase.DeletedAtColumn
+Purchase.Entity
+Purchase.Exists
+Purchase.Grammar
+Purchase.Incrementing
+Purchase.KeyType
+Purchase.NamedScopes
+Purchase.PerPage
+Purchase.PrimaryKey
+Purchase.Processor
+Purchase.RelationResolvers
+Purchase.SoftDeletes
+Purchase.Table
+Purchase.TenantColumn
+Purchase.Timestamps
+Purchase.UpdatedAtColumn
+Purchase.WasRecentlyCreated
+PurchaseCollection
+PurchaseQuery
+Purchases
+Wallet.ConnectionName
+Wallet.CreatedAtColumn
+Wallet.DeletedAtColumn
+Wallet.Entity
+Wallet.Exists
+Wallet.Grammar
+Wallet.Incrementing
+Wallet.KeyType
+Wallet.NamedScopes
+Wallet.PerPage
+Wallet.PrimaryKey
+Wallet.Processor
+Wallet.RelationResolvers
+Wallet.SoftDeletes
+Wallet.Table
+Wallet.TenantColumn
+Wallet.Timestamps
+Wallet.UpdatedAtColumn
+Wallet.WasRecentlyCreated
+Wallets
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).AddGlobalScope, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).All, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).Append, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).AttributesToArray, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).CallNamedScope, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).Create, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).Destroy, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).DiscardChanges, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).Except, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).Find, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).FindMany, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).FindOrFail, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).FindOrNew, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).First, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).FirstOrCreate, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).FirstOrNew, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).ForceCreate, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).ForceDeleteQuietly, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).ForceDeleted, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).ForceDeleting, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).ForceDestroy, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).FreshTimestamp, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).GetAppends, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).GetConnectionName, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).GetCreatedAtColumn, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).GetDeletedAtColumn, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).GetForeignKey, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).GetGlobalScopes, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).GetHidden, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).GetIncrementing, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).GetKeyName, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).GetKeyType, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).GetMorphClass, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).GetPerPage, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).GetPrevious, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).GetQualifiedCreatedAtColumn, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).GetQualifiedDeletedAtColumn, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).GetQualifiedKeyName, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).GetQualifiedUpdatedAtColumn, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).GetQueueableConnection, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).GetQueueableID, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).GetQueueableRelations, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).GetRawOriginal, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).GetRelation, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).GetRelations, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).GetRouteKey, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).GetRouteKeyName, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).GetTable, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).GetTouchedRelations, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).GetUpdatedAtColumn, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).GetVisible, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).HasAppended, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).HasGlobalScope, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).HasNamedScope, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).Is
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).IsForceDeleting, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).IsIgnoringTouch, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).IsNot, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).IsRelation, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).IsSoftDeletable, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).LoadAggregate, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).LoadMorph, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).LoadMorphAggregate, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).LoadMorphAvg, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).LoadMorphCount, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).LoadMorphMax, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).LoadMorphMin, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).LoadMorphSum, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).MakeHidden
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).MakeVisible
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).NewBaseQueryBuilder, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).NewCollection, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).NewFromBuilder, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).NewInstance, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).NewModelQuery, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).NewQuery, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).NewQueryForRestoration, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).NewQueryWithoutRelationships, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).NewQueryWithoutScope, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).NewQueryWithoutScopes, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).NewTypedBuilder, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).On, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).OnWriteConnection, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).Only, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).OnlyTrashed, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).OriginalIsEquivalent, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).PushQuietly, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).QualifyColumn, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).QualifyColumns, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).Query, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).Ref, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).RegisterGlobalScopes, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).RegisterModelEvent, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).ReplicateQuietly, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).ResolveRouteBinding, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).ResolveRouteBindingQuery, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).ResolveSoftDeletableRouteBinding, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).RestoreQuietly, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).Restored, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).Restoring, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).SetAppends, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).SetConnection, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).SetHidden, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).SetIncrementing, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).SetKeyName, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).SetKeyType, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).SetPerPage, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).SetRelation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).SetRelations, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).SetTable, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).SetTouchedRelations, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).SetVisible, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).SoftDeleted, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).SyncChanges, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).SyncOriginal
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).SyncOriginalAttribute, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).SyncOriginalAttributes, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).ToPrettyJSON, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).Touches, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).UnsetAttribute, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).UnsetRelation, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).UnsetRelations, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).UpdateOrCreate, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).UpdateOrFail, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).UpdateQuietly, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).UpdateTimestamps, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).UsesTimestamps, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).Where, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).WhereKey, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).With, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).WithTrashed, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).WithoutRelations, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Charge]).WithoutTimestamps, method set of *Charge
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).AddGlobalScope, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).All, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).Append, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).AttributesToArray, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).CallNamedScope, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).Create, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).Destroy, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).DiscardChanges, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).Except, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).Find, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).FindMany, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).FindOrFail, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).FindOrNew, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).First, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).FirstOrCreate, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).FirstOrNew, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).ForceCreate, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).ForceDeleteQuietly, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).ForceDeleted, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).ForceDeleting, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).ForceDestroy, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).FreshTimestamp, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).GetAppends, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).GetConnectionName, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).GetCreatedAtColumn, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).GetDeletedAtColumn, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).GetForeignKey, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).GetGlobalScopes, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).GetHidden, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).GetIncrementing, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).GetKeyName, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).GetKeyType, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).GetMorphClass, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).GetPerPage, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).GetPrevious, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).GetQualifiedCreatedAtColumn, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).GetQualifiedDeletedAtColumn, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).GetQualifiedKeyName, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).GetQualifiedUpdatedAtColumn, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).GetQueueableConnection, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).GetQueueableID, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).GetQueueableRelations, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).GetRawOriginal, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).GetRelation, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).GetRelations, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).GetRouteKey, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).GetRouteKeyName, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).GetTable, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).GetTouchedRelations, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).GetUpdatedAtColumn, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).GetVisible, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).HasAppended, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).HasGlobalScope, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).HasNamedScope, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).Is
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).IsForceDeleting, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).IsIgnoringTouch, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).IsNot, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).IsRelation, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).IsSoftDeletable, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).LoadAggregate, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).LoadMorph, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).LoadMorphAggregate, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).LoadMorphAvg, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).LoadMorphCount, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).LoadMorphMax, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).LoadMorphMin, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).LoadMorphSum, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).MakeHidden
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).MakeVisible
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).NewBaseQueryBuilder, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).NewCollection, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).NewFromBuilder, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).NewInstance, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).NewModelQuery, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).NewQuery, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).NewQueryForRestoration, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).NewQueryWithoutRelationships, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).NewQueryWithoutScope, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).NewQueryWithoutScopes, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).NewTypedBuilder, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).On, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).OnWriteConnection, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).Only, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).OnlyTrashed, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).OriginalIsEquivalent, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).PushQuietly, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).QualifyColumn, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).QualifyColumns, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).Query, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).Ref, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).RegisterGlobalScopes, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).RegisterModelEvent, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).ReplicateQuietly, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).ResolveRouteBinding, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).ResolveRouteBindingQuery, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).ResolveSoftDeletableRouteBinding, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).RestoreQuietly, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).Restored, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).Restoring, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).SetAppends, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).SetConnection, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).SetHidden, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).SetIncrementing, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).SetKeyName, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).SetKeyType, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).SetPerPage, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).SetRelation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).SetRelations, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).SetTable, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).SetTouchedRelations, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).SetVisible, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).SoftDeleted, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).SyncChanges, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).SyncOriginal
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).SyncOriginalAttribute, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).SyncOriginalAttributes, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).ToPrettyJSON, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).Touches, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).UnsetAttribute, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).UnsetRelation, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).UnsetRelations, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).UpdateOrCreate, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).UpdateOrFail, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).UpdateQuietly, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).UpdateTimestamps, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).UsesTimestamps, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).Where, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).WhereKey, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).With, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).WithTrashed, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).WithoutRelations, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Conversion]).WithoutTimestamps, method set of *Conversion
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).AddGlobalScope, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).All, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).Append, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).AttributesToArray, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).CallNamedScope, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).Create, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).Destroy, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).DiscardChanges, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).Except, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).Find, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).FindMany, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).FindOrFail, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).FindOrNew, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).First, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).FirstOrCreate, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).FirstOrNew, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).ForceCreate, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).ForceDeleteQuietly, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).ForceDeleted, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).ForceDeleting, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).ForceDestroy, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).FreshTimestamp, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).GetAppends, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).GetConnectionName, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).GetCreatedAtColumn, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).GetDeletedAtColumn, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).GetForeignKey, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).GetGlobalScopes, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).GetHidden, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).GetIncrementing, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).GetKeyName, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).GetKeyType, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).GetMorphClass, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).GetPerPage, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).GetPrevious, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).GetQualifiedCreatedAtColumn, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).GetQualifiedDeletedAtColumn, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).GetQualifiedKeyName, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).GetQualifiedUpdatedAtColumn, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).GetQueueableConnection, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).GetQueueableID, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).GetQueueableRelations, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).GetRawOriginal, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).GetRelation, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).GetRelations, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).GetRouteKey, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).GetRouteKeyName, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).GetTable, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).GetTouchedRelations, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).GetUpdatedAtColumn, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).GetVisible, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).HasAppended, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).HasGlobalScope, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).HasNamedScope, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).Is
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).IsForceDeleting, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).IsIgnoringTouch, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).IsNot, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).IsRelation, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).IsSoftDeletable, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).LoadAggregate, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).LoadMorph, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).LoadMorphAggregate, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).LoadMorphAvg, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).LoadMorphCount, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).LoadMorphMax, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).LoadMorphMin, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).LoadMorphSum, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).MakeHidden
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).MakeVisible
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).NewBaseQueryBuilder, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).NewCollection, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).NewFromBuilder, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).NewInstance, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).NewModelQuery, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).NewQuery, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).NewQueryForRestoration, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).NewQueryWithoutRelationships, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).NewQueryWithoutScope, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).NewQueryWithoutScopes, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).NewTypedBuilder, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).On, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).OnWriteConnection, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).Only, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).OnlyTrashed, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).OriginalIsEquivalent, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).PushQuietly, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).QualifyColumn, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).QualifyColumns, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).Query, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).Ref, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).RegisterGlobalScopes, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).RegisterModelEvent, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).ReplicateQuietly, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).ResolveRouteBinding, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).ResolveRouteBindingQuery, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).ResolveSoftDeletableRouteBinding, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).RestoreQuietly, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).Restored, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).Restoring, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).SetAppends, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).SetConnection, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).SetHidden, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).SetIncrementing, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).SetKeyName, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).SetKeyType, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).SetPerPage, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).SetRelation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).SetRelations, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).SetTable, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).SetTouchedRelations, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).SetVisible, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).SoftDeleted, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).SyncChanges, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).SyncOriginal
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).SyncOriginalAttribute, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).SyncOriginalAttributes, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).ToPrettyJSON, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).Touches, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).UnsetAttribute, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).UnsetRelation, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).UnsetRelations, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).UpdateOrCreate, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).UpdateOrFail, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).UpdateQuietly, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).UpdateTimestamps, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).UsesTimestamps, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).Where, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).WhereKey, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).With, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).WithTrashed, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).WithoutRelations, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Entry]).WithoutTimestamps, method set of *Entry
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).AddGlobalScope, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).All, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).Append, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).AttributesToArray, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).CallNamedScope, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).Create, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).Destroy, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).DiscardChanges, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).Except, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).Find, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).FindMany, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).FindOrFail, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).FindOrNew, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).First, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).FirstOrCreate, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).FirstOrNew, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).ForceCreate, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).ForceDeleteQuietly, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).ForceDeleted, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).ForceDeleting, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).ForceDestroy, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).FreshTimestamp, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).GetAppends, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).GetConnectionName, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).GetCreatedAtColumn, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).GetDeletedAtColumn, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).GetForeignKey, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).GetGlobalScopes, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).GetHidden, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).GetIncrementing, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).GetKeyName, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).GetKeyType, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).GetMorphClass, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).GetPerPage, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).GetPrevious, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).GetQualifiedCreatedAtColumn, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).GetQualifiedDeletedAtColumn, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).GetQualifiedKeyName, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).GetQualifiedUpdatedAtColumn, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).GetQueueableConnection, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).GetQueueableID, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).GetQueueableRelations, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).GetRawOriginal, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).GetRelation, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).GetRelations, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).GetRouteKey, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).GetRouteKeyName, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).GetTable, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).GetTouchedRelations, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).GetUpdatedAtColumn, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).GetVisible, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).HasAppended, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).HasGlobalScope, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).HasNamedScope, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).Is
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).IsForceDeleting, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).IsIgnoringTouch, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).IsNot, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).IsRelation, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).IsSoftDeletable, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).LoadAggregate, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).LoadMorph, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).LoadMorphAggregate, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).LoadMorphAvg, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).LoadMorphCount, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).LoadMorphMax, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).LoadMorphMin, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).LoadMorphSum, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).MakeHidden
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).MakeVisible
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).NewBaseQueryBuilder, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).NewCollection, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).NewFromBuilder, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).NewInstance, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).NewModelQuery, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).NewQuery, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).NewQueryForRestoration, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).NewQueryWithoutRelationships, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).NewQueryWithoutScope, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).NewQueryWithoutScopes, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).NewTypedBuilder, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).On, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).OnWriteConnection, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).Only, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).OnlyTrashed, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).OriginalIsEquivalent, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).PushQuietly, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).QualifyColumn, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).QualifyColumns, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).Query, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).Ref, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).RegisterGlobalScopes, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).RegisterModelEvent, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).ReplicateQuietly, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).ResolveRouteBinding, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).ResolveRouteBindingQuery, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).ResolveSoftDeletableRouteBinding, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).RestoreQuietly, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).Restored, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).Restoring, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).SetAppends, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).SetConnection, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).SetHidden, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).SetIncrementing, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).SetKeyName, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).SetKeyType, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).SetPerPage, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).SetRelation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).SetRelations, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).SetTable, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).SetTouchedRelations, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).SetVisible, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).SoftDeleted, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).SyncChanges, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).SyncOriginal
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).SyncOriginalAttribute, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).SyncOriginalAttributes, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).ToPrettyJSON, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).Touches, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).UnsetAttribute, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).UnsetRelation, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).UnsetRelations, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).UpdateOrCreate, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).UpdateOrFail, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).UpdateQuietly, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).UpdateTimestamps, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).UsesTimestamps, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).Where, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).WhereKey, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).With, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).WithTrashed, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).WithoutRelations, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Operation]).WithoutTimestamps, method set of *Operation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).AddGlobalScope, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).All, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).Append, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).AttributesToArray, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).CallNamedScope, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).Create, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).Destroy, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).DiscardChanges, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).Except, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).Find, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).FindMany, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).FindOrFail, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).FindOrNew, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).First, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).FirstOrCreate, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).FirstOrNew, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).ForceCreate, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).ForceDeleteQuietly, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).ForceDeleted, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).ForceDeleting, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).ForceDestroy, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).FreshTimestamp, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).GetAppends, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).GetConnectionName, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).GetCreatedAtColumn, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).GetDeletedAtColumn, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).GetForeignKey, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).GetGlobalScopes, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).GetHidden, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).GetIncrementing, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).GetKeyName, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).GetKeyType, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).GetMorphClass, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).GetPerPage, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).GetPrevious, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).GetQualifiedCreatedAtColumn, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).GetQualifiedDeletedAtColumn, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).GetQualifiedKeyName, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).GetQualifiedUpdatedAtColumn, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).GetQueueableConnection, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).GetQueueableID, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).GetQueueableRelations, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).GetRawOriginal, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).GetRelation, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).GetRelations, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).GetRouteKey, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).GetRouteKeyName, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).GetTable, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).GetTouchedRelations, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).GetUpdatedAtColumn, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).GetVisible, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).HasAppended, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).HasGlobalScope, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).HasNamedScope, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).Is
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).IsForceDeleting, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).IsIgnoringTouch, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).IsNot, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).IsRelation, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).IsSoftDeletable, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).LoadAggregate, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).LoadMorph, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).LoadMorphAggregate, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).LoadMorphAvg, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).LoadMorphCount, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).LoadMorphMax, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).LoadMorphMin, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).LoadMorphSum, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).MakeHidden
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).MakeVisible
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).NewBaseQueryBuilder, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).NewCollection, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).NewFromBuilder, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).NewInstance, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).NewModelQuery, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).NewQuery, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).NewQueryForRestoration, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).NewQueryWithoutRelationships, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).NewQueryWithoutScope, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).NewQueryWithoutScopes, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).NewTypedBuilder, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).On, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).OnWriteConnection, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).Only, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).OnlyTrashed, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).OriginalIsEquivalent, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).PushQuietly, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).QualifyColumn, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).QualifyColumns, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).Query, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).Ref, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).RegisterGlobalScopes, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).RegisterModelEvent, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).ReplicateQuietly, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).ResolveRouteBinding, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).ResolveRouteBindingQuery, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).ResolveSoftDeletableRouteBinding, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).RestoreQuietly, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).Restored, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).Restoring, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).SetAppends, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).SetConnection, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).SetHidden, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).SetIncrementing, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).SetKeyName, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).SetKeyType, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).SetPerPage, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).SetRelation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).SetRelations, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).SetTable, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).SetTouchedRelations, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).SetVisible, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).SoftDeleted, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).SyncChanges, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).SyncOriginal
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).SyncOriginalAttribute, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).SyncOriginalAttributes, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).ToPrettyJSON, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).Touches, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).UnsetAttribute, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).UnsetRelation, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).UnsetRelations, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).UpdateOrCreate, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).UpdateOrFail, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).UpdateQuietly, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).UpdateTimestamps, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).UsesTimestamps, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).Where, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).WhereKey, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).With, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).WithTrashed, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).WithoutRelations, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Purchase]).WithoutTimestamps, method set of *Purchase
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).AddGlobalScope, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).All, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).Append, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).AttributesToArray, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).CallNamedScope, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).Create, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).Destroy, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).DiscardChanges, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).Except, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).Find, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).FindMany, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).FindOrFail, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).FindOrNew, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).First, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).FirstOrCreate, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).FirstOrNew, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).ForceCreate, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).ForceDeleteQuietly, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).ForceDeleted, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).ForceDeleting, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).ForceDestroy, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).FreshTimestamp, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).GetAppends, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).GetConnectionName, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).GetCreatedAtColumn, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).GetDeletedAtColumn, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).GetForeignKey, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).GetGlobalScopes, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).GetHidden, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).GetIncrementing, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).GetKeyName, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).GetKeyType, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).GetMorphClass, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).GetPerPage, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).GetPrevious, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).GetQualifiedCreatedAtColumn, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).GetQualifiedDeletedAtColumn, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).GetQualifiedKeyName, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).GetQualifiedUpdatedAtColumn, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).GetQueueableConnection, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).GetQueueableID, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).GetQueueableRelations, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).GetRawOriginal, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).GetRelation, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).GetRelations, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).GetRouteKey, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).GetRouteKeyName, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).GetTable, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).GetTouchedRelations, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).GetUpdatedAtColumn, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).GetVisible, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).HasAppended, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).HasGlobalScope, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).HasNamedScope, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).Is
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).IsForceDeleting, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).IsIgnoringTouch, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).IsNot, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).IsRelation, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).IsSoftDeletable, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).LoadAggregate, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).LoadMorph, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).LoadMorphAggregate, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).LoadMorphAvg, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).LoadMorphCount, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).LoadMorphMax, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).LoadMorphMin, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).LoadMorphSum, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).MakeHidden
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).MakeVisible
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).NewBaseQueryBuilder, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).NewCollection, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).NewFromBuilder, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).NewInstance, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).NewModelQuery, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).NewQuery, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).NewQueryForRestoration, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).NewQueryWithoutRelationships, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).NewQueryWithoutScope, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).NewQueryWithoutScopes, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).NewTypedBuilder, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).On, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).OnWriteConnection, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).Only, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).OnlyTrashed, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).OriginalIsEquivalent, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).PushQuietly, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).QualifyColumn, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).QualifyColumns, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).Query, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).Ref, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).RegisterGlobalScopes, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).RegisterModelEvent, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).ReplicateQuietly, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).ResolveRouteBinding, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).ResolveRouteBindingQuery, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).ResolveSoftDeletableRouteBinding, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).RestoreQuietly, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).Restored, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).Restoring, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).SetAppends, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).SetConnection, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).SetHidden, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).SetIncrementing, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).SetKeyName, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).SetKeyType, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).SetPerPage, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).SetRelation
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).SetRelations, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).SetTable, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).SetTouchedRelations, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).SetVisible, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).SoftDeleted, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).SyncChanges, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).SyncOriginal
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).SyncOriginalAttribute, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).SyncOriginalAttributes, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).ToPrettyJSON, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).Touches, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).UnsetAttribute, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).UnsetRelation, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).UnsetRelations, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).UpdateOrCreate, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).UpdateOrFail, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).UpdateQuietly, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).UpdateTimestamps, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).UsesTimestamps, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).Where, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).WhereKey, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).With, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).WithTrashed, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).WithoutRelations, method set of *Wallet
+github.com/arandu-io/hesape/database/model.(*Model[github.com/hyz-is/arandu-wallet.Wallet]).WithoutTimestamps, method set of *Wallet
+```
+
+</details>
+
 ### Three types are renamed, because the generated queries take their names
 
 `aru model:build` declares `<Entity>Query` and `<Entity>Collection` beside every
