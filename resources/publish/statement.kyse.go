@@ -56,7 +56,7 @@ func statementTable(data StatementData) components.DataTableProps {
 			<h1 class="text-2xl font-semibold tracking-tight">{{ .Labels.T("screen.statement_title") }}</h1>
 			<p class="text-muted-foreground mt-1 text-sm">{{ .Labels.T("screen.statement_lead") }}</p>
 		</div>
-		<a class="btn" data-variant="outline" data-size="sm" href="{{ .Prefix }}/{{ .Wallet.ID }}">{{ .Labels.T("control.back") }}</a>
+		<a class="btn" data-variant="outline" data-size="sm" href="{{ .Wallet.URL }}">{{ .Labels.T("control.back") }}</a>
 	</div>
 
 	<div class="card mt-6 flex flex-wrap items-center justify-between gap-3 p-4">
@@ -101,6 +101,6 @@ func statementTable(data StatementData) components.DataTableProps {
 	@endif
 
 	@if(.Next != "")
-		<div class="mt-6"><a class="btn" data-variant="outline" data-size="sm" href="{{ .Prefix }}/{{ .Wallet.ID }}/entries?cursor={{ .Next }}">{{ .Labels.T("control.next") }}</a></div>
+		<div class="mt-6"><a class="btn" data-variant="outline" data-size="sm" href="{{ .NextURL }}">{{ .Labels.T("control.next") }}</a></div>
 	@endif
 @endsection

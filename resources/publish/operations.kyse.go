@@ -25,7 +25,7 @@ type OperationsData = wallet.OperationsPageData
 			<p class="text-muted-foreground mt-1 text-sm">{{ .Labels.T("screen.operations_lead") }}</p>
 		</div>
 		<div class="flex items-center gap-2">
-			<a class="btn" data-variant="outline" data-size="sm" href="{{ .Prefix }}/{{ .Wallet.ID }}/entries">
+			<a class="btn" data-variant="outline" data-size="sm" href="{{ .Wallet.StatementURL }}">
 				{{ .Labels.T("control.statement") }}
 			</a>
 			<a class="btn" data-variant="ghost" data-size="sm" href="{{ .Prefix }}">
@@ -50,7 +50,7 @@ type OperationsData = wallet.OperationsPageData
 	</div>
 
 	<div class="mt-8 grid gap-8 md:grid-cols-2">
-		<form class="grid gap-3" method="post" action="{{ .Prefix }}/{{ .Wallet.ID }}/deposits">
+		<form class="grid gap-3" method="post" action="{{ .DepositURL }}">
 			@csrf
 			<h2 class="text-lg font-semibold">{{ .Labels.T("control.deposit") }}</h2>
 			{!! components.Field(components.FieldProps{
@@ -65,7 +65,7 @@ type OperationsData = wallet.OperationsPageData
 			</div>
 		</form>
 
-		<form class="grid gap-3" method="post" action="{{ .Prefix }}/{{ .Wallet.ID }}/withdrawals">
+		<form class="grid gap-3" method="post" action="{{ .WithdrawalURL }}">
 			@csrf
 			<h2 class="text-lg font-semibold">{{ .Labels.T("control.withdraw") }}</h2>
 			{!! components.Field(components.FieldProps{
@@ -80,7 +80,7 @@ type OperationsData = wallet.OperationsPageData
 			</div>
 		</form>
 
-		<form class="grid gap-3" method="post" action="{{ .Prefix }}/{{ .Wallet.ID }}/transfers">
+		<form class="grid gap-3" method="post" action="{{ .TransferURL }}">
 			@csrf
 			<h2 class="text-lg font-semibold">{{ .Labels.T("control.transfer") }}</h2>
 			{!! components.Field(components.FieldProps{
@@ -106,7 +106,7 @@ type OperationsData = wallet.OperationsPageData
 		     yes to. A button that comes back 403 is a button that teaches its
 		     reader the page is broken. --}}
 		@if(.MaySetCredit)
-			<form class="grid gap-3" method="post" action="{{ .Prefix }}/{{ .Wallet.ID }}/credit">
+			<form class="grid gap-3" method="post" action="{{ .CreditURL }}">
 				@csrf
 				<input type="hidden" name="_method" value="PUT">
 				<h2 class="text-lg font-semibold">{{ .Labels.T("field.credit_limit") }}</h2>
@@ -139,7 +139,7 @@ type OperationsData = wallet.OperationsPageData
 							{!! components.Badge(components.BadgeProps{Label: line.Kind, Variant: "outline"}) !!}
 							<span class="font-semibold">{{ line.Paid }}</span>
 							@if(!line.Refunded)
-								<form method="post" action="{{ .Prefix }}/purchases/refunds">
+								<form method="post" action="{{ .RefundURL }}">
 									@csrf
 									<input type="hidden" name="purchase_ids" value="{{ line.ID }}">
 									<input type="hidden" name="reason" value="{{ .Labels.T("control.refund") }}">

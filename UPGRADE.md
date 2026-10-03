@@ -7,6 +7,61 @@ describing a publishing migration and a Repository removal that both happened
 before `v0.1.0` of this package. They are gone, and what this package actually
 changed at each of its own versions is below.
 
+## Unreleased
+
+### Republish the views
+
+No symbol is removed, and no route, migration, action, policy decision, tenant
+rule or amount changes. What changes is the markup this package publishes.
+
+The views it published up to `v0.9.0` do not compile with `aru` v0.57.0 or
+later. Ten addresses wrote the prefix and an identifier as two interpolations,
+`{{ .Prefix }}/{{ .Wallet.ID }}/deposits`, and the view compiler refuses a value
+written into an address behind text it cannot read:
+
+```
+resources/views/modules/wallet/operations.kyse.go:53: this value is written into "action" before the scheme and the host of the address are fixed
+```
+
+The page data now carries each address whole, and the views write it once.
+Publish them again and rebuild:
+
+```sh
+aru vendor:publish --tag=view
+aru vendor:publish --tag=view --apply
+aru view:build
+```
+
+The first command only previews. A view that was never edited is reported as
+`update` and replaced; one you changed outside its custom markers is reported as
+a `conflict` and left alone. Either publish over it with `--force`, which keeps
+only what you wrote between `arandu:begin custom` and `arandu:end custom`, or
+make the same change by hand, one line per address:
+
+| in your view | write instead |
+|---|---|
+| `{{ .Prefix }}/{{ row.ID }}` | `{{ row.URL }}` |
+| `{{ .Prefix }}/{{ row.ID }}/entries` | `{{ row.StatementURL }}` |
+| `{{ .Prefix }}?holder_id={{ .Holder }}&amp;cursor={{ .Next }}` | `{{ .NextURL }}` |
+| `{{ .Prefix }}/{{ .Wallet.ID }}` | `{{ .Wallet.URL }}` |
+| `{{ .Prefix }}/{{ .Wallet.ID }}/entries` | `{{ .Wallet.StatementURL }}` |
+| `{{ .Prefix }}/{{ .Wallet.ID }}/entries?cursor={{ .Next }}` | `{{ .NextURL }}` |
+| `{{ .Prefix }}/{{ .Wallet.ID }}/deposits` | `{{ .DepositURL }}` |
+| `{{ .Prefix }}/{{ .Wallet.ID }}/withdrawals` | `{{ .WithdrawalURL }}` |
+| `{{ .Prefix }}/{{ .Wallet.ID }}/transfers` | `{{ .TransferURL }}` |
+| `{{ .Prefix }}/{{ .Wallet.ID }}/credit` | `{{ .CreditURL }}` |
+| `{{ .Prefix }}/purchases/refunds` | `{{ .RefundURL }}` |
+
+`{{ .Prefix }}` written alone is the address of the listing and compiles as it
+is. A project that builds with an `aru` older than v0.57.0 compiles the old
+views and the new ones alike, so it can take this release and republish when it
+moves the CLI.
+
+The links point where they did. For the identifiers this package generates the
+rendered pages are byte for byte the same; the one difference is a listing
+narrowed to a holder whose name carries `&`, `#` or a space, whose next-page
+link now escapes it instead of breaking.
+
 ## v0.9.0
 
 ### Each entity is a concrete type over the non-generic model

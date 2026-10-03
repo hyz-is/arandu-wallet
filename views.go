@@ -3,6 +3,7 @@ package wallet
 import (
 	"embed"
 	"io/fs"
+	"net/url"
 	"strings"
 	"time"
 
@@ -126,6 +127,13 @@ type WalletRow struct {
 	Negative bool
 	// Created is when the wallet was opened.
 	Created string
+	// URL is the screen that moves this wallet's money, and StatementURL its
+	// ledger. Each is the whole address, prefix included, because a screen
+	// writes an address as one value: an identifier written into the markup
+	// behind the prefix is text the view compiler cannot read, and it refuses
+	// to let a value it cannot read decide where an address goes.
+	URL          string
+	StatementURL string
 }
 
 // EntryRow is one movement as a statement draws it.
@@ -212,8 +220,10 @@ type PurchaseRow struct {
 type IndexPageData struct {
 	view.Page
 
-	// Prefix is where this module answers, so the markup composes its own
-	// addresses instead of hard-coding one the configuration can change.
+	// Prefix is where this module answers, which is also the address of this
+	// listing. Every other address a screen links to arrives whole, in a field
+	// of its own, so the markup never composes one: a value written behind the
+	// prefix would be part of an address no check reads whole.
 	Prefix string
 	// Labels are the sentences this screen draws, resolved for the locale the
 	// request asked for.
@@ -222,9 +232,11 @@ type IndexPageData struct {
 	// field so the box still says what is being looked at.
 	Holder string
 	// Rows are the wallets, and Next is the cursor of the following page, empty
-	// on the last one.
-	Rows []WalletRow
-	Next string
+	// on the last one. NextURL is the address of that page, narrowed to the
+	// same holder, and empty when Next is.
+	Rows    []WalletRow
+	Next    string
+	NextURL string
 }
 
 // StatementPageData is what the ledger screen is handed.
@@ -244,8 +256,10 @@ type StatementPageData struct {
 	// repeating one fact until two copies of it could differ.
 	Conversions []ConversionRow
 	Charges     []ChargeRow
-	// Next is the cursor of the following page, empty on the last one.
-	Next string
+	// Next is the cursor of the following page, empty on the last one, and
+	// NextURL the address of that page, empty when Next is.
+	Next    string
+	NextURL string
 }
 
 // OperationsPageData is what the screen that moves one wallet's money is
@@ -265,6 +279,15 @@ type OperationsPageData struct {
 	// drawn, so a control nobody may use is not drawn at all -- a button that
 	// answers 403 is a button that teaches somebody the page is broken.
 	MaySetCredit bool
+	// DepositURL, WithdrawalURL, TransferURL and CreditURL are where the forms
+	// on this screen send what they do to the wallet, and RefundURL where a
+	// line it bought is given back. Each is the whole address, for the reason
+	// WalletRow.URL is.
+	DepositURL    string
+	WithdrawalURL string
+	TransferURL   string
+	CreditURL     string
+	RefundURL     string
 }
 
 // FormState is what a kyse input asks for its message and for what was typed.
@@ -288,31 +311,95 @@ func (d StatementPageData) Form() FormState { return FormState{Page: d.Page} }
 // Form is the state the inputs of this screen read.
 func (d OperationsPageData) Form() FormState { return FormState{Page: d.Page} }
 
-// walletRow snapshots one wallet for a screen.
-func walletRow(record *Wallet) WalletRow {
+// walletRow snapshots one wallet for a screen, with its addresses under the
+// prefix this module answers at.
+func walletRow(prefix string, record *Wallet) WalletRow {
 	if record == nil {
 		return WalletRow{}
 	}
 	return WalletRow{
-		ID:          record.ID,
-		HolderID:    record.HolderID,
-		Slug:        record.Slug,
-		Name:        record.Name,
-		Currency:    string(record.Currency),
-		Balance:     record.Balance.Format(record.DecimalPlaces),
-		CreditLimit: record.CreditLimit.Format(record.DecimalPlaces),
-		Negative:    record.Balance < 0,
-		Created:     record.CreatedAt.UTC().Format(time.RFC3339),
+		ID:           record.ID,
+		HolderID:     record.HolderID,
+		Slug:         record.Slug,
+		Name:         record.Name,
+		Currency:     string(record.Currency),
+		Balance:      record.Balance.Format(record.DecimalPlaces),
+		CreditLimit:  record.CreditLimit.Format(record.DecimalPlaces),
+		Negative:     record.Balance < 0,
+		Created:      record.CreatedAt.UTC().Format(time.RFC3339),
+		URL:          routeAddress(prefix, "wallet.show", record.ID),
+		StatementURL: routeAddress(prefix, "wallet.entries", record.ID),
 	}
 }
 
 // walletRows snapshots a listing for a screen.
-func walletRows(records []*Wallet) []WalletRow {
+func walletRows(prefix string, records []*Wallet) []WalletRow {
 	out := make([]WalletRow, 0, len(records))
 	for _, record := range records {
-		out = append(out, walletRow(record))
+		out = append(out, walletRow(prefix, record))
 	}
 	return out
+}
+
+// routeAddress is the address of one of this module's routes as a screen links
+// to it: the prefix, then the route's suffix with the parameters in order, each
+// escaped as one path segment.
+//
+// The suffix is read from routePatterns by name rather than written again here,
+// so a screen cannot link to an address the router does not answer. A name that
+// is not in that list, or a count of parameters that does not fit its suffix,
+// answers the empty string rather than inventing an address: it is a mistake
+// inside this package and not something an installer did, and the suite is
+// where it is caught.
+//
+// A parameter is escaped because it is data. An identifier carrying a slash, a
+// question mark or a hash would otherwise end its segment and send the link
+// somewhere else; one made only of letters, digits and dashes is written as it
+// is.
+func routeAddress(prefix, name string, params ...string) string {
+	for _, route := range routePatterns {
+		if route.name != name {
+			continue
+		}
+		segments := strings.Split(route.suffix, "/")
+		for i, segment := range segments {
+			if !strings.HasPrefix(segment, "{") || !strings.HasSuffix(segment, "}") {
+				continue
+			}
+			if len(params) == 0 {
+				return ""
+			}
+			segments[i] = url.PathEscape(params[0])
+			params = params[1:]
+		}
+		if len(params) > 0 {
+			return ""
+		}
+		return prefix + strings.Join(segments, "/")
+	}
+	return ""
+}
+
+// nextListingURL is the address of the listing page that follows the one ending
+// at cursor, narrowed to the same holder, and empty when there is no such page.
+//
+// The holder is the caller's own text, so it is escaped as a query value: an
+// ampersand or a hash in it would otherwise end the parameter it is written in.
+func nextListingURL(prefix, holder, cursor string) string {
+	if cursor == "" {
+		return ""
+	}
+	return routeAddress(prefix, "wallet.index") +
+		"?holder_id=" + url.QueryEscape(holder) + "&cursor=" + url.QueryEscape(cursor)
+}
+
+// nextStatementURL is the address of the page of one wallet's ledger that
+// follows the one ending at cursor, and empty when there is no such page.
+func nextStatementURL(prefix, walletID, cursor string) string {
+	if cursor == "" {
+		return ""
+	}
+	return routeAddress(prefix, "wallet.entries", walletID) + "?cursor=" + url.QueryEscape(cursor)
 }
 
 // statementRows snapshots a page of one wallet's ledger for a screen.

@@ -341,12 +341,13 @@ func (m *Module) index(ctx *fhttp.Context) error {
 
 	labels := m.Labels(m.locale(ctx.Request))
 	return ctx.View(ViewIndex, IndexPageData{
-		Page:   m.page(ctx, labels.T("screen.index_title")),
-		Prefix: m.cfg.Prefix,
-		Labels: labels,
-		Holder: in.HolderID,
-		Rows:   walletRows(records),
-		Next:   cursor,
+		Page:    m.page(ctx, labels.T("screen.index_title")),
+		Prefix:  m.cfg.Prefix,
+		Labels:  labels,
+		Holder:  in.HolderID,
+		Rows:    walletRows(m.cfg.Prefix, records),
+		Next:    cursor,
+		NextURL: nextListingURL(m.cfg.Prefix, in.HolderID, cursor),
 	})
 }
 
@@ -374,12 +375,17 @@ func (m *Module) show(ctx *fhttp.Context) error {
 		Page:      m.page(ctx, labels.T("screen.operations_title")),
 		Prefix:    m.cfg.Prefix,
 		Labels:    labels,
-		Wallet:    walletRow(record),
+		Wallet:    walletRow(m.cfg.Prefix, record),
 		Purchases: purchaseRows(labels, lines),
 		// Asked before the page is drawn rather than after the button is
 		// pressed. It is the same policy the write would consult, so a control
 		// that is drawn is a control that works.
-		MaySetCredit: m.allowed(ctx, actor, WalletCredit, *record),
+		MaySetCredit:  m.allowed(ctx, actor, WalletCredit, *record),
+		DepositURL:    routeAddress(m.cfg.Prefix, "wallet.deposit", record.ID),
+		WithdrawalURL: routeAddress(m.cfg.Prefix, "wallet.withdraw", record.ID),
+		TransferURL:   routeAddress(m.cfg.Prefix, "wallet.transfer", record.ID),
+		CreditURL:     routeAddress(m.cfg.Prefix, "wallet.credit", record.ID),
+		RefundURL:     routeAddress(m.cfg.Prefix, "wallet.refund"),
 	})
 }
 
@@ -512,11 +518,12 @@ func (m *Module) entries(ctx *fhttp.Context) error {
 		Page:        m.page(ctx, labels.T("screen.statement_title")),
 		Prefix:      m.cfg.Prefix,
 		Labels:      labels,
-		Wallet:      walletRow(&statement.Wallet),
+		Wallet:      walletRow(m.cfg.Prefix, &statement.Wallet),
 		Rows:        statementRows(labels, statement),
 		Conversions: conversionRows(statement),
 		Charges:     chargeRows(statement),
 		Next:        cursor,
+		NextURL:     nextStatementURL(m.cfg.Prefix, statement.Wallet.ID, cursor),
 	})
 }
 

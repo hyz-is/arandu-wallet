@@ -16,6 +16,31 @@ name here. They are gone.
 
 ## [Unreleased]
 
+### Added
+
+- The addresses the screens link to, on the page data the handlers pass:
+  `WalletRow.URL` and `WalletRow.StatementURL`, `IndexPageData.NextURL`,
+  `StatementPageData.NextURL`, and `OperationsPageData.DepositURL`,
+  `WithdrawalURL`, `TransferURL`, `CreditURL` and `RefundURL`. Each is the
+  whole address, built from the configured prefix and the route table with
+  every path segment escaped. `Prefix` stays, and is still the address of the
+  listing.
+
+### Fixed
+
+- The published views compile with the view compiler of `aru` v0.57.0 and
+  later. It refused ten addresses in `index`, `operations` and `statement` --
+  each one wrote `{{ .Prefix }}/{{ … }}`, and the compiler does not let an
+  interpolated value finish an address behind text it cannot read ("this value
+  is written into "href" before the scheme and the host of the address are
+  fixed") -- so `aru view:build` failed in every application that published
+  them. Every composed address in the three views is now one interpolation of a
+  field above. For the identifiers this package generates, the pages render
+  byte for byte what they rendered before.
+- The next-page link of the listing escapes the holder it is narrowed to. A
+  holder carrying `&`, `#` or a space used to cut the link short or turn the
+  rest of it into a fragment.
+
 ## [0.9.0] - 2026-10-03
 
 ### Added

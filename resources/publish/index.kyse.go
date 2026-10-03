@@ -47,7 +47,7 @@ type IndexData = wallet.IndexPageData
 			@foreach(.Rows as row)
 				<li class="card flex flex-wrap items-center justify-between gap-3 p-4">
 					<div class="min-w-0">
-						<a class="text-sm font-semibold hover:underline" href="{{ .Prefix }}/{{ row.ID }}">{{ row.Name }}</a>
+						<a class="text-sm font-semibold hover:underline" href="{{ row.URL }}">{{ row.Name }}</a>
 						<p class="text-muted-foreground mt-1 truncate text-xs">{{ row.HolderID }} / {{ row.Slug }}</p>
 					</div>
 					<div class="flex items-center gap-3">
@@ -61,7 +61,7 @@ type IndexData = wallet.IndexPageData
 							<span class="text-sm font-semibold">{{ row.Balance }} {{ row.Currency }}</span>
 						@endif
 						{!! components.Badge(components.BadgeProps{Label: row.CreditLimit, Variant: "outline"}) !!}
-						<a class="btn" data-variant="ghost" data-size="sm" href="{{ .Prefix }}/{{ row.ID }}/entries">
+						<a class="btn" data-variant="ghost" data-size="sm" href="{{ row.StatementURL }}">
 							{{ .Labels.T("control.statement") }}
 						</a>
 					</div>
@@ -75,7 +75,7 @@ type IndexData = wallet.IndexPageData
 	@if(.Next != "")
 		<div class="mt-6">
 			<a class="btn" data-variant="outline" data-size="sm"
-			   href="{{ .Prefix }}?holder_id={{ .Holder }}&amp;cursor={{ .Next }}">
+			   href="{{ .NextURL }}">
 				{{ .Labels.T("control.next") }}
 			</a>
 		</div>
