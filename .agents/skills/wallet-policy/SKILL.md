@@ -112,10 +112,10 @@ must see, call `security.Authorize`, and only then call `Wallets(s.db)`.
 method and refuses the opposite order; the runtime twin uses a nil database so
 even constructing the Model early fails.
 
-Create builds a wired entity through `NewInstance`, keeps its pointer, writes
-`TenantID` from `data.Tenant(g)`, and calls `Save(ctx, g)`. Find and Get return
-pointers too. Copying an entity with an embedded Model leaves its `Entity`
-pointer aimed at the old allocation.
+Create builds a wired entity through `Wallets(s.db).New()`, keeps its pointer,
+writes `TenantID` from `data.Tenant(g)`, and calls `Save(ctx, g)`. Find and Get
+return pointers too. A copy of an entity shares the row state of the original,
+and a write through the copy refuses with `model.ErrUnwired`.
 
 CRUD does not get a Repository beside this path. A Repository is an optional
 specialization for a genuinely complex query, read model, report, export or raw
@@ -133,7 +133,7 @@ people delete:
 
 ```go
 	g, err := security.Authorize(ctx, s.policy, actor, WalletView, Wallet{})
-	record, err := Wallets(s.db).NewQuery().WhereKey(id).First(ctx, g)
+	record, err := Wallets(s.db).WhereKey(id).First(ctx, g)
 	_, err = security.Authorize(ctx, s.policy, actor, WalletView, *record)
 ```
 

@@ -109,27 +109,31 @@ request.
 
 ## Changing the Model
 
-`Wallet` embeds `model.Model[Wallet]`, and `Wallets(db)` is the one
-configured entry point for the table. Keep the application-generated key
-settings and tenant default visible there:
+`Wallet` embeds `model.Model`, and its table is the `walletTable` declared beside
+it. Keep the application-generated key and the tenant default visible there:
 
 ```go
-func Wallets(db *data.DB) *model.Model[Wallet] {
-	m := model.NewModel[Wallet]("wallets", db, db.GetQueryGrammar(), db.GetPostProcessor())
-	m.KeyType = "string"
-	m.Incrementing = false
-	return m
-}
+var walletTable = model.NewTable(model.TableSpec{
+	Name:      walletsTable,
+	New:       func() model.Entity { return new(Wallet) },
+	ManualKey: true,
+})
 ```
 
-Do not set `TenantColumn` to `""`: this package owns tenant data. Model
-terminals require a Grant and apply `tenant_id`; the Service still calls
-`security.Authorize` first because the Model does not decide which Policy
-action the Grant represents.
+`Wallets(db)` is the one entry point for the table, and it is generated: `aru
+model:build` writes `func Wallets(db model.DB) *WalletQuery` in `WalletQuery.go`,
+with the typed query and `WalletCollection`, and refreshes it when the entity
+changes. That file is never edited by hand; `aru model:build --check` fails when
+it is stale.
 
-Keep rows as pointers after `NewInstance`, `First`, `Find`, or `Get`. The
-embedded Model's `Entity` points into that allocation, so copying the row and
-then calling a promoted terminal would act on the original.
+Do not set `Global`, the one setting that drops the tenant filter: this package
+owns tenant data. Model terminals require a Grant and apply `tenant_id`; the
+Service still calls `security.Authorize` first because the Model does not decide
+which Policy action the Grant represents.
+
+Keep rows as pointers after `New`, `First`, `Find`, or `Get`. A copy of a row
+shares the row state of the original: a promoted read answers from the original,
+and a promoted write refuses with `model.ErrUnwired`.
 
 This table declares `created_at` but not `updated_at`. The Hesape Model stamps a
 timestamp only when the entity declares its column, so creation remains correct

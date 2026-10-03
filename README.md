@@ -260,20 +260,23 @@ What is not written there stays closed, including every action added later.
 
 ## Model-first data path
 
-`Wallet` embeds `model.Model[Wallet]`, and `Wallets(db)` is the one
-configured entry point for its table. `WalletService` owns `*data.DB` and
-follows `validate -> security.Authorize -> Grant -> Model terminal`; handlers
-never hold the database or construct a Model.
+`Wallet` embeds `model.Model`, and `Wallets(db)` is the one entry point for its
+table: the `WalletQuery` that `aru model:build` generates in `WalletQuery.go`,
+over the `walletTable` declared beside the entity. `WalletService` owns
+`*data.DB` and follows
+`validate -> security.Authorize -> Grant -> Model terminal`; handlers never
+hold the database or construct a Model.
 
 Create writes `TenantID` from `data.Tenant(g)`. Find authorizes before reading
 and again against the row it found. List authorizes before building its scoped,
 allowlisted query. The Model keeps its default `tenant_id` scope on every
 terminal.
 
-Terminals return `*Wallet` and `[]*Wallet`. Keep those pointers intact:
-copying an embedded Model leaves its `Entity` pointer aimed at the original
-allocation. `Resource` and `Collection` are explicit response snapshots and do
-not expose tenant or Model internals.
+Terminals return `*Wallet` and `WalletCollection` (`[]*Wallet`). Keep those
+pointers intact: a copy of an entity shares the row state of the original, so a
+promoted read answers from the original and a promoted write refuses with
+`model.ErrUnwired`. `Resource` and `Collection` are explicit response snapshots
+and do not expose tenant or Model internals.
 
 There is no CRUD Repository. Add one only for a complex query, read model,
 report, export or raw SQL contract that the common Model path cannot express.
