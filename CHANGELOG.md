@@ -16,6 +16,8 @@ name here. They are gone.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-03
+
 ### Added
 
 - `TestAReplayPricesNothing`, which counts. Moving the replay lookup past the
