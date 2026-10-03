@@ -7,7 +7,7 @@ describing a publishing migration and a Repository removal that both happened
 before `v0.1.0` of this package. They are gone, and what this package actually
 changed at each of its own versions is below.
 
-## Unreleased
+## v0.9.1
 
 ### Republish the views
 

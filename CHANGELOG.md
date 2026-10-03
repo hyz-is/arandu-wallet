@@ -16,6 +16,8 @@ name here. They are gone.
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-03
+
 ### Added
 
 - The addresses the screens link to, on the page data the handlers pass:
