@@ -292,7 +292,7 @@ func TestAGiftDebitsWhoPaysAndBelongsToSomebodyElse(t *testing.T) {
 	}
 
 	// And it is the beneficiary who has it, not the person who paid.
-	answers, err := service.Bought(ctx, staff(), []wallet.PurchaseQuery{
+	answers, err := service.Bought(ctx, staff(), []wallet.PurchaseQuestion{
 		{OwnerWalletID: friend.ID, ReceiverWalletID: shop.ID, ProductKey: "book"},
 		{OwnerWalletID: friend.ID, ReceiverWalletID: shop.ID, ProductKey: "book", IncludeGifts: true},
 		{OwnerWalletID: payer.ID, ReceiverWalletID: shop.ID, ProductKey: "book", IncludeGifts: true},
@@ -370,7 +370,7 @@ func TestARefundGivesBackOnlyWhatWasUndone(t *testing.T) {
 	}
 
 	// The other line is still bought, and the refunded one is not.
-	answers, err := service.Bought(ctx, staff(), []wallet.PurchaseQuery{
+	answers, err := service.Bought(ctx, staff(), []wallet.PurchaseQuestion{
 		{OwnerWalletID: buyer.ID, ReceiverWalletID: shop.ID, ProductKey: "book"},
 		{OwnerWalletID: buyer.ID, ReceiverWalletID: shop.ID, ProductKey: "pen"},
 	})

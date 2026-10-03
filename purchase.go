@@ -243,13 +243,13 @@ func (p Purchase) Schedule() FeeSchedule {
 	}
 }
 
-// PurchaseQuery is one question about what a wallet already has.
+// PurchaseQuestion is one question about what a wallet already has.
 //
 // It names the three things that make a purchase what it is -- whose it would
 // be, who was paid for it, and what it was -- because any two of them are a
 // question with several answers, and a caller that had to filter the third in
 // its own code would be a caller reading rows it was told not to have.
-type PurchaseQuery struct {
+type PurchaseQuestion struct {
 	// OwnerWalletID is whose purchase it would be. On a gift that is the
 	// beneficiary and not whoever paid.
 	OwnerWalletID string
@@ -362,28 +362,28 @@ func (r PurchaseResource) ToArray() map[string]any {
 // With returns what goes beside the fields, and nothing does.
 func (r PurchaseResource) With() map[string]any { return nil }
 
-// PurchaseCollection is a page of purchases as one response.
-type PurchaseCollection struct {
+// PurchaseResourceCollection is a page of purchases as one response.
+type PurchaseResourceCollection struct {
 	records []PurchaseResource
 	cursor  string
 }
 
-// NewPurchaseCollection wraps a page of purchases for the response. The cursor
-// is what the next request passes back, and is empty when there is no next
-// page.
-func NewPurchaseCollection(records []*Purchase, cursor string) PurchaseCollection {
+// NewPurchaseResourceCollection wraps a page of purchases for the response.
+// The cursor is what the next request passes back, and is empty when there is
+// no next page.
+func NewPurchaseResourceCollection(records []*Purchase, cursor string) PurchaseResourceCollection {
 	resources := make([]PurchaseResource, 0, len(records))
 	for _, record := range records {
 		if record != nil {
 			resources = append(resources, NewPurchaseResource(*record))
 		}
 	}
-	return PurchaseCollection{records: resources, cursor: cursor}
+	return PurchaseResourceCollection{records: resources, cursor: cursor}
 }
 
 // ToArray returns the page under a single key, so that the shape of the
 // response does not change when a second key is added beside it.
-func (c PurchaseCollection) ToArray() map[string]any {
+func (c PurchaseResourceCollection) ToArray() map[string]any {
 	items := make([]map[string]any, 0, len(c.records))
 	for _, record := range c.records {
 		items = append(items, record.ToArray())
@@ -392,7 +392,7 @@ func (c PurchaseCollection) ToArray() map[string]any {
 }
 
 // With returns the cursor of the next page, and nothing when there is none.
-func (c PurchaseCollection) With() map[string]any {
+func (c PurchaseResourceCollection) With() map[string]any {
 	if c.cursor == "" {
 		return nil
 	}

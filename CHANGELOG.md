@@ -27,6 +27,13 @@ name here. They are gone.
   catalogue was asked 2 times". The same claim about the rate and the fee seams
   was already held by `exchange_test.go` and `fee_test.go`.
 
+### Changed
+
+- `PurchaseQuery` is `PurchaseQuestion`, `EntryCollection` is
+  `EntryResourceCollection` and `PurchaseCollection` is
+  `PurchaseResourceCollection`, with their constructors. The generated query of
+  each entity is declared under the old names.
+
 ### Fixed
 
 - Render the wallet statement through the native Kyse DataTable instead of a hand-written HTML table.

@@ -221,7 +221,7 @@ func (s *WalletService) Refund(ctx context.Context, actor security.Subject, in R
 // It is bounded by MaxPurchaseScan, and that bound is real: a question about a
 // wallet with more recent purchases than that, among the wallets named beside
 // it, is answered from what the scan reached.
-func (s *WalletService) Bought(ctx context.Context, actor security.Subject, questions []PurchaseQuery) ([]*Purchase, error) {
+func (s *WalletService) Bought(ctx context.Context, actor security.Subject, questions []PurchaseQuestion) ([]*Purchase, error) {
 	if len(questions) == 0 {
 		return nil, nil
 	}

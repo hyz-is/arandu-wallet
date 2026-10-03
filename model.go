@@ -1235,15 +1235,16 @@ func (r EntryResource) ToArray() map[string]any {
 // With returns what goes beside the fields, and nothing does.
 func (r EntryResource) With() map[string]any { return nil }
 
-// EntryCollection is a page of ledger entries as one response.
-type EntryCollection struct {
+// EntryResourceCollection is a page of ledger entries as one response.
+type EntryResourceCollection struct {
 	records     []EntryResource
 	conversions []ConversionResource
 	charges     []ChargeResource
 	cursor      string
 }
 
-// NewEntryCollection wraps a page of one wallet's ledger for the response.
+// NewEntryResourceCollection wraps a page of one wallet's ledger for the
+// response.
 //
 // It takes the statement rather than the entries, because an entry is not
 // readable on its own: the scale it is written at belongs to the wallet, and
@@ -1254,7 +1255,7 @@ type EntryCollection struct {
 // belongs to an operation, an operation writes an entry on each of two or three
 // wallets, and repeating one on every entry would be repeating one fact until
 // two copies of it could differ.
-func NewEntryCollection(statement Statement, cursor string) EntryCollection {
+func NewEntryResourceCollection(statement Statement, cursor string) EntryResourceCollection {
 	resources := make([]EntryResource, 0, len(statement.Entries))
 	for _, record := range statement.Entries {
 		if record != nil {
@@ -1278,11 +1279,11 @@ func NewEntryCollection(statement Statement, cursor string) EntryCollection {
 			charged = append(charged, NewChargeResource(cost))
 		}
 	}
-	return EntryCollection{records: resources, conversions: rates, charges: charged, cursor: cursor}
+	return EntryResourceCollection{records: resources, conversions: rates, charges: charged, cursor: cursor}
 }
 
 // ToArray returns the page under a single key.
-func (c EntryCollection) ToArray() map[string]any {
+func (c EntryResourceCollection) ToArray() map[string]any {
 	items := make([]map[string]any, 0, len(c.records))
 	for _, record := range c.records {
 		items = append(items, record.ToArray())
@@ -1293,7 +1294,7 @@ func (c EntryCollection) ToArray() map[string]any {
 // With returns the cursor of the next page, the rates the page's exchanges were
 // made at and what its payments were charged, and omits any of them when there
 // is none.
-func (c EntryCollection) With() map[string]any {
+func (c EntryResourceCollection) With() map[string]any {
 	beside := map[string]any{}
 	if c.cursor != "" {
 		beside["next_cursor"] = c.cursor

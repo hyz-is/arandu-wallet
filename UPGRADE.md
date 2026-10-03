@@ -9,6 +9,30 @@ changed at each of its own versions is below.
 
 ## Unreleased
 
+### Three types are renamed, because the generated queries take their names
+
+`aru model:build` declares `<Entity>Query` and `<Entity>Collection` beside every
+entity, so `Purchase` gets `PurchaseQuery` and `PurchaseCollection`, and `Entry`
+gets `EntryCollection`. The hand-written types under those names move:
+
+| before | now |
+|---|---|
+| `PurchaseQuery` | `PurchaseQuestion` |
+| `EntryCollection` | `EntryResourceCollection` |
+| `NewEntryCollection` | `NewEntryResourceCollection` |
+| `PurchaseCollection` | `PurchaseResourceCollection` |
+| `NewPurchaseCollection` | `NewPurchaseResourceCollection` |
+
+Fields, methods and the JSON they answer with are unchanged; only the names move.
+
+```go
+// Before
+service.Bought(ctx, actor, []wallet.PurchaseQuery{{OwnerWalletID: id, ProductKey: "sku-1"}})
+
+// After
+service.Bought(ctx, actor, []wallet.PurchaseQuestion{{OwnerWalletID: id, ProductKey: "sku-1"}})
+```
+
 ### Published views move out of `vendor/`
 
 The views this package publishes land in `resources/views/modules/wallet/` and

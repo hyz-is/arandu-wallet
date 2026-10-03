@@ -60,7 +60,7 @@ func TestAFreeLineIsBoughtAndMovesNoMoney(t *testing.T) {
 	}
 
 	// And it answers the question the record exists for.
-	answers, err := service.Bought(ctx, staff(), []wallet.PurchaseQuery{
+	answers, err := service.Bought(ctx, staff(), []wallet.PurchaseQuestion{
 		{OwnerWalletID: buyer.ID, ReceiverWalletID: shop.ID, ProductKey: "trial"},
 	})
 	if err != nil {

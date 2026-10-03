@@ -504,7 +504,7 @@ func (m *Module) entries(ctx *fhttp.Context) error {
 		cursor = statement.Entries[len(statement.Entries)-1].ID
 	}
 	if ctx.WantsJSON() {
-		return ctx.JSON(stdhttp.StatusOK, NewEntryCollection(statement, cursor))
+		return ctx.JSON(stdhttp.StatusOK, NewEntryResourceCollection(statement, cursor))
 	}
 
 	labels := m.Labels(m.locale(ctx.Request))
@@ -638,7 +638,7 @@ func (m *Module) purchases(ctx *fhttp.Context) error {
 	if len(records) == m.cfg.PageSize {
 		cursor = records[len(records)-1].ID
 	}
-	return ctx.JSON(stdhttp.StatusOK, NewPurchaseCollection(records, cursor))
+	return ctx.JSON(stdhttp.StatusOK, NewPurchaseResourceCollection(records, cursor))
 }
 
 // refund gives back the lines the request names.

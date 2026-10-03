@@ -315,7 +315,7 @@ func run(ctx context.Context) error {
 	}
 
 	say("already bought", "one statement for a whole page of questions")
-	answers := must(svc.Bought(ctx, staff, []wallet.PurchaseQuery{
+	answers := must(svc.Bought(ctx, staff, []wallet.PurchaseQuestion{
 		{OwnerWalletID: buyer.ID, ReceiverWalletID: shop.ID, ProductKey: "the-go-book"},
 		{OwnerWalletID: buyer.ID, ReceiverWalletID: shop.ID, ProductKey: "a-pen"},
 		{OwnerWalletID: friend.ID, ReceiverWalletID: shop.ID, ProductKey: "a-pen", IncludeGifts: true},
@@ -334,7 +334,7 @@ func run(ctx context.Context) error {
 	}))
 	fmt.Printf("    Ana held %s and now holds %s\n", before, balance(ctx, svc, staff, buyer.ID))
 
-	after := must(svc.Bought(ctx, staff, []wallet.PurchaseQuery{
+	after := must(svc.Bought(ctx, staff, []wallet.PurchaseQuestion{
 		{OwnerWalletID: buyer.ID, ReceiverWalletID: shop.ID, ProductKey: "the-go-book"},
 	}))
 	fmt.Printf("    still bought: %v\n", after[0] != nil)
