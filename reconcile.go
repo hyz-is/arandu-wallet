@@ -91,7 +91,7 @@ func (s *WalletService) Reconcile(ctx context.Context, actor security.Subject, w
 		return Reconciliation{}, err
 	}
 
-	holder, err := Wallets(s.db).NewQuery().WhereKey(walletID).First(ctx, g)
+	holder, err := Wallets(s.db).WhereKey(walletID).First(ctx, g)
 	if err != nil {
 		return Reconciliation{}, err
 	}
@@ -173,7 +173,7 @@ func (s *WalletService) Rebuild(ctx context.Context, actor security.Subject, in 
 		return Receipt{}, err
 	}
 
-	holder, err := Wallets(s.db).NewQuery().WhereKey(in.WalletID).First(ctx, g)
+	holder, err := Wallets(s.db).WhereKey(in.WalletID).First(ctx, g)
 	if err != nil {
 		return Receipt{}, err
 	}

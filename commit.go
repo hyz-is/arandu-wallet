@@ -343,11 +343,11 @@ func (s *WalletService) attempt(ctx context.Context, g security.Grant, op operat
 	if err != nil {
 		return Receipt{}, err
 	}
-	instance, err := Operations(s.db).NewInstance(nil, false)
+	instance, err := Operations(s.db).New()
 	if err != nil {
 		return Receipt{}, err
 	}
-	record := instance.Entity
+	record := instance
 	record.ID = id
 	record.TenantID = data.Tenant(g)
 	record.IdempotencyKey = op.key
@@ -521,7 +521,7 @@ func (s *WalletService) recordPurchases(ctx context.Context, g security.Grant, o
 		rows = append(rows, purchaseRow(row))
 	}
 
-	if _, err := Purchases(s.db).NewQuery().Insert(ctx, g, rows...); err != nil {
+	if _, err := Purchases(s.db).Insert(ctx, g, rows...); err != nil {
 		return nil, err
 	}
 	return written, nil
@@ -580,12 +580,12 @@ func (s *WalletService) recordConversion(ctx context.Context, g security.Grant, 
 	if err != nil {
 		return nil, err
 	}
-	instance, err := Conversions(s.db).NewInstance(nil, false)
+	instance, err := Conversions(s.db).New()
 	if err != nil {
 		return nil, err
 	}
 
-	written := instance.Entity
+	written := instance
 	written.ID = id
 	written.TenantID = data.Tenant(g)
 	written.OperationID = operationID
@@ -621,12 +621,12 @@ func (s *WalletService) recordCharge(ctx context.Context, g security.Grant, oper
 	if err != nil {
 		return nil, err
 	}
-	instance, err := Charges(s.db).NewInstance(nil, false)
+	instance, err := Charges(s.db).New()
 	if err != nil {
 		return nil, err
 	}
 
-	written := instance.Entity
+	written := instance
 	written.ID = id
 	written.TenantID = data.Tenant(g)
 	written.OperationID = operationID
@@ -695,7 +695,7 @@ func (s *WalletService) apply(ctx context.Context, g security.Grant, operationID
 	if len(rows) == 0 {
 		return entries, nil
 	}
-	if _, err := Entries(s.db).NewQuery().Insert(ctx, g, rows...); err != nil {
+	if _, err := Entries(s.db).Insert(ctx, g, rows...); err != nil {
 		return nil, err
 	}
 	return entries, nil
@@ -926,11 +926,11 @@ func (s *WalletService) move(ctx context.Context, g security.Grant, operationID 
 	if err != nil {
 		return Entry{}, err
 	}
-	instance, err := Entries(s.db).NewInstance(nil, false)
+	instance, err := Entries(s.db).New()
 	if err != nil {
 		return Entry{}, err
 	}
-	written := instance.Entity
+	written := instance
 	written.ID = id
 	written.TenantID = data.Tenant(g)
 	written.OperationID = operationID
@@ -1040,7 +1040,7 @@ func movedColumns(q quoter) string {
 // only turns "no row" into a sentence, and it reads the row through the Model
 // so the answer is scoped and authorized exactly as every other read is.
 func (s *WalletService) whyNothingMoved(ctx context.Context, g security.Grant, m movement) error {
-	after, err := Wallets(s.db).NewQuery().WhereKey(m.wallet.ID).First(ctx, g)
+	after, err := Wallets(s.db).WhereKey(m.wallet.ID).First(ctx, g)
 	if err != nil {
 		return err
 	}
@@ -1140,7 +1140,7 @@ func movedFor(owner string, entries []Entry) bool {
 }
 
 func (s *WalletService) replay(ctx context.Context, g security.Grant, key string, kind OperationKind, owner string) (Receipt, bool, error) {
-	record, err := Operations(s.db).NewQuery().Where("idempotency_key", "=", key).First(ctx, g)
+	record, err := Operations(s.db).Where("idempotency_key", "=", key).First(ctx, g)
 	if err != nil {
 		return Receipt{}, false, err
 	}
@@ -1151,7 +1151,7 @@ func (s *WalletService) replay(ctx context.Context, g security.Grant, key string
 		return Receipt{}, false, ErrOperationConflict
 	}
 
-	written, err := Entries(s.db).NewQuery().
+	written, err := Entries(s.db).
 		Where("operation_id", "=", record.ID).
 		OrderBy("position").
 		Get(ctx, g)
@@ -1180,7 +1180,7 @@ func (s *WalletService) replay(ctx context.Context, g security.Grant, key string
 	// on every replay would be a statement per deposit that answers nothing.
 	var conversion *Conversion
 	if record.Kind == OperationExchange {
-		conversion, err = Conversions(s.db).NewQuery().
+		conversion, err = Conversions(s.db).
 			Where("operation_id", "=", record.ID).
 			First(ctx, g)
 		if err != nil {
@@ -1194,7 +1194,7 @@ func (s *WalletService) replay(ctx context.Context, g security.Grant, key string
 	// once, at one price.
 	var charge *Charge
 	if record.Kind == OperationTransfer || record.Kind == OperationExchange {
-		charge, err = Charges(s.db).NewQuery().
+		charge, err = Charges(s.db).
 			Where("operation_id", "=", record.ID).
 			First(ctx, g)
 		if err != nil {
@@ -1207,7 +1207,7 @@ func (s *WalletService) replay(ctx context.Context, g security.Grant, key string
 	// price.
 	var purchases []Purchase
 	if record.Kind == OperationPurchase || record.Kind == OperationRefund {
-		lines, err := Purchases(s.db).NewQuery().
+		lines, err := Purchases(s.db).
 			Where("operation_id", "=", record.ID).
 			OrderBy("position").
 			Get(ctx, g)

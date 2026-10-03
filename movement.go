@@ -194,7 +194,7 @@ func (s *WalletService) History(ctx context.Context, actor security.Subject, in 
 		return Statement{}, err
 	}
 
-	holder, err := Wallets(s.db).NewQuery().WhereKey(in.WalletID).First(ctx, g)
+	holder, err := Wallets(s.db).WhereKey(in.WalletID).First(ctx, g)
 	if err != nil {
 		return Statement{}, err
 	}
@@ -209,10 +209,9 @@ func (s *WalletService) History(ctx context.Context, actor security.Subject, in 
 	// the keyset needs no tie-breaker and no page can repeat or skip a row. The
 	// cursor is still an entry identifier, because that is what a caller has in
 	// its hand; the sequence it stands for is read here.
-	rows := Entries(s.db)
-	page := rows.NewQuery().Where("wallet_id", "=", holder.ID)
+	page := Entries(s.db).Where("wallet_id", "=", holder.ID)
 	if in.Query.Cursor != "" {
-		anchor, err := rows.NewQuery().WhereKey(in.Query.Cursor).Value(ctx, g, "sequence")
+		anchor, err := Entries(s.db).WhereKey(in.Query.Cursor).Value(ctx, g, "sequence")
 		if err != nil {
 			return Statement{}, err
 		}
@@ -254,7 +253,7 @@ func (s *WalletService) Deposit(ctx context.Context, actor security.Subject, in 
 		return Receipt{}, err
 	}
 
-	target, err := Wallets(s.db).NewQuery().WhereKey(in.WalletID).First(ctx, g)
+	target, err := Wallets(s.db).WhereKey(in.WalletID).First(ctx, g)
 	if err != nil {
 		return Receipt{}, err
 	}
@@ -301,7 +300,7 @@ func (s *WalletService) Withdraw(ctx context.Context, actor security.Subject, in
 		return Receipt{}, err
 	}
 
-	source, err := Wallets(s.db).NewQuery().WhereKey(in.WalletID).First(ctx, g)
+	source, err := Wallets(s.db).WhereKey(in.WalletID).First(ctx, g)
 	if err != nil {
 		return Receipt{}, err
 	}
@@ -373,12 +372,11 @@ func (s *WalletService) Transfer(ctx context.Context, actor security.Subject, in
 		return Receipt{}, ErrSameWallet
 	}
 
-	rows := Wallets(s.db)
-	source, err := rows.NewQuery().WhereKey(in.FromWalletID).First(ctx, g)
+	source, err := Wallets(s.db).WhereKey(in.FromWalletID).First(ctx, g)
 	if err != nil {
 		return Receipt{}, err
 	}
-	target, err := rows.NewQuery().WhereKey(in.ToWalletID).First(ctx, g)
+	target, err := Wallets(s.db).WhereKey(in.ToWalletID).First(ctx, g)
 	if err != nil {
 		return Receipt{}, err
 	}
@@ -518,7 +516,7 @@ func (s *WalletService) Reverse(ctx context.Context, actor security.Subject, in 
 		return Receipt{}, err
 	}
 
-	original, err := Operations(s.db).NewQuery().WhereKey(in.OperationID).First(ctx, g)
+	original, err := Operations(s.db).WhereKey(in.OperationID).First(ctx, g)
 	if err != nil {
 		return Receipt{}, err
 	}
@@ -607,7 +605,7 @@ func (s *WalletService) Confirm(ctx context.Context, actor security.Subject, in 
 		return Receipt{}, err
 	}
 
-	original, err := Operations(s.db).NewQuery().WhereKey(in.OperationID).First(ctx, g)
+	original, err := Operations(s.db).WhereKey(in.OperationID).First(ctx, g)
 	if err != nil {
 		return Receipt{}, err
 	}

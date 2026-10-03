@@ -10,6 +10,7 @@ import (
 	"github.com/arandu-io/framework/data"
 	"github.com/arandu-io/framework/security"
 	"github.com/arandu-io/hesape/database/model"
+	"github.com/arandu-io/hesape/database/query"
 
 	wallet "github.com/hyz-is/arandu-wallet"
 )
@@ -286,54 +287,178 @@ func TestTheServiceRefusesBeforeReachingTheModel(t *testing.T) {
 	}
 }
 
+// recordingDB is a handle that runs nothing and remembers what it was asked to
+// run, compiled by the grammar of the nil handle.
+//
+// A table's settings are not fields any more, so what the old assertions read
+// off the model is observed here in what it does: the key it writes, whether it
+// asks the engine for an incremented one, and the tenant every statement it
+// compiles is filtered and stamped with.
+type recordingDB struct {
+	grammar     query.Grammar
+	processor   query.Processor
+	statements  []string
+	bindings    [][]any
+	incremented bool
+}
+
+func newRecordingDB() *recordingDB {
+	handle := nilHandle()
+	return &recordingDB{grammar: handle.GetQueryGrammar(), processor: handle.GetPostProcessor()}
+}
+
+func (r *recordingDB) record(statement string, bindings []any) {
+	r.statements = append(r.statements, statement)
+	r.bindings = append(r.bindings, bindings)
+}
+
+func (r *recordingDB) Select(_ context.Context, statement string, bindings []any, _ bool) ([]query.Record, error) {
+	r.record(statement, bindings)
+	return nil, nil
+}
+
+func (r *recordingDB) Insert(_ context.Context, statement string, bindings []any) (bool, error) {
+	r.record(statement, bindings)
+	return true, nil
+}
+
+func (r *recordingDB) Update(_ context.Context, statement string, bindings []any) (int64, error) {
+	r.record(statement, bindings)
+	return 0, nil
+}
+
+func (r *recordingDB) Delete(_ context.Context, statement string, bindings []any) (int64, error) {
+	r.record(statement, bindings)
+	return 0, nil
+}
+
+func (r *recordingDB) Statement(_ context.Context, statement string, bindings []any) (bool, error) {
+	r.record(statement, bindings)
+	return true, nil
+}
+
+func (r *recordingDB) GetQueryGrammar() query.Grammar { return r.grammar }
+
+func (r *recordingDB) GetPostProcessor() query.Processor { return recordingProcessor{r.processor, r} }
+
+// recordingProcessor notes that an insert asked the engine for the key it
+// generated, which a table whose key the application writes never does.
+type recordingProcessor struct {
+	query.Processor
+	db *recordingDB
+}
+
+func (p recordingProcessor) ProcessInsertGetID(_ context.Context, _ *query.Builder, statement string, values []any, _ string) (int64, error) {
+	p.db.incremented = true
+	p.db.record(statement, values)
+	return 1, nil
+}
+
+// wiredRow is what every entity of this package answers through its embedded
+// Model.
+type wiredRow interface {
+	Table() *model.Table
+	Exists() bool
+	GetAttribute(key string) any
+	Save(ctx context.Context, g security.Grant) (bool, error)
+}
+
+// tenantScoped reports that statement filters or stamps the tenant column and
+// that the Grant's tenant is among its bindings.
+func tenantScoped(statement string, bindings []any, tenant string) bool {
+	if !strings.Contains(statement, "tenant_id") {
+		return false
+	}
+	for _, binding := range bindings {
+		if binding == tenant {
+			return true
+		}
+	}
+	return false
+}
+
 func TestEveryModelIsWiredAndTenantScoped(t *testing.T) {
 	t.Parallel()
 
-	handle := nilHandle()
-	for table, rows := range map[string]struct {
-		key      string
-		keyType  string
-		incr     bool
-		tenant   string
-		entityOK bool
-	}{
-		"wallets": {
-			key: wallet.Wallets(handle).GetTable(), keyType: wallet.Wallets(handle).KeyType,
-			incr: wallet.Wallets(handle).Incrementing, tenant: wallet.Wallets(handle).TenantColumn,
-			entityOK: model.ModelOf(wallet.Wallets(handle).Entity) != nil,
+	ctx := context.Background()
+	g := security.SystemGrant(wallet.WalletView, "acme")
+
+	// Each case builds an unsaved row with an application-generated key, on
+	// the handle it is given, and the core query of its table.
+	for table, build := range map[string]func(db model.DB) (*model.Builder, wiredRow, error){
+		"wallets": func(db model.DB) (*model.Builder, wiredRow, error) {
+			row, err := wallet.Wallets(db).New()
+			if err != nil {
+				return nil, nil, err
+			}
+			row.ID = "row-1"
+			return wallet.Wallets(db).Base(), row, nil
 		},
-		"wallet_operations": {
-			key: wallet.Operations(handle).GetTable(), keyType: wallet.Operations(handle).KeyType,
-			incr: wallet.Operations(handle).Incrementing, tenant: wallet.Operations(handle).TenantColumn,
-			entityOK: model.ModelOf(wallet.Operations(handle).Entity) != nil,
+		"wallet_operations": func(db model.DB) (*model.Builder, wiredRow, error) {
+			row, err := wallet.Operations(db).New()
+			if err != nil {
+				return nil, nil, err
+			}
+			row.ID = "row-1"
+			return wallet.Operations(db).Base(), row, nil
 		},
-		"wallet_entries": {
-			key: wallet.Entries(handle).GetTable(), keyType: wallet.Entries(handle).KeyType,
-			incr: wallet.Entries(handle).Incrementing, tenant: wallet.Entries(handle).TenantColumn,
-			entityOK: model.ModelOf(wallet.Entries(handle).Entity) != nil,
+		"wallet_entries": func(db model.DB) (*model.Builder, wiredRow, error) {
+			row, err := wallet.Entries(db).New()
+			if err != nil {
+				return nil, nil, err
+			}
+			row.ID = "row-1"
+			return wallet.Entries(db).Base(), row, nil
 		},
-		"wallet_conversions": {
-			key: wallet.Conversions(handle).GetTable(), keyType: wallet.Conversions(handle).KeyType,
-			incr: wallet.Conversions(handle).Incrementing, tenant: wallet.Conversions(handle).TenantColumn,
-			entityOK: model.ModelOf(wallet.Conversions(handle).Entity) != nil,
+		"wallet_conversions": func(db model.DB) (*model.Builder, wiredRow, error) {
+			row, err := wallet.Conversions(db).New()
+			if err != nil {
+				return nil, nil, err
+			}
+			row.ID = "row-1"
+			return wallet.Conversions(db).Base(), row, nil
 		},
-		"wallet_charges": {
-			key: wallet.Charges(handle).GetTable(), keyType: wallet.Charges(handle).KeyType,
-			incr: wallet.Charges(handle).Incrementing, tenant: wallet.Charges(handle).TenantColumn,
-			entityOK: model.ModelOf(wallet.Charges(handle).Entity) != nil,
+		"wallet_charges": func(db model.DB) (*model.Builder, wiredRow, error) {
+			row, err := wallet.Charges(db).New()
+			if err != nil {
+				return nil, nil, err
+			}
+			row.ID = "row-1"
+			return wallet.Charges(db).Base(), row, nil
 		},
 	} {
-		if rows.key != table {
-			t.Errorf("a model answers for table %q, want %q", rows.key, table)
+		db := newRecordingDB()
+		base, row, err := build(db)
+		if err != nil {
+			t.Fatalf("%s: building a row: %v", table, err)
 		}
-		if rows.keyType != "string" || rows.incr {
-			t.Errorf("%s has key type %q, incrementing %t; want application-generated text", table, rows.keyType, rows.incr)
+
+		if got := base.Table().Name(); got != table {
+			t.Errorf("a model answers for table %q, want %q", got, table)
 		}
-		if rows.tenant != "tenant_id" {
-			t.Errorf("%s has tenant column %q, want tenant_id", table, rows.tenant)
+		key := base.Table().MorphModel(db)
+		if key.GetKeyName() != "id" || key.GetKeyType() != "string" {
+			t.Errorf("%s has key %q of type %q; want application-generated text in id", table, key.GetKeyName(), key.GetKeyType())
 		}
-		if !rows.entityOK {
-			t.Errorf("%s returned an entity whose embedded Model is not wired to it", table)
+		if row.Table() != base.Table() || row.Exists() {
+			t.Errorf("%s returned an entity whose embedded Model is not wired to its table", table)
+		}
+
+		if _, err := row.Save(ctx, g); err != nil {
+			t.Fatalf("%s: saving a new row: %v", table, err)
+		}
+		if db.incremented || row.GetAttribute("id") != "row-1" {
+			t.Errorf("%s asked the engine for an incremented key, or replaced the one it was given with %v; want application-generated text", table, row.GetAttribute("id"))
+		}
+		if len(db.statements) != 1 || !tenantScoped(db.statements[0], db.bindings[0], "acme") {
+			t.Errorf("%s wrote %q with %v; want one insert stamped with the Grant's tenant in tenant_id", table, db.statements, db.bindings)
+		}
+
+		if _, err := base.WhereKey("row-1").First(ctx, g); err != nil {
+			t.Fatalf("%s: reading a row: %v", table, err)
+		}
+		if len(db.statements) != 2 || !tenantScoped(db.statements[1], db.bindings[1], "acme") {
+			t.Errorf("%s read with %q; want a select filtered by the Grant's tenant on tenant_id", table, db.statements[len(db.statements)-1])
 		}
 	}
 }
@@ -343,7 +468,7 @@ func TestASystemGrantWithoutATenantReachesNothing(t *testing.T) {
 
 	// A system grant with no tenant names no customer. The Model refuses it
 	// while preparing the query, before the nil handle can issue a statement.
-	_, err := wallet.Wallets(nilHandle()).NewQuery().WhereKey("wallet-1").First(
+	_, err := wallet.Wallets(nilHandle()).WhereKey("wallet-1").First(
 		context.Background(), security.SystemGrant(wallet.WalletView, ""))
 	if !errors.Is(err, model.ErrNoTenant) {
 		t.Fatalf("a system grant with no tenant returned %v, want ErrNoTenant", err)

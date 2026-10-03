@@ -7,7 +7,6 @@ import (
 	"github.com/arandu-io/framework/data"
 	"github.com/arandu-io/framework/security"
 	"github.com/arandu-io/framework/validation"
-	"github.com/arandu-io/hesape/database/model"
 )
 
 // sortableWallet is the ordering allowlist. A column name taken directly
@@ -99,11 +98,11 @@ func (s *WalletService) Open(ctx context.Context, actor security.Subject, in Ope
 	if err != nil {
 		return nil, err
 	}
-	instance, err := Wallets(s.db).NewInstance(nil, false)
+	instance, err := Wallets(s.db).New()
 	if err != nil {
 		return nil, err
 	}
-	candidate := instance.Entity
+	candidate := instance
 	candidate.ID = id
 	candidate.TenantID = data.Tenant(g)
 	candidate.HolderID = proposed.HolderID
@@ -120,7 +119,7 @@ func (s *WalletService) Open(ctx context.Context, actor security.Subject, in Ope
 		// under one name, and this turns its answer into one of ours. The
 		// lookup runs after the failure rather than before it, because a check
 		// that runs before is a check two concurrent requests both pass.
-		taken, lookupErr := Wallets(s.db).NewQuery().
+		taken, lookupErr := Wallets(s.db).
 			Where("holder_id", "=", proposed.HolderID).
 			Where("slug", "=", proposed.Slug).
 			Exists(ctx, g)
@@ -166,8 +165,7 @@ func (s *WalletService) SetCredit(ctx context.Context, actor security.Subject, i
 		return nil, err
 	}
 
-	rows := Wallets(s.db)
-	record, err := rows.NewQuery().WhereKey(in.WalletID).First(ctx, g)
+	record, err := Wallets(s.db).WhereKey(in.WalletID).First(ctx, g)
 	if err != nil {
 		return nil, err
 	}
@@ -186,7 +184,7 @@ func (s *WalletService) SetCredit(ctx context.Context, actor security.Subject, i
 		return nil, ErrCreditNegative
 	}
 
-	affected, err := rows.NewQuery().
+	affected, err := Wallets(s.db).
 		WhereKey(in.WalletID).
 		Where("balance", ">=", int64(-limit)).
 		Update(ctx, g, map[string]any{"credit_limit": int64(limit)})
@@ -197,7 +195,7 @@ func (s *WalletService) SetCredit(ctx context.Context, actor security.Subject, i
 		return nil, ErrCreditBelowBalance
 	}
 
-	written, err := rows.NewQuery().WhereKey(in.WalletID).First(ctx, g)
+	written, err := Wallets(s.db).WhereKey(in.WalletID).First(ctx, g)
 	if err != nil {
 		return nil, err
 	}
@@ -255,7 +253,7 @@ func (s *WalletService) Close(ctx context.Context, actor security.Subject, in Cl
 		return nil, err
 	}
 
-	record, err := Wallets(s.db).NewQuery().WhereKey(in.WalletID).First(ctx, g)
+	record, err := Wallets(s.db).WhereKey(in.WalletID).First(ctx, g)
 	if err != nil {
 		return nil, err
 	}
@@ -291,7 +289,7 @@ func (s *WalletService) Reopen(ctx context.Context, actor security.Subject, wall
 		return nil, err
 	}
 
-	record, err := Wallets(s.db).NewQuery().WhereKey(walletID).First(ctx, g)
+	record, err := Wallets(s.db).WhereKey(walletID).First(ctx, g)
 	if err != nil {
 		return nil, err
 	}
@@ -312,8 +310,6 @@ func (s *WalletService) Reopen(ctx context.Context, actor security.Subject, wall
 // syntax has to be able to read it. So each exported method asks, and this
 // writes.
 func (s *WalletService) setClosed(ctx context.Context, g security.Grant, walletID string, closing bool) (*Wallet, error) {
-	rows := Wallets(s.db)
-
 	// The state being left is in the predicate as well as the state being
 	// reached, so closing a wallet twice writes once and the second call is
 	// told which of the two things happened.
@@ -321,7 +317,7 @@ func (s *WalletService) setClosed(ctx context.Context, g security.Grant, walletI
 	if !closing {
 		was, becomes = 1, 0
 	}
-	page := rows.NewQuery().WhereKey(walletID).Where("closed", "=", was)
+	page := Wallets(s.db).WhereKey(walletID).Where("closed", "=", was)
 	if closing {
 		page = page.Where("balance", "=", int64(0))
 	}
@@ -333,7 +329,7 @@ func (s *WalletService) setClosed(ctx context.Context, g security.Grant, walletI
 		return nil, s.whyNotClosed(ctx, g, walletID, closing)
 	}
 
-	written, err := rows.NewQuery().WhereKey(walletID).First(ctx, g)
+	written, err := Wallets(s.db).WhereKey(walletID).First(ctx, g)
 	if err != nil {
 		return nil, err
 	}
@@ -363,7 +359,7 @@ func (s *WalletService) setClosed(ctx context.Context, g security.Grant, walletI
 // answer depends on what the row says now rather than on what it said when the
 // wallet was loaded.
 func (s *WalletService) whyNotClosed(ctx context.Context, g security.Grant, walletID string, closing bool) error {
-	record, err := Wallets(s.db).NewQuery().WhereKey(walletID).First(ctx, g)
+	record, err := Wallets(s.db).WhereKey(walletID).First(ctx, g)
 	if err != nil {
 		return err
 	}
@@ -417,7 +413,7 @@ func (s *WalletService) FindBySlug(ctx context.Context, actor security.Subject, 
 		return nil, err
 	}
 
-	record, err := Wallets(s.db).NewQuery().
+	record, err := Wallets(s.db).
 		Where("holder_id", "=", holderID).
 		Where("slug", "=", slug).
 		First(ctx, g)
@@ -473,7 +469,7 @@ func (s *WalletService) CanWithdraw(ctx context.Context, actor security.Subject,
 		return false, err
 	}
 
-	record, err := Wallets(s.db).NewQuery().WhereKey(walletID).First(ctx, g)
+	record, err := Wallets(s.db).WhereKey(walletID).First(ctx, g)
 	if err != nil {
 		return false, err
 	}
@@ -541,8 +537,7 @@ func (s *WalletService) Describe(ctx context.Context, actor security.Subject, in
 		return nil, err
 	}
 
-	rows := Wallets(s.db)
-	record, err := rows.NewQuery().WhereKey(in.WalletID).First(ctx, g)
+	record, err := Wallets(s.db).WhereKey(in.WalletID).First(ctx, g)
 	if err != nil {
 		return nil, err
 	}
@@ -553,7 +548,7 @@ func (s *WalletService) Describe(ctx context.Context, actor security.Subject, in
 		return nil, err
 	}
 
-	if _, err := rows.NewQuery().WhereKey(in.WalletID).Update(ctx, g, map[string]any{
+	if _, err := Wallets(s.db).WhereKey(in.WalletID).Update(ctx, g, map[string]any{
 		"name":        in.Name,
 		"description": in.Description,
 		"meta":        in.Meta,
@@ -561,7 +556,7 @@ func (s *WalletService) Describe(ctx context.Context, actor security.Subject, in
 		return nil, err
 	}
 
-	relabelled, err := rows.NewQuery().WhereKey(in.WalletID).First(ctx, g)
+	relabelled, err := Wallets(s.db).WhereKey(in.WalletID).First(ctx, g)
 	if err != nil {
 		return nil, err
 	}
@@ -591,7 +586,7 @@ func (s *WalletService) Find(ctx context.Context, actor security.Subject, id str
 		return nil, err
 	}
 
-	record, err := Wallets(s.db).NewQuery().WhereKey(id).First(ctx, g)
+	record, err := Wallets(s.db).WhereKey(id).First(ctx, g)
 	if err != nil {
 		return nil, err
 	}
@@ -631,22 +626,21 @@ func (s *WalletService) List(ctx context.Context, actor security.Subject, in Lis
 		holder = actor.ID
 	}
 
-	rows := Wallets(s.db)
-	page := rows.NewQuery()
+	page := Wallets(s.db)
 	if holder != "" {
 		page = page.Where("holder_id", "=", holder)
 	}
 	if in.Query.Cursor != "" {
-		anchor, err := rows.NewQuery().WhereKey(in.Query.Cursor).Value(ctx, g, column)
+		anchor, err := Wallets(s.db).WhereKey(in.Query.Cursor).Value(ctx, g, column)
 		if err != nil {
 			return nil, err
 		}
 		if anchor == nil {
 			return nil, nil
 		}
-		page = page.Where(func(after *model.Builder[Wallet]) {
+		page = page.Where(func(after *WalletQuery) {
 			after.Where(column, ">", anchor).
-				OrWhere(func(equal *model.Builder[Wallet]) {
+				OrWhere(func(equal *WalletQuery) {
 					equal.Where(column, "=", anchor).Where("id", ">", in.Query.Cursor)
 				})
 		})

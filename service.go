@@ -117,7 +117,7 @@ func (s *WalletService) behind(ctx context.Context, g security.Grant, entries []
 		return map[string]Operation{}, map[string]Conversion{}, map[string]Charge{}, nil
 	}
 
-	rows, err := Operations(s.db).NewQuery().WhereIn("id", ids).Get(ctx, g)
+	rows, err := Operations(s.db).WhereIn("id", ids).Get(ctx, g)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -140,7 +140,7 @@ func (s *WalletService) behind(ctx context.Context, g security.Grant, entries []
 
 	conversions := make(map[string]Conversion, len(converting))
 	if len(converting) > 0 {
-		rates, err := Conversions(s.db).NewQuery().WhereIn("operation_id", converting).Get(ctx, g)
+		rates, err := Conversions(s.db).WhereIn("operation_id", converting).Get(ctx, g)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -153,7 +153,7 @@ func (s *WalletService) behind(ctx context.Context, g security.Grant, entries []
 
 	charges := make(map[string]Charge, len(paying))
 	if len(paying) > 0 {
-		charged, err := Charges(s.db).NewQuery().WhereIn("operation_id", paying).Get(ctx, g)
+		charged, err := Charges(s.db).WhereIn("operation_id", paying).Get(ctx, g)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -251,7 +251,7 @@ func (s *WalletService) charge(ctx context.Context, g security.Grant, source, ta
 		return nil, nil, fmt.Errorf("%w: it names one of the two wallets the payment is between", ErrFeeWallet)
 	}
 
-	collector, err := Wallets(s.db).NewQuery().WhereKey(schedule.WalletID).First(ctx, g)
+	collector, err := Wallets(s.db).WhereKey(schedule.WalletID).First(ctx, g)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -280,7 +280,7 @@ func (s *WalletService) charge(ctx context.Context, g security.Grant, source, ta
 
 // reversed reports whether an operation has already been undone.
 func (s *WalletService) reversed(ctx context.Context, g security.Grant, operationID string) (bool, error) {
-	return Operations(s.db).NewQuery().
+	return Operations(s.db).
 		Where("reverses_id", "=", operationID).
 		Where("kind", "=", string(OperationReversal)).
 		Exists(ctx, g)
@@ -299,7 +299,7 @@ func (s *WalletService) reversed(ctx context.Context, g security.Grant, operatio
 // moved the money, which for a movement that waited is the confirmation and not
 // the request.
 func (s *WalletService) mirror(ctx context.Context, g security.Grant, actor security.Subject, operationID string) ([]movement, error) {
-	written, err := Entries(s.db).NewQuery().
+	written, err := Entries(s.db).
 		Where("operation_id", "=", operationID).
 		OrderBy("position").
 		Get(ctx, g)
@@ -310,13 +310,12 @@ func (s *WalletService) mirror(ctx context.Context, g security.Grant, actor secu
 		return nil, ErrNotFound
 	}
 
-	rows := Wallets(s.db)
 	movements := make([]movement, 0, len(written))
 	for _, entry := range written {
 		if entry == nil || !entry.Settled {
 			continue
 		}
-		holder, err := rows.NewQuery().WhereKey(entry.WalletID).First(ctx, g)
+		holder, err := Wallets(s.db).WhereKey(entry.WalletID).First(ctx, g)
 		if err != nil {
 			return nil, err
 		}
@@ -351,7 +350,7 @@ func (s *WalletService) mirror(ctx context.Context, g security.Grant, actor secu
 // runs at this write. A pending withdrawal holds nothing, so the balance that
 // decides is the balance now.
 func (s *WalletService) settle(ctx context.Context, g security.Grant, actor security.Subject, in ConfirmRequest, operationID string) ([]movement, error) {
-	written, err := Entries(s.db).NewQuery().
+	written, err := Entries(s.db).
 		Where("operation_id", "=", operationID).
 		OrderBy("position").
 		Get(ctx, g)
@@ -362,13 +361,12 @@ func (s *WalletService) settle(ctx context.Context, g security.Grant, actor secu
 		return nil, ErrNotFound
 	}
 
-	rows := Wallets(s.db)
 	movements := make([]movement, 0, len(written))
 	for _, entry := range written {
 		if entry == nil || entry.Settled {
 			continue
 		}
-		holder, err := rows.NewQuery().WhereKey(entry.WalletID).First(ctx, g)
+		holder, err := Wallets(s.db).WhereKey(entry.WalletID).First(ctx, g)
 		if err != nil {
 			return nil, err
 		}
@@ -397,7 +395,7 @@ func (s *WalletService) settle(ctx context.Context, g security.Grant, actor secu
 
 // confirmed reports whether an operation has already been made to count.
 func (s *WalletService) confirmed(ctx context.Context, g security.Grant, operationID string) (bool, error) {
-	return Operations(s.db).NewQuery().
+	return Operations(s.db).
 		Where("reverses_id", "=", operationID).
 		Where("kind", "=", string(OperationConfirmation)).
 		Exists(ctx, g)
@@ -736,7 +734,7 @@ func (s *WalletService) walletsByID(ctx context.Context, g security.Grant, ids [
 	if len(ids) == 0 {
 		return out, nil
 	}
-	rows, err := Wallets(s.db).NewQuery().WhereIn("id", ids).Get(ctx, g)
+	rows, err := Wallets(s.db).WhereIn("id", ids).Get(ctx, g)
 	if err != nil {
 		return nil, err
 	}
@@ -840,7 +838,7 @@ func (s *WalletService) refunded(ctx context.Context, g security.Grant, lines []
 	if len(ids) == 0 {
 		return false, nil
 	}
-	return Purchases(s.db).NewQuery().
+	return Purchases(s.db).
 		WhereIn("settles_id", ids).
 		Where("kind", "=", string(PurchaseRefund)).
 		Exists(ctx, g)
@@ -876,11 +874,10 @@ func (r Reconciliation) Difference() Amount { return r.Wallet.Balance - r.Settle
 // difference that is only the reading.
 func (s *WalletService) walk(ctx context.Context, g security.Grant, holder Wallet) (Reconciliation, error) {
 	out := Reconciliation{Wallet: holder, Frozen: bool(holder.Frozen)}
-	entries := Entries(s.db)
 	after := int64(0)
 	expected := int64(1)
 	for {
-		page, err := entries.NewQuery().
+		page, err := Entries(s.db).
 			Where("wallet_id", "=", holder.ID).
 			Where("sequence", ">", after).
 			Where("sequence", "<=", holder.LastSequence).
@@ -940,7 +937,7 @@ func (s *WalletService) walk(ctx context.Context, g security.Grant, holder Walle
 // and refusing to freeze because it moved would leave a wallet unserved by
 // nothing while the difference is still there.
 func (s *WalletService) freeze(ctx context.Context, g security.Grant, walletID string) error {
-	affected, err := Wallets(s.db).NewQuery().
+	affected, err := Wallets(s.db).
 		WhereKey(walletID).
 		Update(ctx, g, map[string]any{"frozen": int64(1)})
 	if err != nil {

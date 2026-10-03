@@ -7,7 +7,6 @@ import (
 
 	"github.com/arandu-io/framework/data"
 	"github.com/arandu-io/framework/security"
-	"github.com/arandu-io/hesape/database/model"
 )
 
 // PayRequest is what paying for a basket takes.
@@ -86,7 +85,7 @@ func (s *WalletService) Pay(ctx context.Context, actor security.Subject, in PayR
 		return Receipt{}, err
 	}
 
-	payer, err := Wallets(s.db).NewQuery().WhereKey(in.PayerWalletID).First(ctx, g)
+	payer, err := Wallets(s.db).WhereKey(in.PayerWalletID).First(ctx, g)
 	if err != nil {
 		return Receipt{}, err
 	}
@@ -151,7 +150,7 @@ func (s *WalletService) Refund(ctx context.Context, actor security.Subject, in R
 	for _, id := range in.PurchaseIDs {
 		ids = append(ids, id)
 	}
-	rows, err := Purchases(s.db).NewQuery().WhereIn("id", ids).OrderBy("position").Get(ctx, g)
+	rows, err := Purchases(s.db).WhereIn("id", ids).OrderBy("position").Get(ctx, g)
 	if err != nil {
 		return Receipt{}, err
 	}
@@ -265,7 +264,7 @@ func (s *WalletService) Bought(ctx context.Context, actor security.Subject, ques
 		}
 	}
 
-	rows, err := Purchases(s.db).NewQuery().
+	rows, err := Purchases(s.db).
 		WhereIn("owner_wallet_id", owners).
 		WhereIn("receiver_wallet_id", receivers).
 		WhereIn("product_key", products).
@@ -319,7 +318,7 @@ func (s *WalletService) PurchasesOf(ctx context.Context, actor security.Subject,
 		return nil, err
 	}
 
-	owner, err := Wallets(s.db).NewQuery().WhereKey(walletID).First(ctx, g)
+	owner, err := Wallets(s.db).WhereKey(walletID).First(ctx, g)
 	if err != nil {
 		return nil, err
 	}
@@ -336,19 +335,18 @@ func (s *WalletService) PurchasesOf(ctx context.Context, actor security.Subject,
 	// lines of one basket take their sequences from the ledgers of two
 	// different wallets. Anchoring on it alone would skip every row that shares
 	// the sequence of the last one on a page.
-	rows := Purchases(s.db)
-	query := rows.NewQuery().Where("owner_wallet_id", "=", owner.ID)
+	query := Purchases(s.db).Where("owner_wallet_id", "=", owner.ID)
 	if page.Cursor != "" {
-		anchor, err := rows.NewQuery().WhereKey(page.Cursor).Value(ctx, g, "sequence")
+		anchor, err := Purchases(s.db).WhereKey(page.Cursor).Value(ctx, g, "sequence")
 		if err != nil {
 			return nil, err
 		}
 		if anchor == nil {
 			return nil, nil
 		}
-		query = query.Where(func(before *model.Builder[Purchase]) {
+		query = query.Where(func(before *PurchaseQuery) {
 			before.Where("sequence", "<", anchor).
-				OrWhere(func(equal *model.Builder[Purchase]) {
+				OrWhere(func(equal *PurchaseQuery) {
 					equal.Where("sequence", "=", anchor).Where("id", "<", page.Cursor)
 				})
 		})
