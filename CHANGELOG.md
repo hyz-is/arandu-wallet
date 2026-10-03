@@ -26,6 +26,16 @@ name here. They are gone.
   every path segment escaped. `Prefix` stays, and is still the address of the
   listing.
 
+### Changed
+
+- `TestEveryPublishedViewCompiles` compiles the views the way an application
+  does: it writes what `Publishes()` carries into a scratch project, runs
+  `aru view:build` at a pinned release -- v0.60.1 -- and builds the output
+  against this checkout. The test of that name it replaces compiled only what
+  somebody had already built under `storage/`, and skipped when nothing had
+  been, which in this repository was always; that is how the ten refused
+  addresses below went out in a release.
+
 ### Fixed
 
 - The published views compile with the view compiler of `aru` v0.57.0 and

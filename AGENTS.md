@@ -17,29 +17,32 @@ Nothing is finished until all four exit zero.
 
 ```sh
 export GOWORK=off
-gofmt -l $(find . -name '*.go' -not -path '*/testdata/*' -not -name '*.kyse.go' -not -path './.views-compile-check/*')
+gofmt -l $(find . -name '*.go' -not -path '*/testdata/*' -not -name '*.kyse.go')
 go build ./...
 go vet ./...
 go test -race ./...
 ```
 
-The third filter is the staging directory `tests/Unit/published_views_compile_test.go`
-writes and removes. It exists because the go command skips any directory named
-`vendor` at any depth, and the view compiler mirrors a project's view tree into
-`storage/framework/views/modules/<module>` -- so `go build ./...` never sees a
-generated view there, and a type error in one would surface when somebody opened
-the page and nowhere earlier. The test copies the tree to a path with no such
-segment and compiles it there, and skips when nothing has been built.
+The markup is the one thing none of the four opens on its own: every view source
+starts with a build tag, so the Go compiler never reads past it, and the view
+compiler refuses things the Go compiler would accept. `TestEveryPublishedViewCompiles`,
+in `tests/Unit/published_views_compile_test.go`, is what reads it. It writes what
+`Publishes()` carries into a scratch project laid out as an application's, runs
+`aru view:build` at the release pinned in `viewCompiler`, and compiles what that
+wrote against this checkout -- so a view the compiler refuses, or a field the
+markup names and the page data does not have, fails `go test` here instead of
+`aru view:build` in every application that published it. It does not skip, and
+the go command has to be able to find or fetch that release of `aru`. Raising
+the pin is how a stricter compiler is taken on.
 
-Nothing is built there in this repository any more. The view sources are kept at
-`resources/publish`, because go mod publishes no path with a segment named
-`vendor` and the address a project keeps them at has one; a directory that is not
-a project's view directory makes `aru view:build` write the compiled view beside
-the source it read. That output is gitignored and compiled by `go build ./...`
-like any other file, so running the command is still what puts a type error in
-front of a compiler -- what changed is which command reports it. It is never
-committed: the archive carries the sources by name, and a compiled view in it
-would be published over a page the project owns.
+The view sources are kept at `resources/publish`, because go mod publishes no
+path with a segment named `vendor` and the address a project keeps them at has
+one; a directory that is not a project's view directory makes `aru view:build`
+write the compiled view beside the source it read. That output is gitignored and
+compiled by `go build ./...` like any other file, so running the command here is
+a quicker look at what the test checks. It is never committed: the archive
+carries the sources by name, and a compiled view in it would be published over a
+page the project owns.
 
 `GOWORK=off` is not borrowed from somewhere else, and here it is not a
 preference either. This checkout may sit beside a Go workspace that lists the

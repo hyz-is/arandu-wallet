@@ -1,79 +1,125 @@
 package unit_test
 
 import (
+	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/arandu-io/framework/foundation"
 )
 
-// TestEveryPublishedViewCompiles builds the generated views, which no other
-// gate reaches.
+// viewCompiler is the command line whose view compiler the published views are
+// held against, at the release an application builds them with.
 //
-// The build output lands under a directory named "vendor", and the go command
-// skips any directory with that name at any depth -- so `go build ./...`,
-// `go vet ./...` and `go test ./...` all walk past it. A type error in a view
-// would surface when somebody opened the page, and nowhere earlier.
+// It is a version and never "latest", so this test changes its answer when this
+// line changes and never because somebody published something. Moving it is
+// how a stricter compiler is taken on: raise it, run the suite, and fix the
+// view it refuses here rather than in every application that publishes it.
+const viewCompiler = "github.com/arandu-io/aru@v0.60.1"
+
+// TestEveryPublishedViewCompiles publishes the views into a project of their
+// own, builds them with the view compiler an application runs, and compiles
+// what it wrote.
 //
-// The test copies the tree to a path with no such segment and compiles it
-// there, which is the only way to put those files in front of a compiler
-// without renaming the directory the publishing convention names.
+// Nothing else in this repository reads the markup. The sources open with a
+// build tag, so go build, go vet and go test never look past it, and the view
+// compiler refuses what the Go compiler would accept -- a value written into an
+// address behind text it cannot read, a value in a position no escape covers.
+// A view it refuses is a view that stops the build of every application that
+// publishes it, and without this test the first place to say so is somebody
+// else's terminal.
+//
+// The project is laid out as an application's is once it has published: each
+// file where the publication writes it, and a go.mod that resolves this package
+// to the checkout under test. What the view compiler writes then goes through
+// the Go compiler, which is what catches a field the markup names and the page
+// data does not have.
+//
+// It does not skip. A gate that steps aside when its input is missing is how
+// the views stopped compiling with nothing here saying so.
 func TestEveryPublishedViewCompiles(t *testing.T) {
 	root := packageRoot(t)
-	generated := filepath.Join(root, "storage", "framework", "views")
-	if _, err := os.Stat(generated); err != nil {
-		t.Skip("no views have been built; run aru view:build")
-	}
+	project := t.TempDir()
 
-	var sources []string
-	err := filepath.WalkDir(generated, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !entry.IsDir() && strings.HasSuffix(path, ".go") {
-			sources = append(sources, path)
-		}
-		return nil
-	})
+	publications, err := foundation.Publications(module(t))
 	if err != nil {
-		t.Fatalf("walk the generated views: %v", err)
+		t.Fatalf("reading what the module publishes: %v", err)
 	}
-	if len(sources) == 0 {
-		t.Fatal("the view directory holds no Go file, so this gate compiled nothing")
+	var published int
+	for _, publication := range publications {
+		from := publication.From
+		if from == "" {
+			from = "."
+		}
+		err := fs.WalkDir(publication.Files, from, func(name string, entry fs.DirEntry, err error) error {
+			if err != nil || entry.IsDir() {
+				return err
+			}
+			relative := name
+			if from != "." {
+				relative = strings.TrimPrefix(strings.TrimPrefix(name, from), "/")
+			}
+			body, err := fs.ReadFile(publication.Files, name)
+			if err != nil {
+				return err
+			}
+			target := filepath.Join(project, filepath.FromSlash(path.Join(publication.To, relative)))
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return err
+			}
+			published++
+			return os.WriteFile(target, body, 0o644)
+		})
+		if err != nil {
+			t.Fatalf("publishing the %s files: %v", publication.Tag, err)
+		}
+	}
+	if published == 0 {
+		t.Fatal("the module publishes no file, so this gate would compile nothing")
 	}
 
-	// The copy lands inside the module so its imports resolve against the real
-	// go.mod. A temporary directory elsewhere is not part of any module, and
-	// the compiler refuses it before it reads a single view.
-	staging := filepath.Join(root, ".views-compile-check")
-	t.Cleanup(func() { _ = os.RemoveAll(staging) })
-	if err := os.RemoveAll(staging); err != nil {
+	// The application's go.mod names this package and points it at the
+	// checkout, so the views compile against the code beside them rather than
+	// against a release. The sums come from here: the application needs no
+	// module this package does not already require.
+	goMod := readReleaseFile(t, root, "go.mod")
+	language := captureReleaseValue(t, goMod, `(?m)^go ([0-9.]+)$`, "go directive in go.mod")
+	modulePath := captureReleaseValue(t, goMod, `(?m)^module (\S+)$`, "module path in go.mod")
+	manifest := "module example.com/application\n\n" +
+		"go " + language + "\n\n" +
+		"require " + modulePath + " v0.0.0-00010101000000-000000000000\n\n" +
+		"replace " + modulePath + " => " + strconv.Quote(root) + "\n"
+	if err := os.WriteFile(filepath.Join(project, "go.mod"), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for _, source := range sources {
-		relative, err := filepath.Rel(generated, source)
-		if err != nil {
-			t.Fatal(err)
-		}
-		// The point of the copy: drop the "vendor" segment the go command skips.
-		target := filepath.Join(staging, strings.ReplaceAll(relative, "vendor"+string(filepath.Separator), ""))
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		body, err := os.ReadFile(source)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(target, body, 0o644); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.WriteFile(filepath.Join(project, "go.sum"), []byte(readReleaseFile(t, root, "go.sum")), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
-	build := exec.Command("go", "build", "./...")
-	build.Dir = staging
-	build.Env = append(os.Environ(), "GOWORK=off", "GOFLAGS=-mod=mod")
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("the published views do not compile, and no other gate would have said so:\n%s", output)
+	inProject(t, project, "the published views do not compile with "+viewCompiler+", so no application that publishes them can build",
+		"go", "run", viewCompiler, "view:build")
+	inProject(t, project, "the views "+viewCompiler+" compiled do not build against this package",
+		"go", "build", "./...")
+}
+
+// inProject runs one command in the scratch project, outside any workspace,
+// and fails with what it printed.
+//
+// -mod=mod lets the go command fill in the requirements the application's
+// go.mod leaves to this package's, which is what an application's own `go mod
+// tidy` would have written.
+func inProject(t *testing.T, dir, failure string, name string, args ...string) {
+	t.Helper()
+
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GOWORK=off", "GOFLAGS="+strings.TrimSpace(os.Getenv("GOFLAGS")+" -mod=mod"))
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%s:\n$ %s %s\n%s", failure, name, strings.Join(args, " "), output)
 	}
 }
