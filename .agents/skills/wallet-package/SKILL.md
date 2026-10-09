@@ -38,6 +38,7 @@ The construction, in `Build`, after the session store exists and before
 ```go
 	walletModule, err := wallet.New(wallet.Config{
 		Tenant: cfg.Auth.Tenant,
+		CSRF:   csrf,
 	}, db, sessions)
 	if err != nil {
 		return App{}, err
@@ -76,6 +77,7 @@ route that authorized correctly. The migration has not run.
 | field | required | meaning |
 | --- | --- | --- |
 | `Tenant` | yes | the customer a visitor with no session is read as. From the application's configuration, never from the request |
+| `CSRF` | yes | issues the token every form on the screens carries: the `csrf` that `Build` already makes from `cfg.Session.CSRFTTL` and hands to `middleware.CSRFProtect`. Every screen here moves money |
 | `Prefix` | no | where the routes are mounted. Defaults to `/wallet` |
 | `PageSize` | no | how many records one page answers with. Defaults to 25, refused above 200 |
 

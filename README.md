@@ -33,12 +33,16 @@ The construction, in `Build`, after the session store exists and before
 ```go
 	walletModule, err := wallet.New(wallet.Config{
 		Tenant: cfg.Auth.Tenant,
-		CSRF:   cfg.CSRF,
+		CSRF:   csrf,
 	}, db, sessions)
 	if err != nil {
 		return App{}, err
 	}
 ```
+
+`csrf` is the issuer `Build` already makes from `cfg.Session.CSRFTTL` and hands
+to `middleware.CSRFProtect`, so the token a wallet screen issues is the one the
+middleware checks. The configuration has no `CSRF` field of its own.
 
 And the registration, inside the `k.Register(...)` call already there:
 
