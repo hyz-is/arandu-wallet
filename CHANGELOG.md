@@ -16,6 +16,26 @@ name here. They are gone.
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-10-09
+
+### Changed
+
+- Requires Framework v0.55.1, Hesape v0.52.0, Kyse v0.33.0 and the MySQL,
+  PostgreSQL and SQLite connectors v0.11.0. The manifest's framework floor is
+  `>= 0.55`.
+- `FormState.FieldError` asks the embedded page by `FieldError`, the name
+  Hesape now gives it, instead of the deprecated `First`. It answers the same
+  message.
+- `rates/frankfurter` requires Framework v0.55.1, Hesape v0.52.0 and this
+  package at v0.9.2, and its manifest's framework floor is `>= 0.55`.
+
+### Fixed
+
+- The PostgreSQL suite writes a space in a connection setting as `%20`. The
+  driver now reads a `+` in a connection URI as a plus, so the serializable
+  default the resilience tests ask for reached the server misspelled and every
+  connection was refused.
+
 ## [0.9.2] - 2026-10-09
 
 ### Added
