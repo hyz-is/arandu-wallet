@@ -161,7 +161,11 @@ func withSearchPath(t *testing.T, dsn, schema string, settings map[string]string
 	for name, value := range settings {
 		query.Set(name, value)
 	}
-	parsed.RawQuery = query.Encode()
+	// Encode writes a space as '+', and the driver reads connection URIs the
+	// way libpq does, where '+' is a literal plus. A setting carrying a space
+	// -- "-c name=value" -- would reach the server as "-c+name=value". Encode
+	// already escapes a literal plus as %2B, so every '+' left is a space.
+	parsed.RawQuery = strings.ReplaceAll(query.Encode(), "+", "%20")
 	return parsed.String()
 }
 
