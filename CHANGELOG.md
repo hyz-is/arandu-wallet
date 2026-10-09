@@ -16,6 +16,26 @@ name here. They are gone.
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-10-09
+
+### Added
+
+- The `arandu-ecosystem` skill: the shared architecture an application keeps
+  before it builds a second implementation of what an Arandu module owns.
+
+### Changed
+
+- The `wallet-package` skill carries `audience: app` under `metadata` in its
+  frontmatter, which is what `aru skills:sync` reads to copy it into an
+  application whose `go.mod` requires this package. No other skill is marked.
+
+### Fixed
+
+- The wiring in the README passed `CSRF: cfg.CSRF`, a field the application
+  configuration does not have, and the one in the `wallet-package` skill left
+  `CSRF` out, which `New` refuses. Both pass `CSRF: csrf`, the issuer `Build`
+  makes from `cfg.Session.CSRFTTL` for `middleware.CSRFProtect`.
+
 ## [0.9.1] - 2026-10-03
 
 ### Added

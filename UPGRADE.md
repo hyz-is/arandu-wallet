@@ -7,6 +7,14 @@ describing a publishing migration and a Repository removal that both happened
 before `v0.1.0` of this package. They are gone, and what this package actually
 changed at each of its own versions is below.
 
+## v0.9.2
+
+Nothing to change in an application: this release touches the README and the
+skills, not Go code. `aru skills:sync` now offers `wallet-package` to a project
+that requires this version. An application wired from the earlier README or
+skill did not compile or did not boot, because of the `CSRF` line; one that
+runs already passes the issuer `Build` makes.
+
 ## v0.9.1
 
 ### Republish the views
