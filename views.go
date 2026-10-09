@@ -292,15 +292,14 @@ type OperationsPageData struct {
 
 // FormState is what a kyse input asks for its message and for what was typed.
 //
-// It exists because the component library asks for FieldError and the page the
-// framework carries answers First. One adapter, in one place, rather than the
-// same three lines on every screen -- and it is a type rather than a method on
-// each page so that a screen added later cannot forget to write it.
+// The page it embeds answers FieldError and OldOr itself, which are the two
+// methods an input asks for. It is a type rather than a method on each page so
+// that a screen added later reaches the inputs the same way.
 type FormState struct{ view.Page }
 
 // FieldError is the first message for an input, and empty for an input nothing
 // rejected.
-func (f FormState) FieldError(name string) string { return f.First(name) }
+func (f FormState) FieldError(name string) string { return f.Page.FieldError(name) }
 
 // Form is the state the inputs of this screen read.
 func (d IndexPageData) Form() FormState { return FormState{Page: d.Page} }

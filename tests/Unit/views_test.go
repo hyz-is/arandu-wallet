@@ -327,3 +327,24 @@ func TestEveryViewThisPackagePublishesIsRenderedByAHandler(t *testing.T) {
 		}
 	}
 }
+
+// TestTheFormAnswersTheFirstMessageOfAnInput holds what an input reads through
+// Form: the first message validation wrote for its name, and nothing for a
+// name it accepted.
+func TestTheFormAnswersTheFirstMessageOfAnInput(t *testing.T) {
+	page := view.Page{Errors: map[string][]string{
+		"amount": {"The amount must be positive.", "The amount has too many decimals."},
+	}}
+
+	for _, form := range []wallet.FormState{
+		wallet.IndexPageData{Page: page}.Form(),
+		wallet.StatementPageData{Page: page}.Form(),
+	} {
+		if got, want := form.FieldError("amount"), "The amount must be positive."; got != want {
+			t.Errorf("FieldError(amount) = %q, want %q", got, want)
+		}
+		if got := form.FieldError("reference"); got != "" {
+			t.Errorf("FieldError(reference) = %q for an input nothing rejected, want empty", got)
+		}
+	}
+}
