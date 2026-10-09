@@ -2,6 +2,8 @@
 name: wallet-package
 description: Install, wire and use the Arandu Wallet package (Go, Arandu) in an application. Use when the request is to "install Arandu Wallet", "add wallet to the app", "go get github.com/hyz-is/arandu-wallet", "wire it into bootstrap/app.go", "register the module", "use the wallet routes", "everything under /wallet returns 403", "403 forbidden from wallet", "the table does not exist", "no such table", "change where it is mounted", "let admins read it", or when a project's go.mod already requires github.com/hyz-is/arandu-wallet. Covers the three lines of wiring and where each one goes, the Config fields and which one is required, the routes and their names, why the policy refuses everything until somebody opens it, and the migration step that is not optional.
 license: MIT
+metadata:
+  audience: app
 ---
 
 # Using Arandu Wallet
