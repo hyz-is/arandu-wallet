@@ -16,6 +16,34 @@ name here. They are gone.
 
 ## [Unreleased]
 
+## [0.9.5] - 2026-10-09
+
+### Added
+
+- `IdempotencyField`, the form field the screens carry an idempotency key in,
+  and the page data that fills it: `OperationsPageData.DepositKey`,
+  `WithdrawalKey` and `TransferKey`, and `PurchaseRow.RefundKey`.
+
+### Changed
+
+- A movement route reads the `idempotency_key` field beside the
+  `Idempotency-Key` header. A request that sends only the header is answered
+  exactly as before. A field is accepted only when it is the key the screen
+  drew into that form; a field that differs from the header beside it is
+  refused with 422, where it used to be ignored.
+
+### Fixed
+
+- The deposit, withdrawal, transfer and refund forms on the operations screen
+  complete in a browser. They posted without the `Idempotency-Key` header the
+  routes require, which a browser cannot set on a form, and every submission
+  was answered 422 for a missing key. Each form is now drawn with a key minted
+  for that page and that form, from the CSRF token the page carries, so the
+  same drawn form sent twice -- a second click, or the back button and the
+  same button -- moves the money once.
+- The test that compiles the published views runs the view compiler of `aru`
+  v0.70.0, the release applications build with, instead of v0.60.1.
+
 ## [0.9.4] - 2026-10-09
 
 ### Fixed

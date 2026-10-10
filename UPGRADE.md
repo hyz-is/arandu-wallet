@@ -7,6 +7,56 @@ describing a publishing migration and a Repository removal that both happened
 before `v0.1.0` of this package. They are gone, and what this package actually
 changed at each of its own versions is below.
 
+## v0.9.5
+
+No symbol is removed or changed, and no route, migration, action, policy
+decision, tenant rule, amount or idempotency storage changes. The operations
+screen changes, so an application that published the views republishes it.
+
+### Republish the operations screen
+
+Its deposit, withdrawal, transfer and refund forms now carry a hidden
+`idempotency_key` field with the key the screen drew for each of them. Without
+it the forms are answered 422 for a missing key, as they were before this
+release. Preview, publish and rebuild:
+
+```sh
+aru vendor:publish --tag=view
+aru vendor:publish --tag=view --apply
+aru view:build
+```
+
+`resources/views/modules/wallet/operations.kyse.go` is reported as `update`
+when it was never edited, and replaced. One you changed outside its custom
+markers is reported as a `conflict` and left alone: publish over it with
+`--force`, which keeps only what you wrote between `arandu:begin custom` and
+`arandu:end custom`, or add the field to each form by hand, beside `@csrf`:
+
+| form posting to | add |
+|---|---|
+| `{{ .DepositURL }}` | `<input type="hidden" name="idempotency_key" value="{{ .DepositKey }}">` |
+| `{{ .WithdrawalURL }}` | `<input type="hidden" name="idempotency_key" value="{{ .WithdrawalKey }}">` |
+| `{{ .TransferURL }}` | `<input type="hidden" name="idempotency_key" value="{{ .TransferKey }}">` |
+| `{{ .RefundURL }}` | `<input type="hidden" name="idempotency_key" value="{{ line.RefundKey }}">` |
+
+The index and statement screens do not change.
+
+### A form of your own that posts to these routes
+
+The key in the field is not a name the caller chooses: it is accepted only when
+it is the one the operations screen drew for that form, from the CSRF token the
+page carries. A form drawn by a screen of your own that posts to a movement
+route sends the `Idempotency-Key` header instead, as any other client does. A
+request that carries both has to give the same value in each; one whose field
+differs from its header is answered 422, where the field used to be ignored.
+
+### A refund form sent twice
+
+The money moves once. The second submission is answered 409, "that line has
+already been refunded", rather than as a replay, because a refund asks about
+the line before it asks about the key. That is unchanged from before; only a
+browser could not reach it.
+
 ## v0.9.4
 
 No symbol is removed or changed, and no route, migration, action, policy
