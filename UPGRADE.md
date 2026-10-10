@@ -7,6 +7,40 @@ describing a publishing migration and a Repository removal that both happened
 before `v0.1.0` of this package. They are gone, and what this package actually
 changed at each of its own versions is below.
 
+## v0.9.4
+
+No symbol is removed or changed, and no route, migration, action, policy
+decision, tenant rule or amount changes. The published views do not change, so
+nothing is republished.
+
+### `Config.CSRF` is deprecated
+
+The screens take the CSRF token `middleware.CSRFProtect` put on the request,
+so the issuer passed in `Config` is not read. Remove the line:
+
+```go
+wallet.New(wallet.Config{
+	Tenant: cfg.Auth.Tenant,
+	CSRF:   csrf, // remove
+}, db, sessions)
+```
+
+Keeping it compiles and changes nothing; `staticcheck` reports it as SA1019.
+
+### The routes have to sit behind `CSRFProtect`
+
+The application skeleton mounts it for every route, so a project made from it
+has nothing to do. Outside it the screens draw an empty token, and nothing
+checks the writes they send either: mount the module's routes behind
+`CSRFProtect`.
+
+### The layout links
+
+The brand, sign-in, sign-out and register links are read from the routes named
+`home`, `auth.login`, `auth.logout` and `auth.register`. An application that
+registered those under other names sees the links empty on these screens, as
+it does on its own screens built with `view.New`.
+
 ## v0.9.3
 
 No symbol, route, migration, action, policy decision, tenant rule or amount

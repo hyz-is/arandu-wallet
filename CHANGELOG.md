@@ -16,6 +16,30 @@ name here. They are gone.
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-10-09
+
+### Fixed
+
+- The screens carry the CSRF token `middleware.CSRFProtect` issued for the
+  request. They issued their own, from `Config.CSRF` and the session id, so a
+  form on a screen that moves money was accepted only while that issuer and
+  the middleware's agreed on a key and a binding, and was answered 419 when
+  they did not. The page is now built with `view.New`, which reads the token
+  the middleware bound to the session or to the guest cookie.
+- The layout links around the screens are filled. The brand, sign-in,
+  sign-out and register links come from the routes the application named
+  `home`, `auth.login`, `auth.logout` and `auth.register`, as on the
+  application's own screens, instead of being drawn as `href=""`. A route the
+  application did not register draws no link.
+- The page also carries whatever messages and typed input a rejected attempt
+  left in the flash, which `view.New` reads. This package's own handlers
+  answer a rejected input with a refusal and leave nothing there.
+
+### Deprecated
+
+- `Config.CSRF`. It is no longer read, and `New` no longer refuses a
+  configuration without it.
+
 ## [0.9.3] - 2026-10-09
 
 ### Changed
