@@ -136,9 +136,11 @@ func (s *WalletService) Pay(ctx context.Context, actor security.Subject, in PayR
 // back whole, and why a statement afterwards reads as what was bought and then
 // what came back.
 //
-// A line is given back once. The second attempt answers ErrAlreadyRefunded, and
-// the refusal is a unique index rather than a check, so two refunds arriving
-// together cannot both be the one that succeeds.
+// A line is given back once. A second attempt under another key answers
+// ErrAlreadyRefunded, and the refusal is a unique index rather than a check, so
+// two refunds arriving together cannot both be the one that succeeds. The same
+// key again is the same request, and it is answered with the receipt of the
+// refund it already made.
 func (s *WalletService) Refund(ctx context.Context, actor security.Subject, in RefundRequest) (Receipt, error) {
 	if errs := in.Validate(); errs.Any() {
 		return Receipt{}, errs
@@ -171,11 +173,6 @@ func (s *WalletService) Refund(ctx context.Context, actor security.Subject, in R
 		}
 		lines = append(lines, *row)
 	}
-	if given, err := s.refunded(ctx, g, lines); err != nil {
-		return Receipt{}, err
-	} else if given {
-		return Receipt{}, ErrAlreadyRefunded
-	}
 
 	priced, err := s.reverseLines(ctx, g, actor, in, lines)
 	if err != nil {
@@ -184,10 +181,25 @@ func (s *WalletService) Refund(ctx context.Context, actor security.Subject, in R
 
 	// After the lines have been read and the wallets giving the money back have
 	// been authorized, which reverseLines does.
-	owner := settledFor(priced.movements)
+	//
+	// And before asking whether they were already given back, because the
+	// refund that gave them back is exactly what a replay is: the same key,
+	// naming the same lines, answered with what it did. Asking the other way
+	// round answers the retry of a refund that succeeded with
+	// ErrAlreadyRefunded.
+	//
+	// The wallet that was paid for the first line is the one asked about: it is
+	// authorized by now, and it is on that line's row even where the line cost
+	// nothing and moved no balance.
+	owner := lines[0].ReceiverWalletID
 	asked := askedRefund(in.PurchaseIDs)
 	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationRefund, owner, asked); err != nil || found {
 		return receipt, err
+	}
+	if given, err := s.refunded(ctx, g, lines); err != nil {
+		return Receipt{}, err
+	} else if given {
+		return Receipt{}, ErrAlreadyRefunded
 	}
 
 	receipt, err := s.commit(ctx, g, operation{

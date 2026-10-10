@@ -150,11 +150,10 @@ func TestARefundFormSentTwiceGivesTheLineBackOnce(t *testing.T) {
 	action, key := drawnForm(t, body, "refund-"+line.ID)
 	fields := url.Values{"_token": {token}, wallet.IdempotencyField: {key}, "purchase_ids": {line.ID}, "reason": {"Refund"}}
 
-	// The second submission is answered by the line's own state rather than by
-	// a replay: Refund asks whether the line was already given back before it
-	// asks about the key, so the same key twice is the 409 a refund of a
-	// refunded line gets. Either way the money moves once.
-	for attempt, want := range []int{http.StatusSeeOther, http.StatusConflict} {
+	// The second submission is a replay like every other form's: the same key
+	// naming the same line is the refund that already happened, so it is
+	// answered with the redirect the first one got, and the money moves once.
+	for attempt, want := range []int{http.StatusSeeOther, http.StatusSeeOther} {
 		code, answer := app.submit(t, action, fields, cookies, nil)
 		if code != want {
 			t.Fatalf("submission %d of the refund form answered %d, want %d: %s", attempt+1, code, want, answer)

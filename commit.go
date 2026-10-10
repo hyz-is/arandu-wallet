@@ -1106,7 +1106,8 @@ func settledFor(movements []movement) string {
 	return ""
 }
 
-// movedFor reports whether an operation wrote an entry on the given wallet.
+// movedFor reports whether an operation wrote an entry on the given wallet, or
+// recorded a line it paid or was paid.
 //
 // It is the whole of the ownership check on a replay, and it is deliberately
 // this and not more. An idempotency key is a name the caller chose, stored in a
@@ -1132,14 +1133,24 @@ func settledFor(movements []movement) string {
 // payee who wants to know what arrived reads their own statement. What this
 // never does is answer somebody who was not in the operation at all.
 //
+// A line that cost nothing moved no balance and wrote no entry, so the lines of
+// a basket answer as well: the wallet that paid for one and the wallet it was
+// bought from are both in it. Without them a basket of free lines, and the
+// refund of one, would be answered as though nobody had been in them.
+//
 // An empty owner never matches, which is what keeps a caller that has no wallet
 // to name from being answered by accident.
-func movedFor(owner string, entries []Entry) bool {
+func movedFor(owner string, entries []Entry, lines []Purchase) bool {
 	if owner == "" {
 		return false
 	}
 	for _, entry := range entries {
 		if entry.WalletID == owner {
+			return true
+		}
+	}
+	for _, line := range lines {
+		if line.PayerWalletID == owner || line.ReceiverWalletID == owner {
 			return true
 		}
 	}
@@ -1319,12 +1330,33 @@ func (s *WalletService) replay(ctx context.Context, g security.Grant, key string
 		}
 	}
 
+	// Only a basket has lines, so only a basket is asked for them. A replayed
+	// purchase answers with what the first call bought, read back off the rows
+	// rather than priced again: the same key twice pays once, at one price. They
+	// are read before the ownership check because a line that cost nothing is
+	// the only record that a wallet was in it.
+	var purchases []Purchase
+	if record.Kind == OperationPurchase || record.Kind == OperationRefund {
+		lines, err := Purchases(s.db).
+			Where("operation_id", "=", record.ID).
+			OrderBy("position").
+			Get(ctx, g)
+		if err != nil {
+			return Receipt{}, false, err
+		}
+		for _, line := range lines {
+			if line != nil {
+				purchases = append(purchases, *line)
+			}
+		}
+	}
+
 	// The key is not the permission. Everything below this line is somebody's
 	// money, and what says it is this caller's is the wallet the caller was
 	// authorized for a moment ago -- not the fact that they know a string. A
 	// caller who was not in the operation is handed none of it, and is told
 	// what anybody naming a spent key for another request is told.
-	if !movedFor(owner, entries) {
+	if !movedFor(owner, entries, purchases) {
 		return Receipt{}, false, ErrOperationConflict
 	}
 
@@ -1351,25 +1383,6 @@ func (s *WalletService) replay(ctx context.Context, g security.Grant, key string
 			First(ctx, g)
 		if err != nil {
 			return Receipt{}, false, err
-		}
-	}
-	// And only a basket has lines, so only a basket is asked for them. A
-	// replayed purchase answers with what the first call bought, read back off
-	// the rows rather than priced again: the same key twice pays once, at one
-	// price.
-	var purchases []Purchase
-	if record.Kind == OperationPurchase || record.Kind == OperationRefund {
-		lines, err := Purchases(s.db).
-			Where("operation_id", "=", record.ID).
-			OrderBy("position").
-			Get(ctx, g)
-		if err != nil {
-			return Receipt{}, false, err
-		}
-		for _, line := range lines {
-			if line != nil {
-				purchases = append(purchases, *line)
-			}
 		}
 	}
 

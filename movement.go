@@ -505,9 +505,11 @@ func (s *WalletService) Transfer(ctx context.Context, actor security.Subject, in
 // ErrNotSettled. What you undo is the operation that moved the money, and for a
 // movement that waited to be confirmed that is the confirmation.
 //
-// An operation can be undone once. The second attempt answers
+// An operation can be undone once. A second attempt under another key answers
 // ErrAlreadyReversed, and the refusal is a unique index rather than a check, so
-// two reversals arriving together cannot both be the one that succeeds.
+// two reversals arriving together cannot both be the one that succeeds. The
+// same key again is the same request, and it is answered with the receipt of
+// the reversal it already made.
 //
 // Undoing an exchange moves back exactly what moved, on each side, in the
 // currency it moved in. No rate is asked for and none is recorded: the amounts
@@ -542,12 +544,6 @@ func (s *WalletService) Reverse(ctx context.Context, actor security.Subject, in 
 	if original.Kind == OperationPurchase || original.Kind == OperationRefund {
 		return Receipt{}, ErrPurchaseOperation
 	}
-	if reversed, err := s.reversed(ctx, g, original.ID); err != nil {
-		return Receipt{}, err
-	} else if reversed {
-		return Receipt{}, ErrAlreadyReversed
-	}
-
 	movements, err := s.mirror(ctx, g, actor, original.ID)
 	if err != nil {
 		return Receipt{}, err
@@ -557,10 +553,20 @@ func (s *WalletService) Reverse(ctx context.Context, actor security.Subject, in 
 	// touches has been authorized, which mirror and settle do. Before that, a
 	// replay would be answering about somebody else's operation to whoever
 	// knows the key.
+	//
+	// And before asking whether it was already undone, because the request
+	// that undid it is exactly what a replay is: the same key, naming the same
+	// operation, answered with what it did. Asking the other way round answers
+	// the retry of a reversal that succeeded with ErrAlreadyReversed.
 	owner := settledFor(movements)
 	asked := askedSettlement(original.ID)
 	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationReversal, owner, asked); err != nil || found {
 		return receipt, err
+	}
+	if reversed, err := s.reversed(ctx, g, original.ID); err != nil {
+		return Receipt{}, err
+	} else if reversed {
+		return Receipt{}, ErrAlreadyReversed
 	}
 
 	receipt, err := s.commit(ctx, g, operation{

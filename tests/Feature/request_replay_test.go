@@ -337,6 +337,148 @@ func TestABasketReplaysOnlyTheSameRequest(t *testing.T) {
 	}
 }
 
+// TestABasketOfFreeLinesReplays holds the case that wrote no entry at all: a
+// line that cost nothing moved no balance, so its row is the only record that
+// the payer was in it.
+func TestABasketOfFreeLinesReplays(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
+	buyer := openWallet(t, service, "user-1", "main", 2)
+	shop := openWallet(t, service, "shop", "till", 2)
+	trial := &item{key: "trial", wallet: shop.ID, price: 0}
+
+	request := wallet.PayRequest{
+		IdempotencyKey: "free-basket", PayerWalletID: buyer.ID,
+		Cart: wallet.NewCart(wallet.CartItem{Product: trial, Quantity: 1}),
+	}
+	first, err := service.Pay(ctx, staff(), request)
+	if err != nil {
+		t.Fatalf("taking the free line: %v", err)
+	}
+	if len(first.Entries) != 0 {
+		t.Fatalf("a free basket wrote %d entries, so this test is not about the case with none", len(first.Entries))
+	}
+	again, err := service.Pay(ctx, staff(), request)
+	assertReplayed(t, first, again, err)
+	if len(again.Purchases) != 1 || again.Purchases[0].ID != first.Purchases[0].ID {
+		t.Fatal("the replay answered with lines the first call did not record")
+	}
+
+	// And giving it back replays the same way.
+	refund := wallet.RefundRequest{IdempotencyKey: "free-refund", PurchaseIDs: []string{first.Purchases[0].ID}, Reason: "returned"}
+	given, err := service.Refund(ctx, staff(), refund)
+	if err != nil {
+		t.Fatalf("giving the free line back: %v", err)
+	}
+	again, err = service.Refund(ctx, staff(), refund)
+	assertReplayed(t, given, again, err)
+}
+
+func TestARefundReplaysLikeEveryOtherMovement(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
+	buyer := openWallet(t, service, "user-1", "main", 2)
+	shop := openWallet(t, service, "shop", "till", 2)
+	deposit(t, service, buyer.ID, "seed", "100.00")
+	wallets := []string{buyer.ID, shop.ID}
+
+	bought, err := service.Pay(ctx, staff(), wallet.PayRequest{
+		IdempotencyKey: "basket-1", PayerWalletID: buyer.ID,
+		Cart: wallet.NewCart(
+			wallet.CartItem{Product: &item{key: "book", wallet: shop.ID, price: 2500}, Quantity: 1},
+			wallet.CartItem{Product: &item{key: "pen", wallet: shop.ID, price: 500}, Quantity: 1},
+		),
+	})
+	if err != nil {
+		t.Fatalf("paying: %v", err)
+	}
+	book, pen := bought.Purchases[0].ID, bought.Purchases[1].ID
+
+	request := wallet.RefundRequest{IdempotencyKey: "refund-1", PurchaseIDs: []string{book}, Reason: "damaged"}
+	first, err := service.Refund(ctx, staff(), request)
+	if err != nil {
+		t.Fatalf("refunding: %v", err)
+	}
+
+	// The same key naming the same line is the refund that already happened.
+	again, err := service.Refund(ctx, staff(), request)
+	assertReplayed(t, first, again, err)
+	if len(again.Purchases) != 1 || again.Purchases[0].ID != first.Purchases[0].ID {
+		t.Fatal("the replayed refund answered with lines the first call did not record")
+	}
+
+	// Another key naming the refunded line is a second refund, and it is
+	// refused as one.
+	if _, err := service.Refund(ctx, staff(), wallet.RefundRequest{
+		IdempotencyKey: "refund-2", PurchaseIDs: []string{book}, Reason: "again",
+	}); !errors.Is(err, wallet.ErrAlreadyRefunded) {
+		t.Fatalf("a second refund of one line under another key answered %v, want ErrAlreadyRefunded", err)
+	}
+
+	// The same key naming other lines is another request.
+	for _, variant := range []struct {
+		why   string
+		lines []string
+	}{
+		{"another line", []string{pen}},
+		{"a line more", []string{book, pen}},
+	} {
+		t.Run(variant.why, func(t *testing.T) {
+			changed := request
+			changed.PurchaseIDs = variant.lines
+			assertRefused(t, service, wallets, func() (wallet.Receipt, error) { return service.Refund(ctx, staff(), changed) })
+		})
+	}
+
+	// Money moved once: the book came back, the pen did not.
+	if got := balanceOf(t, service, buyer.ID); got != 10000-500 {
+		t.Fatalf("the buyer holds %d, want %d", got, 10000-500)
+	}
+	if got := balanceOf(t, service, shop.ID); got != 500 {
+		t.Fatalf("the shop holds %d, want 500", got)
+	}
+}
+
+func TestAReversalReplaysOnlyTheSameRequest(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	service := wallet.NewWalletService(database(t), nil, nil, nil)
+	account := openWallet(t, service, "user-1", "main", 2)
+	credited := deposit(t, service, account.ID, "credit-1", "10.00")
+	other := deposit(t, service, account.ID, "credit-2", "5.00")
+	wallets := []string{account.ID}
+
+	request := wallet.ReverseRequest{IdempotencyKey: "reverse-1", OperationID: credited.Operation.ID, Reason: "duplicate"}
+	first, err := service.Reverse(ctx, staff(), request)
+	if err != nil {
+		t.Fatalf("reversing: %v", err)
+	}
+
+	// The same key naming the same operation is the reversal that already
+	// happened, and it is answered rather than refused as a second one.
+	again, err := service.Reverse(ctx, staff(), request)
+	assertReplayed(t, first, again, err)
+
+	if _, err := service.Reverse(ctx, staff(), wallet.ReverseRequest{
+		IdempotencyKey: "reverse-2", OperationID: credited.Operation.ID, Reason: "again",
+	}); !errors.Is(err, wallet.ErrAlreadyReversed) {
+		t.Fatalf("a second reversal under another key answered %v, want ErrAlreadyReversed", err)
+	}
+
+	changed := request
+	changed.OperationID = other.Operation.ID
+	assertRefused(t, service, wallets, func() (wallet.Receipt, error) { return service.Reverse(ctx, staff(), changed) })
+
+	if got := balanceOf(t, service, account.ID); got != 500 {
+		t.Fatalf("the wallet holds %d, want 500: the first deposit undone once and the second kept", got)
+	}
+}
+
 func TestAConfirmationReplaysOnlyTheSameRequest(t *testing.T) {
 	t.Parallel()
 
