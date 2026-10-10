@@ -20,7 +20,7 @@ import (
 // line changes and never because somebody published something. Moving it is
 // how a stricter compiler is taken on: raise it, run the suite, and fix the
 // view it refuses here rather than in every application that publishes it.
-const viewCompiler = "github.com/arandu-io/aru@v0.70.0"
+const viewCompiler = "github.com/arandu-io/aru@v0.72.0"
 
 // TestEveryPublishedViewCompiles publishes the views into a project of their
 // own, builds them with the view compiler an application runs, and compiles
