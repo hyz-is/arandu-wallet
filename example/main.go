@@ -169,7 +169,6 @@ func run(ctx context.Context) error {
 
 	module, err := wallet.New(wallet.Config{
 		Tenant:    tenant,
-		CSRF:      security.NewCSRF(key, time.Hour),
 		Rates:     Rates{},
 		Discounts: Discounts{},
 		Listeners: []wallet.Listener{announce},

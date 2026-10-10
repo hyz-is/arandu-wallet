@@ -33,16 +33,11 @@ The construction, in `Build`, after the session store exists and before
 ```go
 	walletModule, err := wallet.New(wallet.Config{
 		Tenant: cfg.Auth.Tenant,
-		CSRF:   csrf,
 	}, db, sessions)
 	if err != nil {
 		return App{}, err
 	}
 ```
-
-`csrf` is the issuer `Build` already makes from `cfg.Session.CSRFTTL` and hands
-to `middleware.CSRFProtect`, so the token a wallet screen issues is the one the
-middleware checks. The configuration has no `CSRF` field of its own.
 
 And the registration, inside the `k.Register(...)` call already there:
 
@@ -134,6 +129,14 @@ Without that import the views are not in the binary, and the module refuses to
 boot rather than answering the first request that reaches one of them with a
 500. The refusal names the view, the command and the import.
 
+The three screens are drawn inside your layout with the `view.Page` that
+`view.New` builds for your own screens. The CSRF token is the one
+`middleware.CSRFProtect` issued for the request, so the routes have to sit
+behind it, as every route of the application skeleton does. The brand, sign-in,
+sign-out and register links come from the routes you named `home`,
+`auth.login`, `auth.logout` and `auth.register`; one you did not register draws
+no link.
+
 ## Configuration
 
 | field | required | meaning |
@@ -144,7 +147,6 @@ boot rather than answering the first request that reaches one of them with a
 | `Rates` | no | quotes the rate between two currencies. Nil refuses every transfer that would need one. |
 | `Fees` | no | answers with what a wallet charges to be paid. Nil charges nothing. |
 | `Discounts` | no | answers with what one payer is charged less. Nil discounts nothing. |
-| `CSRF` | yes | issues the token every form on the screens carries. Every screen here moves money. |
 | `Translator` | no | your own catalogue, asked before the one this package ships. |
 | `Listeners` | no | told what the money did, after the write has committed. |
 
