@@ -1,9 +1,9 @@
-github.com/arandu-io/framework v0.55.1 h1:BNXvr3fbaYaRzpWNeQem7Qu1BUUapSNJKUOARkqp218=
-github.com/arandu-io/framework v0.55.1/go.mod h1:KT07TbUGfd0NZA6A93CEWHyKtw2XxXQi+Pjb2MS72Bs=
-github.com/arandu-io/hesape v0.52.0 h1:QSVs9Wc8sBzqb8iFJ3CMS8ih87hxY24ldN4Y6H7YTX8=
-github.com/arandu-io/hesape v0.52.0/go.mod h1:EGvD/xu7BKqX/sT4p/XN+igAb5tBagA/VwoEqeVV1b0=
-github.com/hyz-is/arandu-wallet v0.9.2 h1:YOTu9BDuBtssgrh70r6W8/FW7J8O4thHR+UBRoOw5OU=
-github.com/hyz-is/arandu-wallet v0.9.2/go.mod h1:JgwA+4cKxm9kQ0oqrHwrR2zZzPRxqlnTO9xCb7n0m00=
+github.com/arandu-io/framework v0.56.0 h1:EZG8LdmWaOtDryEjIE3+m9sf9aj+9VJUZWHssGalueA=
+github.com/arandu-io/framework v0.56.0/go.mod h1:JXuV+Wh8/sKP1ACeDWzB9vZixc+id1Y4w/xVFOqR0Ns=
+github.com/arandu-io/hesape v0.54.0 h1:PaphvRTjeBRW7m1cnzqOQEQc3bck2wGLzPwfPnr6ZAA=
+github.com/arandu-io/hesape v0.54.0/go.mod h1:EGvD/xu7BKqX/sT4p/XN+igAb5tBagA/VwoEqeVV1b0=
+github.com/hyz-is/arandu-wallet v0.10.0 h1:ygkFn7Y/JlTi0rRHkJSvZ36K54btMOLdlr/cIB+rQ+I=
+github.com/hyz-is/arandu-wallet v0.10.0/go.mod h1:VWVwWmUt0HkcZAo/tJeMlDKL9YwolPCFfOX0iCoJvt8=
 golang.org/x/crypto v0.57.0 h1:3ZVCjf8Ggz7zneR/EHRVx68Ctf+2pmIMP2UFhh9cC6M=
 golang.org/x/crypto v0.57.0/go.mod h1:Fdz0i5U6CoizGwLda9DttjSk6qlZo25zYNtR+ycvuZA=
 golang.org/x/sys v0.48.0 h1:bbX/i/6MgT9BVLM9RT1thmxL04yeTAhbEz4SyadbXoo=
