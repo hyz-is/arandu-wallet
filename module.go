@@ -75,6 +75,10 @@ package wallet
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	stdhttp "net/http"
@@ -88,6 +92,7 @@ import (
 	"github.com/arandu-io/framework/validation"
 	"github.com/arandu-io/hesape/database/migrations"
 	"github.com/arandu-io/hesape/database/schema"
+	hhttp "github.com/arandu-io/hesape/http"
 	"github.com/arandu-io/hesape/translation"
 	"github.com/arandu-io/hesape/view"
 )
@@ -98,7 +103,107 @@ import (
 // the request and not to what it asks for: a retry is the same body sent again,
 // and the thing that says "this is that same request" has to be readable
 // without parsing the body twice.
+//
+// It is the only place a client that composes its own requests names one. A
+// browser submitting a form cannot set a header, so the screens carry a key of
+// their own in IdempotencyField instead.
 const IdempotencyHeader = "Idempotency-Key"
+
+// IdempotencyField is the form field a screen of this package carries the
+// idempotency key of each of its forms in.
+//
+// The key in it is minted by the handler that draws the form, from the CSRF
+// token the page carries and the form it is drawn into, so each drawn form has
+// a key of its own that nobody without the page can know. Submitting that form
+// twice -- a second click, the back button and the same button again -- sends
+// the same key, and the second submission moves no money: it is answered as the
+// same key sent twice always is. Loading the screen again draws new keys,
+// because it carries a new token.
+//
+// A value here is accepted only when it is the key that form was drawn with,
+// for the token this request carried; a header beside it has to say the same
+// thing. Anything else is refused rather than read as a name the caller chose,
+// which is what the header is for.
+const IdempotencyField = "idempotency_key"
+
+// formKeyPrefix starts every key a screen mints, so a key read off a ledger row
+// says which of the two ways it arrived.
+const formKeyPrefix = "form-"
+
+// formKeyPurpose separates what a form key is computed for from any other value
+// computed over the same token.
+const formKeyPurpose = "wallet form idempotency key"
+
+// formKey is the idempotency key a screen draws into one form: the route the
+// form posts to and what it acts on, signed with the CSRF token the page
+// carries.
+//
+// The token is the secret, and it is the right one for the job. It is random
+// for every page the middleware issues it on, so each drawn form gets a key of
+// its own; it is in the page and nowhere else, so nobody who cannot read the
+// page can know the key; and the middleware has already checked it against the
+// session by the time a submission reaches a handler, so the handler can work
+// the key out again from what it was sent and compare. Nothing is stored.
+//
+// Each part is written behind its length, so two different lists of parts can
+// never be signed as the same bytes. An empty token mints nothing: a page drawn
+// without one carries a form the middleware refuses anyway, and a key computed
+// over nothing would be one key for everybody.
+func formKey(token string, form ...string) string {
+	if token == "" {
+		return ""
+	}
+	mac := hmac.New(sha256.New, []byte(token))
+	var length [8]byte
+	for _, part := range append([]string{formKeyPurpose}, form...) {
+		binary.BigEndian.PutUint64(length[:], uint64(len(part)))
+		mac.Write(length[:])
+		mac.Write([]byte(part))
+	}
+	return formKeyPrefix + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// idempotencyKey is the name this request gave itself: the header a client
+// writes, or the field a screen drew into the form, and never two different
+// ones.
+//
+// The header is read exactly as it always was, and a request carrying only the
+// header is answered exactly as before. The field is the browser's way to send
+// the same thing, and it is believed only when it is the key formKey mints for
+// the form named by the parts, from the CSRF token the middleware checked on
+// this request -- otherwise a field would be a second, unchecked way for a
+// caller to name a request, and it would also be readable from a JSON body.
+// When both arrive they have to agree: a request that names itself twice in two
+// ways cannot be answered as either.
+//
+// Neither is an empty key, which the request's own validation refuses as it
+// always has.
+func (m *Module) idempotencyKey(ctx *fhttp.Context, form ...string) (string, error) {
+	header := ctx.Header(IdempotencyHeader)
+	field := ctx.Input(IdempotencyField)
+	if field == "" {
+		return header, nil
+	}
+	if header != "" {
+		if header != field {
+			return "", refusal(IdempotencyField, "names a different request than the "+IdempotencyHeader+" header")
+		}
+		return header, nil
+	}
+	token, _ := hhttp.CSRFTokenFrom(ctx.Ctx())
+	want := formKey(token, form...)
+	if want == "" || !hmac.Equal([]byte(field), []byte(want)) {
+		return "", refusal(IdempotencyField, "is not the key this form was drawn with; load the page again and submit it from there")
+	}
+	return field, nil
+}
+
+// refusal is a rejected input as answer reports it: the field, and why.
+func refusal(field, message string) validation.Errors {
+	errs := validation.Errors{}
+	errs.Add(field, message)
+	return errs
+}
 
 // Module is what the application registers.
 //
@@ -371,12 +476,23 @@ func (m *Module) show(ctx *fhttp.Context) error {
 	if err != nil && !errors.Is(err, security.ErrForbidden) {
 		return m.answer(ctx, err)
 	}
+
+	// Every form that moves money is drawn with the key its submission will
+	// carry, minted here from the token this page carries and named after the
+	// route it posts to and what it acts on -- the same parts the handler of
+	// that route works the key out from again.
+	page := m.page(ctx, labels.T("screen.operations_title"))
+	token := page.CSRFToken()
+	purchases := purchaseRows(labels, lines)
+	for i := range purchases {
+		purchases[i].RefundKey = formKey(token, "wallet.refund", purchases[i].ID)
+	}
 	return ctx.View(ViewOperations, OperationsPageData{
-		Page:      m.page(ctx, labels.T("screen.operations_title")),
+		Page:      page,
 		Prefix:    m.cfg.Prefix,
 		Labels:    labels,
 		Wallet:    walletRow(m.cfg.Prefix, record),
-		Purchases: purchaseRows(labels, lines),
+		Purchases: purchases,
 		// Asked before the page is drawn rather than after the button is
 		// pressed. It is the same policy the write would consult, so a control
 		// that is drawn is a control that works.
@@ -386,6 +502,9 @@ func (m *Module) show(ctx *fhttp.Context) error {
 		TransferURL:   routeAddress(m.cfg.Prefix, "wallet.transfer", record.ID),
 		CreditURL:     routeAddress(m.cfg.Prefix, "wallet.credit", record.ID),
 		RefundURL:     routeAddress(m.cfg.Prefix, "wallet.refund"),
+		DepositKey:    formKey(token, "wallet.deposit", record.ID),
+		WithdrawalKey: formKey(token, "wallet.withdraw", record.ID),
+		TransferKey:   formKey(token, "wallet.transfer", record.ID),
 	})
 }
 
@@ -550,8 +669,12 @@ func (m *Module) deposit(ctx *fhttp.Context) error {
 	if err != nil {
 		return m.answer(ctx, err)
 	}
+	key, err := m.idempotencyKey(ctx, "wallet.deposit", ctx.Param("id"))
+	if err != nil {
+		return m.answer(ctx, err)
+	}
 	in := DepositRequest{
-		IdempotencyKey: ctx.Header(IdempotencyHeader),
+		IdempotencyKey: key,
 		WalletID:       ctx.Param("id"),
 		Amount:         ctx.Input("amount"),
 		Pending:        pending,
@@ -575,8 +698,12 @@ func (m *Module) withdraw(ctx *fhttp.Context) error {
 	if err != nil {
 		return m.answer(ctx, err)
 	}
+	key, err := m.idempotencyKey(ctx, "wallet.withdraw", ctx.Param("id"))
+	if err != nil {
+		return m.answer(ctx, err)
+	}
 	in := WithdrawRequest{
-		IdempotencyKey: ctx.Header(IdempotencyHeader),
+		IdempotencyKey: key,
 		WalletID:       ctx.Param("id"),
 		Amount:         ctx.Input("amount"),
 		Pending:        pending,
@@ -610,8 +737,12 @@ func (m *Module) transfer(ctx *fhttp.Context) error {
 	if err != nil {
 		return m.answer(ctx, err)
 	}
+	key, err := m.idempotencyKey(ctx, "wallet.transfer", ctx.Param("id"))
+	if err != nil {
+		return m.answer(ctx, err)
+	}
 	in := TransferRequest{
-		IdempotencyKey: ctx.Header(IdempotencyHeader),
+		IdempotencyKey: key,
 		FromWalletID:   ctx.Param("id"),
 		ToWalletID:     ctx.Input("to_wallet_id"),
 		Amount:         ctx.Input("amount"),
@@ -654,9 +785,14 @@ func (m *Module) refund(ctx *fhttp.Context) error {
 	if err != nil {
 		return m.answer(ctx, err)
 	}
+	lines := m.list(ctx, "purchase_ids")
+	key, err := m.idempotencyKey(ctx, append([]string{"wallet.refund"}, lines...)...)
+	if err != nil {
+		return m.answer(ctx, err)
+	}
 	in := RefundRequest{
-		IdempotencyKey: ctx.Header(IdempotencyHeader),
-		PurchaseIDs:    m.list(ctx, "purchase_ids"),
+		IdempotencyKey: key,
+		PurchaseIDs:    lines,
 		Reason:         ctx.Input("reason"),
 		Force:          force,
 		Meta:           m.meta(ctx, "meta"),
@@ -671,8 +807,12 @@ func (m *Module) refund(ctx *fhttp.Context) error {
 
 // reverse undoes one operation.
 func (m *Module) reverse(ctx *fhttp.Context) error {
+	key, err := m.idempotencyKey(ctx, "wallet.reverse", ctx.Param("operation"))
+	if err != nil {
+		return m.answer(ctx, err)
+	}
 	in := ReverseRequest{
-		IdempotencyKey: ctx.Header(IdempotencyHeader),
+		IdempotencyKey: key,
 		OperationID:    ctx.Param("operation"),
 		Reason:         ctx.Input("reason"),
 		Meta:           m.meta(ctx, "meta"),
@@ -691,8 +831,12 @@ func (m *Module) confirm(ctx *fhttp.Context) error {
 	if err != nil {
 		return m.answer(ctx, err)
 	}
+	key, err := m.idempotencyKey(ctx, "wallet.confirm", ctx.Param("operation"))
+	if err != nil {
+		return m.answer(ctx, err)
+	}
 	in := ConfirmRequest{
-		IdempotencyKey: ctx.Header(IdempotencyHeader),
+		IdempotencyKey: key,
 		OperationID:    ctx.Param("operation"),
 		Force:          force,
 		Meta:           m.meta(ctx, "meta"),

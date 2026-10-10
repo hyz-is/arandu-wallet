@@ -49,9 +49,13 @@ type OperationsData = wallet.OperationsPageData
 		</div>
 	</div>
 
+	{{-- Each form that moves money carries the idempotency key it was drawn
+	     with. Sending the same drawn form twice moves the money once; keep the
+	     field in any form of your own that posts to these routes. --}}
 	<div class="mt-8 grid gap-8 md:grid-cols-2">
 		<form class="grid gap-3" method="post" action="{{ .DepositURL }}">
 			@csrf
+			<input type="hidden" name="idempotency_key" value="{{ .DepositKey }}">
 			<h2 class="text-lg font-semibold">{{ .Labels.T("control.deposit") }}</h2>
 			{!! components.Field(components.FieldProps{
 				Name:        "amount",
@@ -67,6 +71,7 @@ type OperationsData = wallet.OperationsPageData
 
 		<form class="grid gap-3" method="post" action="{{ .WithdrawalURL }}">
 			@csrf
+			<input type="hidden" name="idempotency_key" value="{{ .WithdrawalKey }}">
 			<h2 class="text-lg font-semibold">{{ .Labels.T("control.withdraw") }}</h2>
 			{!! components.Field(components.FieldProps{
 				Name:        "amount",
@@ -82,6 +87,7 @@ type OperationsData = wallet.OperationsPageData
 
 		<form class="grid gap-3" method="post" action="{{ .TransferURL }}">
 			@csrf
+			<input type="hidden" name="idempotency_key" value="{{ .TransferKey }}">
 			<h2 class="text-lg font-semibold">{{ .Labels.T("control.transfer") }}</h2>
 			{!! components.Field(components.FieldProps{
 				Name:        "to_wallet_id",
@@ -141,6 +147,7 @@ type OperationsData = wallet.OperationsPageData
 							@if(!line.Refunded)
 								<form method="post" action="{{ .RefundURL }}">
 									@csrf
+									<input type="hidden" name="idempotency_key" value="{{ line.RefundKey }}">
 									<input type="hidden" name="purchase_ids" value="{{ line.ID }}">
 									<input type="hidden" name="reason" value="{{ .Labels.T("control.refund") }}">
 									{!! components.Button(components.ButtonProps{Label: .Labels.T("control.refund"), Type: "submit", Variant: "ghost", Size: "sm"}) !!}

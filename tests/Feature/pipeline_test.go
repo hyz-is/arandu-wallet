@@ -53,6 +53,26 @@ func (chrome) Render(_ context.Context, w http.ResponseWriter, status int, name 
 		fmt.Fprintf(&b, "<a data-login href=\"%s\">Sign in</a>\n", html.EscapeString(page.LoginLink()))
 	}
 	fmt.Fprintf(&b, "<form method=\"post\"><input type=\"hidden\" name=\"_token\" value=\"%s\"></form>\n", html.EscapeString(page.CSRFToken()))
+
+	// The operations screen's forms that move money, each with the address it
+	// posts to and the idempotency key it carries, as the published markup
+	// draws them from the same fields.
+	if screen, ok := data.(wallet.OperationsPageData); ok {
+		forms := []struct{ name, action, key string }{
+			{"deposit", screen.DepositURL, screen.DepositKey},
+			{"withdrawal", screen.WithdrawalURL, screen.WithdrawalKey},
+			{"transfer", screen.TransferURL, screen.TransferKey},
+		}
+		for _, line := range screen.Purchases {
+			if !line.Refunded {
+				forms = append(forms, struct{ name, action, key string }{"refund-" + line.ID, screen.RefundURL, line.RefundKey})
+			}
+		}
+		for _, form := range forms {
+			fmt.Fprintf(&b, "<form data-form=\"%s\" method=\"post\" action=\"%s\"><input type=\"hidden\" name=\"%s\" value=\"%s\"></form>\n",
+				html.EscapeString(form.name), html.EscapeString(form.action), wallet.IdempotencyField, html.EscapeString(form.key))
+		}
+	}
 	_, err := w.Write([]byte(b.String()))
 	return err
 }

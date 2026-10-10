@@ -113,3 +113,28 @@ func TestAWalletRowCarriesItsTwoAddresses(t *testing.T) {
 		t.Errorf("a missing wallet is drawn as %+v, want the empty row", empty)
 	}
 }
+
+// TestAFormKeyNamesExactlyOneForm holds the part of a form key the feature suite
+// cannot reach: the parts are signed with their lengths, so a route and a target
+// that run into each other differently are two keys, and a page with no token
+// mints none.
+func TestAFormKeyNamesExactlyOneForm(t *testing.T) {
+	t.Parallel()
+
+	const token = "nonce.1791600050.signature"
+	if formKey(token, "wallet.deposit", "ab") == formKey(token, "wallet.deposita", "b") {
+		t.Error("two forms whose parts concatenate to the same bytes were given one key")
+	}
+	if formKey(token, "wallet.refund", "a", "b") == formKey(token, "wallet.refund", "ab") {
+		t.Error("a refund of two lines and a refund of one line named by both were given one key")
+	}
+	if formKey(token, "wallet.deposit", "w1") != formKey(token, "wallet.deposit", "w1") {
+		t.Error("one form on one page was given two keys, so a second submission of it would move money again")
+	}
+	if got := formKey("", "wallet.deposit", "w1"); got != "" {
+		t.Errorf("a page drawn without a token minted %q, which would be one key for everybody", got)
+	}
+	if key := formKey(token, "wallet.deposit", "w1"); len(key) > maxIdempotencyKeyLen {
+		t.Errorf("a form key is %d bytes and the column holds %d", len(key), maxIdempotencyKeyLen)
+	}
+}

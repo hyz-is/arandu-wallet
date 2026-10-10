@@ -345,3 +345,53 @@ func TestTheFormAnswersTheFirstMessageOfAnInput(t *testing.T) {
 		}
 	}
 }
+
+// TestEveryFormThatMovesMoneyCarriesTheKeyItWasDrawnWith reads the published
+// operations screen: each form that posts to a route moving money carries the
+// key the handler minted for it, in the field the handler reads.
+//
+// A browser cannot set a header on a form it submits, so a form without the
+// field is a form answered 422 for a missing key every time it is used -- and
+// nothing compiled notices, because a hidden input is markup the view compiler
+// has no reason to refuse.
+func TestEveryFormThatMovesMoneyCarriesTheKeyItWasDrawnWith(t *testing.T) {
+	t.Parallel()
+
+	publications, err := foundation.Publications(module(t))
+	if err != nil {
+		t.Fatalf("reading what the module publishes: %v", err)
+	}
+	var source string
+	for _, publication := range publications {
+		body, err := fs.ReadFile(publication.Files, path.Join(publication.From, "operations.kyse.go"))
+		if err == nil {
+			source = string(body)
+		}
+	}
+	if source == "" {
+		t.Fatal("the package publishes no operations screen, so this test would pass by having nothing to read")
+	}
+
+	for action, key := range map[string]string{
+		"{{ .DepositURL }}":    "{{ .DepositKey }}",
+		"{{ .WithdrawalURL }}": "{{ .WithdrawalKey }}",
+		"{{ .TransferURL }}":   "{{ .TransferKey }}",
+		"{{ .RefundURL }}":     "{{ line.RefundKey }}",
+	} {
+		opening := strings.Index(source, `action="`+action+`"`)
+		if opening < 0 {
+			t.Errorf("the operations screen has no form posting to %s", action)
+			continue
+		}
+		closing := strings.Index(source[opening:], "</form>")
+		if closing < 0 {
+			t.Errorf("the form posting to %s is never closed", action)
+			continue
+		}
+		form := source[opening : opening+closing]
+		want := `<input type="hidden" name="` + wallet.IdempotencyField + `" value="` + key + `">`
+		if !strings.Contains(form, want) {
+			t.Errorf("the form posting to %s does not carry %s, so a browser submitting it sends no idempotency key", action, want)
+		}
+	}
+}

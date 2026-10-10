@@ -214,6 +214,10 @@ type PurchaseRow struct {
 	Fee  string
 	// Created is when it was written.
 	Created string
+	// RefundKey is the idempotency key the form that gives this line back
+	// carries, in the field IdempotencyField names, and empty on a page drawn
+	// without a CSRF token.
+	RefundKey string
 }
 
 // IndexPageData is what the listing screen is handed.
@@ -288,6 +292,14 @@ type OperationsPageData struct {
 	TransferURL   string
 	CreditURL     string
 	RefundURL     string
+	// DepositKey, WithdrawalKey and TransferKey are the idempotency keys the
+	// deposit, withdrawal and transfer forms carry, in the field
+	// IdempotencyField names. Each is minted for this page and that form, so
+	// sending the same drawn form twice moves the money once; each is empty on
+	// a page drawn without a CSRF token, where the form is refused anyway.
+	DepositKey    string
+	WithdrawalKey string
+	TransferKey   string
 }
 
 // FormState is what a kyse input asks for its message and for what was typed.
