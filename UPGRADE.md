@@ -7,6 +7,62 @@ describing a publishing migration and a Repository removal that both happened
 before `v0.1.0` of this package. They are gone, and what this package actually
 changed at each of its own versions is below.
 
+## v0.10.0
+
+No symbol is removed or changed, and no route, migration, action, policy
+decision, tenant rule, amount or stored column changes. The published views do
+not change, so nothing is republished. What changes is the answer to a key
+used twice, and that is observable.
+
+### A key used for a different request is refused
+
+The same idempotency key with the same request is still answered with the
+first receipt (`Receipt.Replayed`, 200 on JSON, the redirect on a form). The
+same key with a different request -- another amount, another wallet, a side
+waiting that counted the first time, another operation to reverse or confirm,
+other lines to refund, another basket -- is now refused with
+`ErrOperationConflict`, 409 "that idempotency key belongs to a different
+request", and nothing moves. Before this release it was answered as a replay
+and the new request was dropped.
+
+A caller that mints one key per request has nothing to change. A caller that
+reuses a key for a request it changed has to mint a new key for the changed
+request; the old behaviour told it the money moved when it had not.
+
+Not compared, so still replayed: a different `Meta`, `Reason` or `Force`, and
+a basket line that leaves the price to the catalogue whose price changed
+since. A line that writes its own `PricePerItem` is compared with the price
+recorded.
+
+### A payee replaying a transfer backwards
+
+A `TransferRequest` under a spent key that names the payee as `FromWalletID`
+and the payer as `ToWalletID` is a payment in the other direction, and is
+refused with `ErrOperationConflict` instead of being answered with the
+original payment's receipt. To read what arrived, read the payee's statement.
+
+### `ErrNotFound` on a spent key becomes `ErrOperationConflict`
+
+A caller who was not in the operation a key names was refused with
+`ErrNotFound` (404); it is now `ErrOperationConflict` (409). A request that
+lost a race to a different request under its key returned the database's
+unique-index error; it now returns `ErrOperationConflict` too. Code that
+matched either for this case matches `ErrOperationConflict`:
+
+```go
+if errors.Is(err, wallet.ErrOperationConflict) {
+	// the key names another request: mint a new key for this one
+}
+```
+
+### Refunds and reversals replay
+
+`Refund` and `Reverse` sent again under their own key answer with the first
+receipt instead of `ErrAlreadyRefunded` or `ErrAlreadyReversed`. A refund form
+submitted twice is now redirected both times, where the second submission was
+answered 409. Another key on a line or operation already settled is still
+refused with those two errors.
+
 ## v0.9.5
 
 No symbol is removed or changed, and no route, migration, action, policy

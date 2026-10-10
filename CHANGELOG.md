@@ -16,6 +16,45 @@ name here. They are gone.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-09
+
+### Changed
+
+- An idempotency key already spent on a different request is refused with
+  `ErrOperationConflict` (409), the answer a key spent on another kind of
+  operation already got, and nothing is written. It used to be answered with
+  the first request's receipt as though the new one had moved: a deposit of
+  20 under the key of a deposit of 10 reported success and moved nothing, and
+  a form sent again with an edited amount redirected as a success. What is
+  compared is what the caller decided and the recorded rows hold -- the
+  wallets, the amount written, which side waits, the operation a reversal or
+  confirmation settles, the product, quantity, receiver, beneficiary and any
+  written price of each basket line, the lines a refund names. Meta, the
+  reason, `Force`, and what a rate, fee, discount or catalogue answered are
+  not compared.
+- A transfer replayed by the payee with the two wallets swapped is a payment
+  in the other direction and is refused with `ErrOperationConflict`; the
+  payment itself, sent again, is still replayed.
+- A caller who was not in the operation a key names is refused with
+  `ErrOperationConflict` instead of `ErrNotFound`, on the lookup before
+  pricing and on the one after a racing request won the unique index. A
+  racing request that lost to a different request under its key answers
+  `ErrOperationConflict` instead of the database's unique-index error.
+- An amount that does not parse is refused before the key is looked up, as
+  it is on a first request, instead of being answered with an earlier
+  receipt.
+
+### Fixed
+
+- A refund or a reversal sent again under its own key is answered with the
+  first receipt, like every other movement. It was answered 409, "already
+  refunded" or "already reversed", because the settled state was asked about
+  before the key. Another key on a line or operation already settled is
+  still refused as before, and the money moves once.
+- A basket of free lines, and the refund of one, replays. Neither wrote an
+  entry, and the replay read ownership only off entries, so the same request
+  sent again was refused as though nobody had been in it.
+
 ## [0.9.5] - 2026-10-09
 
 ### Added
