@@ -4,18 +4,24 @@ import (
 	"context"
 	"fmt"
 	"html"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/arandu-io/framework/data"
+	"github.com/arandu-io/framework/foundation"
+	"github.com/arandu-io/framework/foundation/bootstrap"
 	fhttp "github.com/arandu-io/framework/http"
 	"github.com/arandu-io/framework/http/middleware"
 	"github.com/arandu-io/framework/security"
+	"github.com/arandu-io/hesape/config"
 	hhttp "github.com/arandu-io/hesape/http"
 	"github.com/arandu-io/hesape/view"
 
@@ -392,6 +398,100 @@ func TestTheLayoutLinksWhereTheApplicationRegisteredItsRoutes(t *testing.T) {
 		}
 		if got, _ := link(body, "data-logout"); got != "" {
 			t.Errorf("with no route named auth.logout %s links Sign out to %q, want nothing", target, got)
+		}
+	}
+}
+
+// chromeModule hands the application the layout above, the way an
+// application's view module hands it its own renderer.
+type chromeModule struct{}
+
+func (chromeModule) Name() string             { return "chrome" }
+func (chromeModule) Routes(*fhttp.Router)     {}
+func (chromeModule) Renderer() fhttp.Renderer { return chrome{} }
+
+// linkViews registers the screens under their names once, which is what the
+// compiled views do from init() in an application that imported them: the
+// module refuses to boot without them, and the registry is the process's.
+var linkViews sync.Once
+
+// serveApplication builds the application the way bootstrap/app.go does --
+// the framework's Application, the layout module, this module, and the
+// middleware that protects forms -- with name as the configured APP_NAME, and
+// serves it through the Application's own handler, which is where the
+// configured name is put on every request.
+func serveApplication(t *testing.T, name string) servedWallet {
+	t.Helper()
+
+	sessions := security.NewSessionStore([]byte(appKey), time.Hour, false, security.NewMemoryBackend())
+	module, err := wallet.New(wallet.Config{Tenant: tenant}, database(t), sessions)
+	if err != nil {
+		t.Fatalf("building the module: %v", err)
+	}
+
+	linkViews.Do(func() {
+		for _, name := range wallet.ViewNames() {
+			view.Register(name, func(io.Writer, any) error { return nil })
+		}
+	})
+	app := foundation.New(bootstrap.Configuration{
+		App:           config.App{Name: name, Env: config.EnvProd, Key: []byte(appKey)},
+		Observability: bootstrap.Observability{LogLevel: slog.LevelError},
+	})
+	csrf := security.NewCSRF([]byte(appKey), time.Hour).Secure(false)
+	app.Register(chromeModule{}, module).Use(middleware.CSRFProtect(csrf, sessions.IDFromRequest))
+	if err := app.Boot(context.Background()); err != nil {
+		t.Fatalf("booting the application: %v", err)
+	}
+	return servedWallet{handler: app.Handler(), sessions: sessions, module: module}
+}
+
+// brand is the text of the brand link in a drawn screen.
+func brand(t *testing.T, body string) string {
+	t.Helper()
+	m := regexp.MustCompile(`<a data-brand href="[^"]*">([^<]*)</a>`).FindStringSubmatch(body)
+	if m == nil {
+		t.Fatalf("the screen draws no brand link:\n%s", body)
+	}
+	return html.UnescapeString(m[1])
+}
+
+// TestTheScreensDrawTheNameTheApplicationIsConfiguredWith holds that the brand
+// on these screens is the application's APP_NAME, read off the request. This
+// module never reads the application's configuration, so the name can reach
+// its screens only by the request the Application served.
+func TestTheScreensDrawTheNameTheApplicationIsConfiguredWith(t *testing.T) {
+	t.Parallel()
+
+	const name = "Ledgerly Books"
+	app := serveApplication(t, name)
+	opened := openWallet(t, app.module.Service(), "user-1", "main", 2)
+	session := app.signIn(t, person("user-1"))
+	targets := []string{
+		wallet.DefaultPrefix,
+		wallet.DefaultPrefix + "/" + opened.ID,
+		wallet.DefaultPrefix + "/" + opened.ID + "/entries",
+	}
+	for _, target := range targets {
+		body, _, _ := app.draw(t, target, session)
+		if got := brand(t, body); got != name {
+			t.Errorf("%s draws the brand %q, want the configured APP_NAME %q", target, got, name)
+		}
+	}
+
+	// An application configured with no name puts none on the request, and
+	// the screens make none up.
+	bare := serveApplication(t, "")
+	theirs := openWallet(t, bare.module.Service(), "user-1", "main", 2)
+	signedIn := bare.signIn(t, person("user-1"))
+	for _, target := range []string{
+		wallet.DefaultPrefix,
+		wallet.DefaultPrefix + "/" + theirs.ID,
+		wallet.DefaultPrefix + "/" + theirs.ID + "/entries",
+	} {
+		body, _, _ := bare.draw(t, target, signedIn)
+		if got := brand(t, body); got != "" {
+			t.Errorf("with no APP_NAME %s draws the brand %q, want none", target, got)
 		}
 	}
 }

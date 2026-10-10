@@ -909,6 +909,10 @@ func (m *Module) locale(r *stdhttp.Request) string { return translation.Locale(r
 // table, by the names view.New documents, so a route the application never
 // registered draws no link.
 //
+// The brand is the application's APP_NAME, which the Application put on the
+// request and view.New reads: this module never reads the application's
+// configuration, so the request is the only way the name reaches it.
+//
 // Authenticated is the one field set after New, from the subject this module
 // reads off the session: the routes here load nobody onto the request, so the
 // subject New would ask about is never there.
