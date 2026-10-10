@@ -840,8 +840,11 @@ var (
 	ErrWalletExists = errors.New("wallet: this holder already has a wallet with that slug")
 
 	// ErrOperationConflict is returned when an idempotency key names a request
-	// that asked for something else. Two different requests under one key
-	// cannot both be that key's answer, so neither is guessed at.
+	// that asked for something else: another kind of operation, or the same
+	// kind with another wallet, another amount, another side waiting, another
+	// operation settled or other lines. Two different requests under one key
+	// cannot both be that key's answer, so neither is guessed at, and nothing
+	// is written.
 	ErrOperationConflict = errors.New("wallet: that idempotency key belongs to a different request")
 
 	// ErrConcurrencyConflict is returned when the engine refused a movement as

@@ -102,7 +102,8 @@ func (s *WalletService) Pay(ctx context.Context, actor security.Subject, in PayR
 	// After the wallet, and never before it. A replay hands back money that
 	// moved -- and here the lines of a basket besides -- so who is entitled to
 	// see it is the same question as who may spend from this wallet.
-	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationPurchase, payer.ID); err != nil || found {
+	asked := askedBasket(payer.ID, in.Cart)
+	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationPurchase, payer.ID, asked); err != nil || found {
 		return receipt, err
 	}
 
@@ -116,6 +117,8 @@ func (s *WalletService) Pay(ctx context.Context, actor security.Subject, in PayR
 		kind:  OperationPurchase,
 		meta:  in.Cart.Meta(),
 		lines: priced.lines,
+		owner: payer.ID,
+		asked: asked,
 	}, priced.movements)
 }
 
@@ -181,7 +184,9 @@ func (s *WalletService) Refund(ctx context.Context, actor security.Subject, in R
 
 	// After the lines have been read and the wallets giving the money back have
 	// been authorized, which reverseLines does.
-	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationRefund, settledFor(priced.movements)); err != nil || found {
+	owner := settledFor(priced.movements)
+	asked := askedRefund(in.PurchaseIDs)
+	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationRefund, owner, asked); err != nil || found {
 		return receipt, err
 	}
 
@@ -191,6 +196,8 @@ func (s *WalletService) Refund(ctx context.Context, actor security.Subject, in R
 		reason: in.Reason,
 		meta:   in.Meta,
 		lines:  priced.lines,
+		owner:  owner,
+		asked:  asked,
 	}, priced.movements)
 	if err != nil && !errors.Is(err, ErrInsufficientFunds) {
 		// The unique index on the line being settled is what refuses a second

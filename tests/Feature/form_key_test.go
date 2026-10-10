@@ -266,3 +266,47 @@ func TestAClientNamingItsRequestInTheHeaderIsAnsweredAsBefore(t *testing.T) {
 		t.Fatalf("the replays moved money: balance %d, want 500", got)
 	}
 }
+
+// TestAFormSentAgainWithAnotherAmountIsRefused is the case a drawn form makes
+// easy: the back button, the amount edited, the same button. The form still
+// carries the key it was drawn with, so the second submission names the first
+// request and asks for something else -- and it is refused rather than
+// redirected as though the new amount had moved.
+func TestAFormSentAgainWithAnotherAmountIsRefused(t *testing.T) {
+	t.Parallel()
+
+	app := serveWallet(t, true)
+	service := app.module.Service()
+	main := openWallet(t, service, "user-1", "main", 2)
+	session := app.signIn(t, person("user-1"))
+	body, token, cookies := app.draw(t, wallet.DefaultPrefix+"/"+main.ID, session)
+	action, key := drawnForm(t, body, "deposit")
+
+	sent := url.Values{"_token": {token}, wallet.IdempotencyField: {key}, "amount": {"10.00"}}
+	if code, answer := app.submit(t, action, sent, cookies, nil); code != http.StatusSeeOther {
+		t.Fatalf("the deposit form answered %d: %s", code, answer)
+	}
+
+	edited := url.Values{"_token": {token}, wallet.IdempotencyField: {key}, "amount": {"25.00"}}
+	if code, answer := app.submit(t, action, edited, cookies, nil); code != http.StatusConflict {
+		t.Fatalf("the same form sent again with another amount answered %d, want %d: %s", code, http.StatusConflict, answer)
+	}
+
+	// A client naming its request in the header is told the same thing.
+	target := wallet.DefaultPrefix + "/" + main.ID + "/deposits"
+	asked := http.Header{wallet.IdempotencyHeader: {"client-deposit-1"}, "Accept": {"application/json"}}
+	if code, answer := app.submit(t, target, url.Values{"_token": {token}, "amount": {"5.00"}}, cookies, asked); code != http.StatusCreated {
+		t.Fatalf("the header deposit answered %d: %s", code, answer)
+	}
+	if code, answer := app.submit(t, target, url.Values{"_token": {token}, "amount": {"6.00"}}, cookies, asked); code != http.StatusConflict ||
+		!strings.Contains(answer, "different request") {
+		t.Fatalf("the header key sent again with another amount answered %d, want %d: %s", code, http.StatusConflict, answer)
+	}
+
+	if got := balanceOf(t, service, main.ID); got != 1500 {
+		t.Fatalf("the wallet holds %d, want 1500: each first request once, and neither edit", got)
+	}
+	if got := entriesOf(t, service, main.ID); got != 2 {
+		t.Fatalf("the ledger holds %d entries, want 2", got)
+	}
+}

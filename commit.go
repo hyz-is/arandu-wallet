@@ -38,6 +38,13 @@ type operation struct {
 	meta    Meta
 	rate    *appliedRate
 	charge  *appliedCharge
+	// owner is the wallet the calling method authorized before it asked
+	// whether the key was already spent, and asked is what the request said.
+	// They travel with the operation because commit asks the same question
+	// again when the unique index refuses the row, and the answer there has to
+	// be the answer the method got before it priced anything.
+	owner string
+	asked claim
 	// lines are the basket this operation paid for or gave back, and empty on
 	// every operation that bought nothing. They are written inside the same
 	// transaction as the movements, because a line whose money moved and whose
@@ -320,10 +327,19 @@ func (s *WalletService) commit(ctx context.Context, g security.Grant, op operati
 		// whichever wrote first -- and losing that race is exactly the path
 		// this branch is: the unique index refused the second operation row, so
 		// the loser looks up what the winner did. A loser who is not in the
-		// winner's operation is answered with ErrNotFound rather than with
-		// somebody else's money.
-		if replayed, found, lookupErr := s.replay(ctx, g, op.key, op.kind, settledFor(movements)); lookupErr == nil && found {
+		// winner's operation is refused rather than handed somebody else's
+		// money.
+		//
+		// A winner that asked for something else is the same answer the
+		// lookup before pricing gives: the key names a different request. The
+		// index error underneath it says only that a row collided, and a
+		// caller handed that would read a duplicate key as a failure to retry.
+		replayed, found, lookupErr := s.replay(ctx, g, op.key, op.kind, op.owner, op.asked)
+		if lookupErr == nil && found {
 			return replayed, nil
+		}
+		if errors.Is(lookupErr, ErrOperationConflict) {
+			return Receipt{}, lookupErr
 		}
 		if !conflicted(err) {
 			return Receipt{}, err
@@ -1074,17 +1090,6 @@ func (s *WalletService) whyNothingMoved(ctx context.Context, g security.Grant, m
 	return ErrAmountOverflow
 }
 
-// replay answers with what this idempotency key already did, if anything.
-//
-// A key that names an operation of another kind is a conflict rather than a
-// replay: one key cannot be the name of two different requests, and answering
-// the deposit's receipt to a withdrawal would be answering a question nobody
-// asked.
-//
-// A replayed exchange answers with the rate the first call was quoted, read
-// back off the row rather than asked for again. That is what makes idempotency
-// mean the same thing for a conversion as for anything else: the same key twice
-// converts once, at one rate, and the second answer is the first answer.
 // settledFor is the wallet a settlement of an existing operation belongs to.
 //
 // The first movement, because mirror and settle build them from the entries of
@@ -1116,14 +1121,16 @@ func settledFor(movements []movement) string {
 // said this subject may act on that wallet, and this says the key names an
 // operation that touched it.
 //
-// # Both sides of a transfer are owners here
+// # Both sides of a transfer are in it, and only one request is its replay
 //
 // A transfer writes an entry on the payer and one on the payee, so either of
-// them replaying under that key is answered. That is a choice rather than an
-// oversight: the receipt describes a movement that this wallet's own ledger
-// already shows, and refusing it would mean the payee cannot ask what a payment
-// they received consisted of. What it does not do is answer somebody who was
-// not in the operation at all.
+// them is in the operation and neither is answered with ErrNotFound. Being in
+// it is not the same as asking for it, though: what is replayed is the request
+// itself, from the payer to the payee, for the amount that was asked. The
+// payee naming their own wallet as the source is asking for a payment in the
+// other direction, which is a different request and is refused as one. A
+// payee who wants to know what arrived reads their own statement. What this
+// never does is answer somebody who was not in the operation at all.
 //
 // An empty owner never matches, which is what keeps a caller that has no wallet
 // to name from being answered by accident.
@@ -1139,7 +1146,154 @@ func movedFor(owner string, entries []Entry) bool {
 	return false
 }
 
-func (s *WalletService) replay(ctx context.Context, g security.Grant, key string, kind OperationKind, owner string) (Receipt, bool, error) {
+// claim is what a request asked for, written as a question about the rows an
+// earlier request under the same key recorded: true when they are the answer
+// to this request, false when they are the answer to a different one.
+//
+// It asks only about what the caller decided -- the wallets, the amount it
+// wrote, which side waits, the operation it settles, the lines it names -- and
+// never about what a seam answered. A rate, a fee, a discount or a catalogue
+// price can move between a request and its retry, and a retry is still the same
+// request when it does. Meta and a reason are carried and not compared, as Meta
+// itself says: nothing about the money is decided from them.
+type claim func(Receipt) bool
+
+// askedMovement is the claim of a deposit or a withdrawal: one entry, on this
+// wallet, in this direction, of this amount, counting now or waiting.
+func askedMovement(walletID string, kind EntryKind, amount Amount, pending bool) claim {
+	return func(r Receipt) bool {
+		if len(r.Entries) != 1 {
+			return false
+		}
+		e := r.Entries[0]
+		return e.WalletID == walletID && e.Kind == kind && e.Amount == amount && bool(e.Settled) == !pending
+	}
+}
+
+// askedTransfer is the claim of a payment between two wallets: the money left
+// this wallet and arrived in that one, each side counting now or waiting as it
+// was asked, and the amount the caller wrote is the amount it asked to move.
+//
+// What the caller wrote is on the charge row where there is one, because a
+// discount or a fee makes the first entry a different number. Where there is
+// none, nothing was taken off and nothing was added, so the first entry is
+// exactly what was asked for -- at the source's scale, as the request was
+// read.
+func askedTransfer(from, to string, requested Amount, withdrawalPending, depositPending bool) claim {
+	return func(r Receipt) bool {
+		if len(r.Entries) < 2 {
+			return false
+		}
+		out, in := r.Entries[0], r.Entries[1]
+		if out.WalletID != from || out.Kind != EntryWithdraw || bool(out.Settled) != !withdrawalPending {
+			return false
+		}
+		if in.WalletID != to || in.Kind != EntryDeposit || bool(in.Settled) != !depositPending {
+			return false
+		}
+		if r.Charge != nil {
+			return r.Charge.RequestedAmount == requested
+		}
+		return out.Amount == requested
+	}
+}
+
+// askedSettlement is the claim of a reversal or a confirmation: the operation
+// it settles is the one this request names.
+func askedSettlement(operationID string) claim {
+	return func(r Receipt) bool { return r.Operation.SettlesID == operationID }
+}
+
+// askedAdjustment is the claim of a repair: one entry, on this wallet. What it
+// moved is not the caller's to say, so it is not compared.
+func askedAdjustment(walletID string) claim {
+	return func(r Receipt) bool { return len(r.Entries) == 1 && r.Entries[0].WalletID == walletID }
+}
+
+// askedBasket is the claim of a payment for a basket: the same lines, in the
+// same order, each one the same product in the same quantity, paid from this
+// wallet to the same receiver, for the same beneficiary.
+//
+// A price written on a line is compared with the price the row recorded. A
+// price the line leaves to the catalogue is not, because the catalogue may
+// answer differently on the retry than it did on the first call, and the
+// request -- this product, this many -- is the same request either way.
+func askedBasket(payerID string, cart Cart) claim {
+	items := cart.Items()
+	return func(r Receipt) bool {
+		if len(r.Purchases) != len(items) {
+			return false
+		}
+		for i, item := range items {
+			line := r.Purchases[i]
+			owner := payerID
+			if item.BeneficiaryWalletID != "" {
+				owner = item.BeneficiaryWalletID
+			}
+			if item.Product == nil ||
+				line.Position != i ||
+				line.PayerWalletID != payerID ||
+				line.OwnerWalletID != owner ||
+				line.ReceiverWalletID != item.receiver() ||
+				line.ProductKey != item.Product.ProductKey() ||
+				line.Quantity != item.quantity() {
+				return false
+			}
+			if item.PricePerItem != "" {
+				price, err := ParseAmount(item.PricePerItem, line.DecimalPlaces)
+				if err != nil || price != line.PricePerItem {
+					return false
+				}
+			}
+		}
+		return true
+	}
+}
+
+// askedRefund is the claim of a refund: it gave back exactly these lines, in
+// whatever order the request named them.
+func askedRefund(purchaseIDs []string) claim {
+	named := make(map[string]bool, len(purchaseIDs))
+	for _, id := range purchaseIDs {
+		named[id] = true
+	}
+	return func(r Receipt) bool {
+		if len(r.Purchases) != len(named) {
+			return false
+		}
+		for _, line := range r.Purchases {
+			if !named[line.SettlesID] {
+				return false
+			}
+		}
+		return true
+	}
+}
+
+// replay answers with what this idempotency key already did, if anything.
+//
+// A key that names an operation of another kind is a conflict rather than a
+// replay: one key cannot be the name of two different requests, and answering
+// the deposit's receipt to a withdrawal would be answering a question nobody
+// asked. A key that names an operation of the same kind that asked for
+// something else is the same conflict, for the same reason -- answering the
+// receipt of a deposit of ten to a deposit of twenty would be reporting money
+// as moved that never moved, and the twenty would be lost without a word. The
+// two are one answer, ErrOperationConflict, and asked is what tells them apart
+// from a replay: a nil claim answers nothing and is refused rather than
+// believed.
+//
+// Who may hear about the operation is decided before what it asked for is
+// compared, and a caller who was not in it is refused with the same answer
+// without anything of it being read further. That answer says the key is
+// spent, which is all such a caller learns -- and nothing they could do under
+// that key would have worked anyway, because the unique index holds it.
+//
+// A replayed exchange answers with the rate the first call was quoted, read
+// back off the row rather than asked for again. That is what makes idempotency
+// mean the same thing for a conversion as for anything else: the same key twice
+// converts once, at one rate, and the second answer is the first answer.
+func (s *WalletService) replay(ctx context.Context, g security.Grant, key string, kind OperationKind, owner string, asked claim) (Receipt, bool, error) {
 	record, err := Operations(s.db).Where("idempotency_key", "=", key).First(ctx, g)
 	if err != nil {
 		return Receipt{}, false, err
@@ -1167,14 +1321,12 @@ func (s *WalletService) replay(ctx context.Context, g security.Grant, key string
 
 	// The key is not the permission. Everything below this line is somebody's
 	// money, and what says it is this caller's is the wallet the caller was
-	// authorized for a moment ago -- not the fact that they know a string.
+	// authorized for a moment ago -- not the fact that they know a string. A
+	// caller who was not in the operation is handed none of it, and is told
+	// what anybody naming a spent key for another request is told.
 	if !movedFor(owner, entries) {
-		return Receipt{}, false, ErrNotFound
+		return Receipt{}, false, ErrOperationConflict
 	}
-
-	// The key is not the permission. Everything below this line is somebody's
-	// money, and what says it is this caller's is the wallet the caller was
-	// authorized for a moment ago -- not the fact that they know a string.
 
 	// Only an exchange has one, so only an exchange is asked for one. A read
 	// on every replay would be a statement per deposit that answers nothing.
@@ -1220,12 +1372,20 @@ func (s *WalletService) replay(ctx context.Context, g security.Grant, key string
 			}
 		}
 	}
-	return Receipt{
+
+	receipt := Receipt{
 		Operation:  *record,
 		Entries:    entries,
 		Conversion: conversion,
 		Charge:     charge,
 		Purchases:  purchases,
 		Replayed:   true,
-	}, true, nil
+	}
+	// And only then what it asked for. Everything the comparison reads is on
+	// the receipt, so it is asked once, about the rows the caller would be
+	// handed.
+	if asked == nil || !asked(receipt) {
+		return Receipt{}, false, ErrOperationConflict
+	}
+	return receipt, true, nil
 }

@@ -159,14 +159,16 @@ func TestTheReplayAfterALostRaceIsRefusedToSomebodyOutsideIt(t *testing.T) {
 	}
 }
 
-// TestBothSidesOfATransferMayReplayIt states the choice the ownership check
-// makes, so it is a decision somebody wrote rather than a thing that happens.
+// TestAPaymentNamedBackwardsIsAnotherRequest states what being in a transfer
+// does and does not buy, so it is a decision somebody wrote rather than a thing
+// that happens.
 //
-// A transfer writes an entry on the payer and one on the payee, and either of
-// them replaying under that key is answered. The receipt describes a movement
-// that this wallet's own ledger already shows; refusing it would mean the payee
-// cannot ask what a payment they received consisted of.
-func TestBothSidesOfATransferMayReplayIt(t *testing.T) {
+// The payee is in the operation, and that keeps them from being refused as a
+// stranger. It does not make a payment in the other direction the same
+// request: answering it with the receipt would report a payment back to the
+// payer that never happened. The payee who sends the payment itself again is
+// answered, because that is the request.
+func TestAPaymentNamedBackwardsIsAnotherRequest(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -183,15 +185,26 @@ func TestBothSidesOfATransferMayReplayIt(t *testing.T) {
 	}
 
 	// The payee asks under the same key, naming their own wallet as the source.
-	// They are in the operation, so they are answered -- and nothing moves.
-	replayed, err := service.Transfer(ctx, staff(), wallet.TransferRequest{
+	// That is a payment back to the payer, and it is refused as one.
+	backwards, err := service.Transfer(ctx, staff(), wallet.TransferRequest{
 		IdempotencyKey: "both-sides", FromWalletID: payee.ID, ToWalletID: payer.ID, Amount: "5.00",
 	})
+	if !errors.Is(err, wallet.ErrOperationConflict) {
+		t.Fatalf("a payment named backwards under the same key answered %v, want ErrOperationConflict", err)
+	}
+	if backwards.Operation.ID != "" || len(backwards.Entries) > 0 {
+		t.Fatalf("the refused request still carried operation=%q entries=%d", backwards.Operation.ID, len(backwards.Entries))
+	}
+
+	// The payment itself, sent again, is the request, and it is answered.
+	replayed, err := service.Transfer(ctx, staff(), wallet.TransferRequest{
+		IdempotencyKey: "both-sides", FromWalletID: payer.ID, ToWalletID: payee.ID, Amount: "5.00",
+	})
 	if err != nil {
-		t.Fatalf("the payee's replay was refused: %v", err)
+		t.Fatalf("the payment sent again was refused: %v", err)
 	}
 	if !replayed.Replayed || replayed.Operation.ID != first.Operation.ID {
-		t.Fatalf("the payee's replay answered a different operation")
+		t.Fatalf("the payment sent again answered a different operation")
 	}
 	if got := balanceOf(t, service, payer.ID); got != 1500 {
 		t.Fatalf("the payer holds %d after a replay, want 1500: the replay moved money", got)

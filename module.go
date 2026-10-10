@@ -35,7 +35,9 @@
 // Every operation carries an idempotency key the caller chose. The same key
 // twice moves money once: the second call answers with the first one's receipt,
 // and for an exchange that means the first one's rate and the first one's
-// price. That key is also what makes a movement safe to send again: a
+// price. The same key with a different request -- another amount, another
+// wallet -- is refused with ErrOperationConflict, the answer a key spent on
+// another kind of operation gets, and moves nothing. That key is also what makes a movement safe to send again: a
 // transaction the engine refuses as a conflict with another one wrote nothing
 // and is retried here, and one that committed without the caller hearing so is
 // answered with what it did rather than repeated. A conflict that survives the

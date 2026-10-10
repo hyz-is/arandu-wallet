@@ -268,19 +268,24 @@ func (s *WalletService) Deposit(ctx context.Context, actor security.Subject, in 
 	// moved; asking who is entitled to see it is the same question as asking
 	// who may move it, and the answer is the one the policy just gave about
 	// this wallet.
-	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationDeposit, target.ID); err != nil || found {
-		return receipt, err
-	}
-
+	//
+	// The amount is read first, because a replay is the same request and the
+	// amount is part of what the request asked for.
 	amount, err := positiveAmount(in.Amount, target.DecimalPlaces)
 	if err != nil {
 		return Receipt{}, err
 	}
+	asked := askedMovement(target.ID, EntryDeposit, amount, in.Pending)
+	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationDeposit, target.ID, asked); err != nil || found {
+		return receipt, err
+	}
 
 	return s.commit(ctx, g, operation{
-		key:  in.IdempotencyKey,
-		kind: OperationDeposit,
-		meta: in.Meta,
+		key:   in.IdempotencyKey,
+		kind:  OperationDeposit,
+		meta:  in.Meta,
+		owner: target.ID,
+		asked: asked,
 	}, []movement{{wallet: target, kind: EntryDeposit, amount: amount, pending: in.Pending}})
 }
 
@@ -318,19 +323,21 @@ func (s *WalletService) Withdraw(ctx context.Context, actor security.Subject, in
 	// moved; asking who is entitled to see it is the same question as asking
 	// who may move it, and the answer is the one the policy just gave about
 	// this wallet.
-	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationWithdraw, source.ID); err != nil || found {
-		return receipt, err
-	}
-
 	amount, err := positiveAmount(in.Amount, source.DecimalPlaces)
 	if err != nil {
 		return Receipt{}, err
 	}
+	asked := askedMovement(source.ID, EntryWithdraw, amount, in.Pending)
+	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationWithdraw, source.ID, asked); err != nil || found {
+		return receipt, err
+	}
 
 	return s.commit(ctx, g, operation{
-		key:  in.IdempotencyKey,
-		kind: OperationWithdraw,
-		meta: in.Meta,
+		key:   in.IdempotencyKey,
+		kind:  OperationWithdraw,
+		meta:  in.Meta,
+		owner: source.ID,
+		asked: asked,
 	}, []movement{{wallet: source, kind: EntryWithdraw, amount: amount, pending: in.Pending, force: in.Force}})
 }
 
@@ -400,13 +407,13 @@ func (s *WalletService) Transfer(ctx context.Context, actor security.Subject, in
 	if converts(*source, *target) {
 		kind = OperationExchange
 	}
-	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, kind, source.ID); err != nil || found {
-		return receipt, err
-	}
-
 	requested, err := positiveAmount(in.Amount, source.DecimalPlaces)
 	if err != nil {
 		return Receipt{}, err
+	}
+	asked := askedTransfer(source.ID, target.ID, requested, in.Withdrawal.Pending, in.Deposit.Pending)
+	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, kind, source.ID, asked); err != nil || found {
+		return receipt, err
 	}
 
 	// What the payer is charged less comes off first, because everything after
@@ -478,6 +485,8 @@ func (s *WalletService) Transfer(ctx context.Context, actor security.Subject, in
 		meta:   in.Meta,
 		rate:   applied,
 		charge: charged,
+		owner:  source.ID,
+		asked:  asked,
 	}, movements)
 }
 
@@ -548,7 +557,9 @@ func (s *WalletService) Reverse(ctx context.Context, actor security.Subject, in 
 	// touches has been authorized, which mirror and settle do. Before that, a
 	// replay would be answering about somebody else's operation to whoever
 	// knows the key.
-	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationReversal, settledFor(movements)); err != nil || found {
+	owner := settledFor(movements)
+	asked := askedSettlement(original.ID)
+	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationReversal, owner, asked); err != nil || found {
 		return receipt, err
 	}
 
@@ -558,6 +569,8 @@ func (s *WalletService) Reverse(ctx context.Context, actor security.Subject, in 
 		settles: original.ID,
 		reason:  in.Reason,
 		meta:    in.Meta,
+		owner:   owner,
+		asked:   asked,
 	}, movements)
 	if err != nil && !errors.Is(err, ErrInsufficientFunds) {
 		// The unique index on the operation being settled is what refuses a
@@ -622,7 +635,9 @@ func (s *WalletService) Confirm(ctx context.Context, actor security.Subject, in 
 	// touches has been authorized, which mirror and settle do. Before that, a
 	// replay would be answering about somebody else's operation to whoever
 	// knows the key.
-	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationConfirmation, settledFor(movements)); err != nil || found {
+	owner := settledFor(movements)
+	asked := askedSettlement(original.ID)
+	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationConfirmation, owner, asked); err != nil || found {
 		return receipt, err
 	}
 
@@ -631,6 +646,8 @@ func (s *WalletService) Confirm(ctx context.Context, actor security.Subject, in 
 		kind:    OperationConfirmation,
 		settles: original.ID,
 		meta:    in.Meta,
+		owner:   owner,
+		asked:   asked,
 	}, movements)
 	if err != nil && !errors.Is(err, ErrInsufficientFunds) {
 		// The unique index on the operation being settled is what refuses a

@@ -186,7 +186,8 @@ func (s *WalletService) Rebuild(ctx context.Context, actor security.Subject, in 
 
 	// After the wallet, and never before it: knowing the key of a repair
 	// somebody else asked for is not being allowed to read what it wrote.
-	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationAdjustment, holder.ID); err != nil || found {
+	asked := askedAdjustment(holder.ID)
+	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationAdjustment, holder.ID, asked); err != nil || found {
 		return receipt, err
 	}
 	if !holder.Frozen {
@@ -219,5 +220,7 @@ func (s *WalletService) Rebuild(ctx context.Context, actor security.Subject, in 
 		kind:   OperationAdjustment,
 		reason: in.Reason,
 		meta:   in.Meta,
+		owner:  holder.ID,
+		asked:  asked,
 	}, []movement{{wallet: holder, kind: kind, amount: amount, adjust: true, meta: in.Meta}})
 }
