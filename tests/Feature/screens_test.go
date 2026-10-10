@@ -55,7 +55,7 @@ func TestEveryAddressOnAScreenIsTheRouteItLinksTo(t *testing.T) {
 	const prefix = "/money"
 	ctx := context.Background()
 	sessions := security.NewSessionStore([]byte(appKey), time.Hour, false, security.NewMemoryBackend())
-	module, err := wallet.New(wallet.Config{Tenant: tenant, Prefix: prefix, PageSize: 1, CSRF: csrf()}, database(t), sessions)
+	module, err := wallet.New(wallet.Config{Tenant: tenant, Prefix: prefix, PageSize: 1}, database(t), sessions)
 	if err != nil {
 		t.Fatalf("building the module: %v", err)
 	}

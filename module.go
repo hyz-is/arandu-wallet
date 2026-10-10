@@ -750,22 +750,26 @@ func (m *Module) receipt(ctx *fhttp.Context, receipt Receipt) error {
 func (m *Module) locale(r *stdhttp.Request) string { return translation.Locale(r.Context()) }
 
 // page is the chrome the application's layout draws around a screen.
+//
+// It is the page view.New builds for every screen of the application, so these
+// screens carry what the application's own carry and by the same rule. The CSRF
+// token is the one the middleware that protects forms issued for this request
+// and put on its context: it is bound to whatever that middleware binds to --
+// the session, or the guest cookie of a visitor who has none -- which is the
+// binding it checks the submission against. A token issued here, by an issuer
+// of its own, would be valid only while that issuer and the middleware's agreed
+// on a key and a binding, and a form on a screen that moves money would be
+// refused the day they did not. The navigation targets come from the route
+// table, by the names view.New documents, so a route the application never
+// registered draws no link.
+//
+// Authenticated is the one field set after New, from the subject this module
+// reads off the session: the routes here load nobody onto the request, so the
+// subject New would ask about is never there.
 func (m *Module) page(ctx *fhttp.Context, title string) view.Page {
-	actor := m.subject(ctx.Request)
-	token, err := m.cfg.CSRF.Issue(m.sessions.IDFromRequest(ctx.Request))
-	if err != nil {
-		// An unissued token is left empty rather than reported. The page still
-		// renders and every form on it is refused, which is what a missing
-		// session means -- and the alternative, failing the read because the
-		// write would fail, is a blank screen where a sign-in prompt belongs.
-		token = ""
-	}
-	return view.Page{
-		Title:         title,
-		Token:         token,
-		Authenticated: actor.ID != "",
-		Path:          ctx.Request.URL.Path,
-	}
+	page := view.New(ctx, title)
+	page.Authenticated = m.subject(ctx.Request).ID != ""
+	return page
 }
 
 // pageOf is where a form is sent back to once its movement is done.

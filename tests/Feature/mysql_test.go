@@ -102,7 +102,7 @@ func mysqlServer(t *testing.T) *data.DB {
 	})
 	migrationConnection := hedatabase.ForMigrations(connection)
 
-	module, err := wallet.New(wallet.Config{Tenant: tenant, CSRF: csrf()},
+	module, err := wallet.New(wallet.Config{Tenant: tenant},
 		data.Wrap(handle, data.DialectMySQL), sessionStore())
 	if err != nil {
 		t.Fatalf("building the module: %v", err)

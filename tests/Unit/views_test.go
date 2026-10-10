@@ -45,10 +45,7 @@ func module(t *testing.T) *wallet.Module {
 	t.Helper()
 
 	sessions := security.NewSessionStore([]byte(sessionKey), time.Hour, false, security.NewMemoryBackend())
-	m, err := wallet.New(wallet.Config{
-		Tenant: "acme",
-		CSRF:   security.NewCSRF([]byte(sessionKey), time.Hour),
-	}, data.Wrap(nil, data.DialectSQLite), sessions)
+	m, err := wallet.New(wallet.Config{Tenant: "acme"}, data.Wrap(nil, data.DialectSQLite), sessions)
 	if err != nil {
 		t.Fatalf("building the module: %v", err)
 	}
