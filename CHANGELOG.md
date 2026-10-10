@@ -16,6 +16,25 @@ name here. They are gone.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-10-09
+
+### Changed
+
+- Requires Framework v0.56.0, Hesape v0.54.0 and Kyse v0.34.1. The
+  manifest's framework floor is `>= 0.56`.
+- `rates/frankfurter` requires Framework v0.56.0, Hesape v0.54.0 and this
+  package at v0.10.0, and its manifest's framework floor is `>= 0.56`.
+- The test that compiles the published views runs the view compiler of `aru`
+  v0.72.0 instead of v0.70.0. The views compile unchanged.
+
+### Fixed
+
+- The screens draw the application's name as their brand. The framework now
+  puts `APP_NAME` on every request and `view.New` reads it, so the listing,
+  operations and statement screens carry the name the application's own
+  screens carry, where they drew an empty brand because this package does not
+  read the application's configuration.
+
 ## [0.10.0] - 2026-10-09
 
 ### Changed

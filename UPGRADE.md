@@ -7,6 +7,39 @@ describing a publishing migration and a Repository removal that both happened
 before `v0.1.0` of this package. They are gone, and what this package actually
 changed at each of its own versions is below.
 
+## v0.10.1
+
+No symbol, route, migration, action, policy decision, tenant rule or amount
+changes, and the published views do not change, so nothing is republished.
+What changes is what an application compiles against: updating to this
+release selects Framework v0.56.0, Hesape v0.54.0 and Kyse v0.34.1.
+
+### The brand on the screens is `APP_NAME`
+
+Framework v0.56.0 puts the configured application name on every request and
+`view.New` reads it into the page, so these screens draw it where they drew an
+empty brand. Nothing is passed to `wallet.New` for it. An application that
+left `APP_NAME` unset sees `arandu-app` there, as on its own screens; set
+`APP_NAME`.
+
+### What the new releases change for the application
+
+Read their upgrade guides from the versions the application required before.
+The ones that reach this package's installers:
+
+- Framework v0.56.0 removes `config.Config.SessionTTL`, and `config.Load` no
+  longer reads `SESSION_TTL`. An application that boots with
+  `bootstrap.LoadConfiguration` compiles and boots unchanged; one that built
+  its session store from `cfg.SessionTTL` builds it from
+  `fw.Session.Lifetime`, in minutes.
+- A controller of the application that assigned `AppName` from its own
+  configuration after `view.New` can delete the assignment.
+- Kyse v0.34.0 draws `OneTimeCode` and `Masked` so they post without script,
+  and requires Hesape v0.53.0, whose script mounts that markup.
+
+`rates/frankfurter` requires the same Framework and Hesape, and this package
+at v0.10.0 or later.
+
 ## v0.10.0
 
 No symbol is removed or changed, and no route, migration, action, policy
