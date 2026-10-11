@@ -109,37 +109,38 @@ cursor.
 `TenantID` is not in any response. That is deliberate: it names a customer's
 identifier and the response is a declared list of fields rather than the entity.
 
-## Every route refuses everybody, until you open the policy
+## Who the policy lets through
 
-This is the state the package ships in, and it is not a bug to work around.
-`WalletPolicy` denies every action and has no branch that allows one:
+`WalletPolicy` checks the tenant first, on every action, and then knows two
+subjects and nobody else:
 
-```
-403 forbidden
-```
+- **The holder** (`s.ID == wallet.HolderID`) views, reads the history, opens,
+  deposits, withdraws, transfers, confirms, pays, reads purchases, describes,
+  and holds, captures and releases on their own wallet.
+- **The operator** (`s.HasRole(wallet.OperatorRole)`) does all of that across
+  the tenant, and also reverses, refunds, sets credit limits, forces, closes,
+  reconciles and sweeps expired holds.
 
-is what a correctly installed, correctly migrated, correctly wired package
-answers to an administrator on day one.
-
-Opening an action means writing the rule that opens it, in the package's
-`policy.go`, inside the block that says so:
-
-```go
-	// arandu:begin custom
-	if a == WalletView && (s.ID == record.ID || s.HasRole("admin")) {
-		return nil
-	}
-	// arandu:end custom
-```
-
-What is not written there stays closed, including every action added later.
-There are five actions — `WalletView`, `WalletList`, `WalletCreate`,
-`WalletUpdate`, `WalletDelete` — and opening one opens exactly one.
+A guest, a subject from another tenant and a signed-in person reaching for
+somebody else's wallet are refused.
 
 **Do not open it from the application.** There is no hook, no override and no
-config flag for the policy, and adding one would be a second place where
-authorization is decided. If the rules this application needs are not the rules
-the package ships, the change belongs in the package.
+config flag for the policy. When your application decides something about money
+that belongs to nobody who signs in, ask your own policy and pass its Grant to
+`wallet.OperatorFor(g)`; do not build a subject with the role by hand. If the
+rules your application needs are not these, the change belongs in the package.
+
+A holder may deposit into their own wallet. When a wallet holds credits that are
+sold rather than earned, do not register this package's routes: call the Service
+from your own handlers, behind your own policy.
+
+## Holds
+
+`Hold` sets an amount aside without moving the balance, `Capture` turns it into
+the withdrawal, `Release` gives it back, and `ReleaseExpired` sweeps the ones past
+`ExpiresAt`. `Wallet.Held` is what open holds set aside and `Wallet.Available()`
+what may still be spent. Run `aru migrate` after upgrading to v0.11.0, or every
+withdrawal fails on the missing `held` column.
 
 ## What the answers mean
 

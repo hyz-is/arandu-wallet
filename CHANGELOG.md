@@ -16,6 +16,42 @@ name here. They are gone.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-11
+
+### Added
+
+- Holds: money a wallet promises without moving its balance. `Hold` sets an
+  amount aside under the same statement guard a withdrawal answers to, so two
+  holds or a hold and a withdrawal racing for the last of the money cannot
+  both go through. `Capture` turns a hold into the withdrawal it promised, in
+  one transaction with the hold settling; `Release` gives it back and writes
+  nothing to the ledger; `ReleaseExpired` gives back every open hold whose
+  `ExpiresAt` passed, and an expired hold is never captured. `HoldsOf` lists
+  a wallet's holds. The same key places, captures and settles once.
+- The `Hold` entity, `HoldStatus` (`HoldHeld`, `HoldCaptured`,
+  `HoldReleased`, `HoldExpired`), `HoldRequest`, `CaptureRequest` and
+  `ReleaseRequest`, and the errors `ErrHoldNotHeld` and `ErrHoldExpired`.
+- The actions `WalletHold`, `WalletCapture` and `WalletRelease`, allowed to
+  the holder on their own wallet and to the operator, and `WalletExpire`, the
+  sweep across a tenant, allowed to the operator only.
+- `Wallet.Held`, the amount open holds set aside, and `Wallet.Available`,
+  the balance and the credit limit less it. The JSON resource carries `held`
+  and `held_minor`.
+- `HistoryRequest.Newest`, which reads a ledger from its latest entry back.
+- `OperatorFor`, the operator of the tenant of a Grant the application's own
+  policy issued, for money that belongs to nobody who signs in and for
+  decisions that are the application's. The zero Grant and one a policy
+  refused are refused.
+- The migrations `20261011_0013_add_wallet_held` (a `held` column on
+  `wallets`, zero everywhere) and `20261011_0014_create_wallet_holds` (the
+  `wallet_holds` table). Run `aru migrate`.
+
+### Changed
+
+- A withdrawal is guarded on the balance less what open holds set aside, at
+  the instant of the write. Without holds the guard answers exactly as
+  before. A forced withdrawal still compares the balance alone.
+
 ## [0.10.1] - 2026-10-09
 
 ### Changed

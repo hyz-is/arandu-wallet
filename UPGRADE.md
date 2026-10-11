@@ -7,6 +7,34 @@ describing a publishing migration and a Repository removal that both happened
 before `v0.1.0` of this package. They are gone, and what this package actually
 changed at each of its own versions is below.
 
+## v0.11.0
+
+Additive. Nothing an application wrote stops compiling, and an application
+that places no hold sees every movement answered as before.
+
+### Run the migrations
+
+Two migrations arrive, `20261011_0013_add_wallet_held` and
+`20261011_0014_create_wallet_holds`. The first adds `held` at zero on every
+wallet. Run `aru migrate` before serving: a withdrawal statement names the
+`held` column, so a binary of this version on a database without it fails
+every withdrawal.
+
+### Reserving before work whose outcome is unknown
+
+An application that withdrew first and reversed when the work failed can
+`Hold` instead, then `Capture` when the work happened and `Release` when it
+did not. The money stays on the balance while it is held, which is what a
+statement shows, and a released hold leaves nothing to reverse. Schedule
+`ReleaseExpired` as an operator if holds carry an `ExpiresAt`.
+
+### An operator from the application's own decision
+
+Code that built `security.Subject{Roles: []string{wallet.OperatorRole}}` by
+hand after its own policy allowed the request can pass that policy's Grant to
+`OperatorFor` instead. The subject is the same; what changes is that it is
+derived from a decision somebody's policy made.
+
 ## v0.10.1
 
 No symbol, route, migration, action, policy decision, tenant rule or amount

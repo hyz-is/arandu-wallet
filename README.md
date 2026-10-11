@@ -220,6 +220,46 @@ afterwards, one statement for a whole page of questions.
 A basket is undone line by line, with `Refund`, so a basket half of which was
 already given back cannot be given back whole.
 
+## Hold before work whose outcome is unknown
+
+Some work has a known price and an unknown outcome: a lookup that may fail, a
+job that may not run. Hold the money first, then capture or release it:
+
+```go
+h, err := svc.Hold(ctx, actor, wallet.HoldRequest{
+	IdempotencyKey: "lookup:" + lookupID, WalletID: w.ID, Amount: "1",
+	ExpiresAt: time.Now().Add(10 * time.Minute),
+})
+// ... the work ...
+_, err = svc.Capture(ctx, actor, wallet.CaptureRequest{IdempotencyKey: "capture:" + lookupID, HoldID: h.ID})
+// or, when it did not happen:
+_, err = svc.Release(ctx, actor, wallet.ReleaseRequest{HoldID: h.ID, Reason: "the lookup failed"})
+```
+
+A hold sets the amount aside without moving the balance: `Wallet.Held` rises,
+and every withdrawal and every other hold is guarded on the balance less it, in
+the statement that writes. A capture is one transaction with the withdrawal; a
+release writes nothing to the ledger, because nothing moved. A hold past its
+`ExpiresAt` is never captured, and `ReleaseExpired`, run by an operator on a
+schedule, gives the expired ones back.
+
+## Act as the operator after your own policy decided
+
+Money that belongs to nobody who signs in -- an organisation's wallet -- is
+moved by the operator. Ask your own policy first and derive the operator from
+the Grant it issued:
+
+```go
+g, err := security.Authorize(ctx, creditPolicy, person, CreditManage, scope)
+if err != nil {
+	return err
+}
+operator, err := wallet.OperatorFor(g)
+```
+
+The operator reaches the wallets of the Grant's tenant and no other: the wallet
+policy checks the tenant before the role on every call.
+
 ## Be told what the money did
 
 ```go
@@ -299,6 +339,8 @@ meta.go        what the application attaches to a movement
 cart.go        the basket, and the seams that say what is for sale
 model.go       the entities, and what they may answer with
 purchase.go    the record of what was bought, and its own read model
+hold.go        money set aside before it is taken, and how a hold settles
+operator.go    the operator derived from an application's own decision
 policy.go      who may do what
 service.go     the rules and authorized Model access
 event.go       what a listener is told, once the write has committed
