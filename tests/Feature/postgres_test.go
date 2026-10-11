@@ -731,3 +731,88 @@ func TestConcurrentExchangesUnderOneKeySettleAtOneRate(t *testing.T) {
 	}
 	assertConversionReproduces(t, statement.Conversions[settled.OperationID])
 }
+
+// TestHoldsAndWithdrawalsInterleavingNeverPromiseMoreThanThereIs places holds
+// and withdrawals at once against one balance, then captures every hold at
+// once. Each unit is spent or promised exactly once, and the ledger explains
+// the balance at the end.
+func TestHoldsAndWithdrawalsInterleavingNeverPromiseMoreThanThereIs(t *testing.T) {
+	t.Parallel()
+
+	service := wallet.NewWalletService(postgres(t), nil, nil, nil)
+	account := openWallet(t, service, "user-1", "main", 0)
+	deposit(t, service, account.ID, "opening", "20")
+
+	var (
+		start, done sync.WaitGroup
+		mu          sync.Mutex
+		holds       []*wallet.Hold
+		withdrawn   int
+		other       []error
+	)
+	start.Add(1)
+	done.Add(withdrawers)
+	for i := range withdrawers {
+		go func() {
+			defer done.Done()
+			start.Wait()
+			var err error
+			if i%2 == 0 {
+				var h *wallet.Hold
+				h, err = service.Hold(context.Background(), staff(), wallet.HoldRequest{IdempotencyKey: fmt.Sprintf("hold-%d", i), WalletID: account.ID, Amount: "1"})
+				if err == nil {
+					mu.Lock()
+					holds = append(holds, h)
+					mu.Unlock()
+				}
+			} else {
+				_, err = service.Withdraw(context.Background(), staff(), wallet.WithdrawRequest{IdempotencyKey: fmt.Sprintf("withdraw-%d", i), WalletID: account.ID, Amount: "1"})
+				if err == nil {
+					mu.Lock()
+					withdrawn++
+					mu.Unlock()
+				}
+			}
+			if err != nil && !errors.Is(err, wallet.ErrInsufficientFunds) {
+				mu.Lock()
+				other = append(other, err)
+				mu.Unlock()
+			}
+		}()
+	}
+	start.Done()
+	done.Wait()
+	for _, err := range other {
+		t.Errorf("a hold or a withdrawal failed for a reason that is not the balance: %v", err)
+	}
+	if len(holds)+withdrawn != 20 {
+		t.Fatalf("%d holds and %d withdrawals went through on 20 units, want 20 in all", len(holds), withdrawn)
+	}
+
+	var captures sync.WaitGroup
+	captures.Add(len(holds))
+	for i, h := range holds {
+		go func() {
+			defer captures.Done()
+			if _, err := service.Capture(context.Background(), staff(), wallet.CaptureRequest{IdempotencyKey: fmt.Sprintf("capture-%d", i), HoldID: h.ID}); err != nil {
+				mu.Lock()
+				other = append(other, err)
+				mu.Unlock()
+			}
+		}()
+	}
+	captures.Wait()
+	for _, err := range other {
+		t.Errorf("a capture failed: %v", err)
+	}
+	record, err := service.Find(context.Background(), staff(), account.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Balance != 0 || record.Held != 0 {
+		t.Fatalf("after every capture the balance is %d with %d held, want 0 and 0", record.Balance, record.Held)
+	}
+	if ledger := ledgerOf(t, service, account.ID); ledger != 0 {
+		t.Fatalf("the ledger sums to %d, want 0", ledger)
+	}
+}

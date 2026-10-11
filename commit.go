@@ -50,6 +50,11 @@ type operation struct {
 	// transaction as the movements, because a line whose money moved and whose
 	// record is missing is a purchase nobody can find and nobody can refund.
 	lines []purchaseLine
+	// hold is the hold this operation captures, and empty on every other one.
+	// It is marked captured inside the same transaction as the withdrawal, so
+	// there is no state in which the money left and the hold still reads as
+	// open, nor one in which the hold is spent and the money stayed.
+	hold string
 }
 
 // purchaseLine is one line of a basket as it will be recorded, and there are
@@ -156,6 +161,16 @@ type movement struct {
 	// one movement that writes while a wallet is frozen, because it is what
 	// lifts the freeze.
 	adjust bool
+	// fromHold makes this withdrawal the capture of a hold: the money it takes
+	// was set aside by that hold, so the statement lowers the held column by
+	// the same amount and guards on it rather than on the balance floor the
+	// hold already answered.
+	fromHold bool
+	// setAside and takeBack move the held column alone, for placing and
+	// releasing a hold. Neither moves the balance nor writes a ledger row,
+	// which is why they are never in the list an operation applies.
+	setAside bool
+	takeBack bool
 	// meta is what the application attached to this side of the operation.
 	meta Meta
 }
@@ -411,6 +426,11 @@ func (s *WalletService) attempt(ctx context.Context, g security.Grant, op operat
 				return err
 			}
 			charge = taken
+		}
+		if op.hold != "" {
+			if err := s.captureHold(ctx, g, op.hold, id); err != nil {
+				return err
+			}
 		}
 		written, err := s.apply(ctx, g, id, movements)
 		if err != nil {
@@ -801,6 +821,28 @@ func moveStatement(m movement, tenant string, dialect data.Dialect) (string, []a
 		// number read here.
 		set = q("last_sequence") + " = " + q("last_sequence") + " + 1"
 		guard = servableGuard(q)
+	case m.setAside:
+		// Placing a hold. The balance does not move and nothing takes a place
+		// in the ledger; what moves is the held column, under the same floor a
+		// withdrawal answers to, so two holds racing for the last of the money
+		// cannot both be placed.
+		set = fmt.Sprintf("%s = %s + %d", q("held"), q("held"), int64(m.amount))
+		guard = servableGuard(q) + " and (" + q("balance") + " - " + q("held") + ") >= " + withdrawalFloor(m.amount, false, q)
+	case m.takeBack:
+		// Releasing a hold: the amount it set aside is spendable again. It is
+		// guarded on the held column only, so a hold is released from a frozen
+		// or closed wallet too -- giving a promise back moves no money.
+		set = fmt.Sprintf("%s = %s - %d", q("held"), q("held"), int64(m.amount))
+		guard = fmt.Sprintf("%s >= %d", q("held"), int64(m.amount))
+	case m.fromHold:
+		// The capture of a hold. The money was set aside when the hold was
+		// placed, under the same floor every withdrawal answers to, so what is
+		// checked here is that it is still set aside: a hold released in the
+		// meantime leaves the held column short and this matching no row.
+		set = fmt.Sprintf("%s = %s - %d, %s = %s - %d, %s = %s + 1",
+			q("balance"), q("balance"), int64(m.amount), q("held"), q("held"), int64(m.amount),
+			q("last_sequence"), q("last_sequence"))
+		guard = servableGuard(q) + fmt.Sprintf(" and %s >= %d", q("held"), int64(m.amount))
 	case m.kind == EntryWithdraw:
 		// The balance has to still be enough at the moment of the write, and
 		// what "enough" is comes off the same row in the same statement: the
@@ -809,7 +851,15 @@ func moveStatement(m movement, tenant string, dialect data.Dialect) (string, []a
 		// withdrawals both spend.
 		set = fmt.Sprintf("%s = %s - %d, %s = %s + 1",
 			q("balance"), q("balance"), int64(m.amount), q("last_sequence"), q("last_sequence"))
-		guard = servableGuard(q) + " and " + q("balance") + " >= " + withdrawalFloor(m.amount, m.force, q)
+		// What may be spent is the balance less what open holds set aside, so
+		// money promised to a hold is money no other withdrawal reaches. A
+		// forced movement compares the balance alone, because force is the
+		// request to move past every floor and a hold is one of them.
+		spendable := "(" + q("balance") + " - " + q("held") + ")"
+		if m.force {
+			spendable = q("balance")
+		}
+		guard = servableGuard(q) + " and " + spendable + " >= " + withdrawalFloor(m.amount, m.force, q)
 	case m.kind == EntryDeposit:
 		// And it has to still have room, or the column wraps into a negative
 		// balance that no rule in this package would ever have allowed.
@@ -1074,6 +1124,8 @@ func (s *WalletService) whyNothingMoved(ctx context.Context, g security.Grant, m
 		return ErrWalletFrozen
 	case bool(after.Closed):
 		return ErrWalletClosed
+	case m.fromHold:
+		return ErrHoldNotHeld
 	case m.pending:
 		// Nothing about the money can have refused this one, so the row is
 		// gone: another statement in this transaction would have read it.

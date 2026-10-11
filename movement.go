@@ -149,6 +149,11 @@ type HistoryRequest struct {
 	// written and by nothing else, so Sort is not read here: a statement in
 	// another order is a statement that does not add up as you read down it.
 	Query data.Query
+	// Newest reads the ledger from its latest entry back, which is what a
+	// screen showing recent movements wants: the first page is the last one
+	// written, and the cursor walks towards the oldest. The order is still the
+	// sequence, reversed, so each page still adds up read from its end.
+	Newest bool
 }
 
 // Statement is a page of one wallet's ledger, together with the wallet it
@@ -182,7 +187,8 @@ type Statement struct {
 	Charges map[string]Charge
 }
 
-// History returns a page of one wallet's ledger, oldest first.
+// History returns a page of one wallet's ledger, oldest first, or newest first
+// when the request asks for it.
 //
 // It is a read, and it asks the policy the same two questions a read of the
 // wallet itself asks: whether this subject reads ledgers, and whether they read
@@ -218,10 +224,19 @@ func (s *WalletService) History(ctx context.Context, actor security.Subject, in 
 		if anchor == nil {
 			return Statement{Wallet: *holder}, nil
 		}
-		page = page.Where("sequence", ">", anchor)
+		if in.Newest {
+			page = page.Where("sequence", "<", anchor)
+		} else {
+			page = page.Where("sequence", ">", anchor)
+		}
 	}
 
-	entries, err := page.OrderBy("sequence").Limit(boundedLimit(in.Query.Limit)).Get(ctx, g)
+	if in.Newest {
+		page = page.OrderByDesc("sequence")
+	} else {
+		page = page.OrderBy("sequence")
+	}
+	entries, err := page.Limit(boundedLimit(in.Query.Limit)).Get(ctx, g)
 	if err != nil {
 		return Statement{}, err
 	}

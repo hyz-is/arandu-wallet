@@ -59,11 +59,38 @@ func TestEveryBalanceStatementCarriesItsOwnGuard(t *testing.T) {
 			want []string
 		}{
 			{
-				name: "a withdrawal is guarded on the balance and the limit",
+				name: "a withdrawal is guarded on the balance less the holds, and the limit",
 				m:    movement{wallet: aWallet(), kind: EntryWithdraw, amount: 250},
 				want: []string{
 					balance + " = " + balance + " - 250",
-					balance + " >= 250 - " + q("credit_limit"),
+					"(" + balance + " - " + q("held") + ") >= 250 - " + q("credit_limit"),
+					servableGuard(q),
+				},
+			},
+			{
+				name: "a hold is placed on the same floor and moves no balance",
+				m:    movement{wallet: aWallet(), amount: 250, setAside: true},
+				want: []string{
+					q("held") + " = " + q("held") + " + 250",
+					"(" + balance + " - " + q("held") + ") >= 250 - " + q("credit_limit"),
+					servableGuard(q),
+				},
+			},
+			{
+				name: "a released hold gives back only what it set aside",
+				m:    movement{wallet: aWallet(), amount: 250, takeBack: true},
+				want: []string{
+					q("held") + " = " + q("held") + " - 250",
+					q("held") + " >= 250",
+				},
+			},
+			{
+				name: "a captured hold takes the balance and the held amount together",
+				m:    movement{wallet: aWallet(), kind: EntryWithdraw, amount: 250, fromHold: true},
+				want: []string{
+					balance + " = " + balance + " - 250",
+					q("held") + " = " + q("held") + " - 250",
+					q("held") + " >= 250",
 					servableGuard(q),
 				},
 			},

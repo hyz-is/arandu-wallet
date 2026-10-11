@@ -145,6 +145,14 @@ type Wallet struct {
 	// servable.
 	Closed Flag `db:"closed"`
 
+	// Held is how much of the balance open holds set aside.
+	//
+	// A hold is money promised and not yet taken: the balance does not move,
+	// and what a withdrawal may spend is the balance less this column, read by
+	// the same statement that moves the money. It goes back down when a hold is
+	// captured, released or expires. See Hold.
+	Held Amount `db:"held"`
+
 	// CreatedAt is when the wallet was opened, in UTC.
 	CreatedAt time.Time `db:"created_at"`
 
@@ -204,6 +212,14 @@ func Slugify(slug, name string) string {
 		derived = strings.TrimRight(derived[:maxIdentifierLen], "-")
 	}
 	return derived
+}
+
+// Available is what a withdrawal may spend now: the balance and the credit
+// limit, less what open holds set aside. It is a reading for a screen; the
+// statement that moves the money decides with the same arithmetic at the
+// instant of the write.
+func (w Wallet) Available() Amount {
+	return w.Balance + w.CreditLimit - w.Held
 }
 
 // Money returns an amount read at this wallet's currency and scale.
@@ -854,6 +870,15 @@ var (
 	// under the same idempotency key is safe.
 	ErrConcurrencyConflict = errors.New("wallet: the engine refused this movement as a conflict with another transaction, and the retries did not clear it")
 
+	// ErrHoldNotHeld is returned when a capture or a release names a hold that
+	// was already captured, released or expired. Each hold settles once.
+	ErrHoldNotHeld = errors.New("wallet: that hold is no longer held, so there is nothing to capture or release")
+
+	// ErrHoldExpired is returned when a capture names a hold whose expiry has
+	// passed. An expired hold is released, never captured: the promise it made
+	// was for a time that is over.
+	ErrHoldExpired = errors.New("wallet: that hold expired, and an expired hold is released rather than captured")
+
 	// ErrWalletFrozen is returned when a movement names a wallet whose ledger
 	// no longer explains its balance. The refusal comes from the statement that
 	// would have moved the money, so a wallet frozen between the read and the
@@ -914,6 +939,7 @@ type Resource struct {
 	decimalPlaces int
 	balance       Amount
 	creditLimit   Amount
+	held          Amount
 	frozen        Flag
 	closed        Flag
 	createdAt     time.Time
@@ -932,6 +958,7 @@ func NewResource(record Wallet) Resource {
 		decimalPlaces: record.DecimalPlaces,
 		balance:       record.Balance,
 		creditLimit:   record.CreditLimit,
+		held:          record.Held,
 		frozen:        record.Frozen,
 		closed:        record.Closed,
 		createdAt:     record.CreatedAt,
@@ -969,6 +996,8 @@ func (r Resource) ToArray() map[string]any {
 		"balance":            r.balance.Format(r.decimalPlaces),
 		"credit_limit_minor": int64(r.creditLimit),
 		"credit_limit":       r.creditLimit.Format(r.decimalPlaces),
+		"held_minor":         int64(r.held),
+		"held":               r.held.Format(r.decimalPlaces),
 		"frozen":             bool(r.frozen),
 		"closed":             bool(r.closed),
 		"created_at":         r.createdAt.UTC().Format(time.RFC3339),

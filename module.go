@@ -1214,6 +1214,8 @@ func (m *Module) Migrations() []foundation.Migration {
 		addWalletFreeze{},
 		addWalletDescription{},
 		addWalletClosure{},
+		addWalletHeld{},
+		createWalletHolds{},
 	}
 }
 
@@ -1234,6 +1236,8 @@ var (
 	_ migrations.ReversibleMigration = addWalletFreeze{}
 	_ migrations.ReversibleMigration = addWalletDescription{}
 	_ migrations.ReversibleMigration = addWalletClosure{}
+	_ migrations.ReversibleMigration = addWalletHeld{}
+	_ migrations.ReversibleMigration = createWalletHolds{}
 )
 
 // createWallets is the balances table.
@@ -1800,4 +1804,61 @@ func (addWalletClosure) Down(ctx context.Context, conn migrations.Connection) er
 	return conn.Schema().Table(ctx, walletsTable, func(table *schema.Blueprint) {
 		table.DropColumn("closed")
 	})
+}
+
+// addWalletHeld is the column open holds set money aside in.
+type addWalletHeld struct{ migrations.BaseMigration }
+
+// GetName is the migration's identity, and it carries the order.
+func (addWalletHeld) GetName() string { return "20261011_0013_add_wallet_held" }
+
+// Up adds the held column, at zero on every wallet: nothing was held before
+// holds existed.
+func (addWalletHeld) Up(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Table(ctx, walletsTable, func(table *schema.Blueprint) {
+		table.BigInteger("held").Default(0)
+	})
+}
+
+// Down drops the column. Holds still open are forgotten with it, so a rollback
+// with open holds gives their money back to what the wallets may spend.
+func (addWalletHeld) Down(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Table(ctx, walletsTable, func(table *schema.Blueprint) {
+		table.DropColumn("held")
+	})
+}
+
+// createWalletHolds is the record of every hold and how it settled.
+type createWalletHolds struct{ migrations.BaseMigration }
+
+// GetName is the migration's identity, and it carries the order.
+func (createWalletHolds) GetName() string { return "20261011_0014_create_wallet_holds" }
+
+// Up creates the holds table. The key is unique per tenant, which is what makes
+// two requests under one key place one hold, and the sweep of expired holds
+// reads through the status and the expiry.
+func (createWalletHolds) Up(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Create(ctx, holdsTable, func(table *schema.Blueprint) {
+		table.String("id", maxIdentifierLen).Primary()
+		table.String("tenant_id", maxIdentifierLen)
+		table.String("wallet_id", maxIdentifierLen)
+		table.String("idempotency_key", maxIdempotencyKeyLen)
+		table.BigInteger("amount")
+		table.String("status", maxIdentifierLen)
+		table.Timestamp("expires_at").Nullable()
+		table.String("operation_id", maxIdentifierLen).Default("")
+		table.String("reason", maxReasonLen).Default("")
+		table.String("meta", MaxMetaBytes).Default("")
+		table.Timestamp("created_at")
+		table.Timestamp("updated_at")
+
+		table.Unique([]string{"tenant_id", "idempotency_key"}, "wallet_holds_key_uq")
+		table.Index([]string{"tenant_id", "wallet_id", "status"}, "wallet_holds_wallet_idx")
+		table.Index([]string{"tenant_id", "status", "expires_at"}, "wallet_holds_expiry_idx")
+	})
+}
+
+// Down drops the table.
+func (createWalletHolds) Down(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().DropIfExists(ctx, holdsTable)
 }

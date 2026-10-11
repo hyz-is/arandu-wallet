@@ -193,7 +193,7 @@ func TestEveryServiceMethodAuthorizesBeforeTheModel(t *testing.T) {
 func firstModelReach(body *ast.BlockStmt) token.Pos {
 	entries := map[string]bool{
 		"Wallets": true, "Operations": true, "Entries": true,
-		"Conversions": true, "Charges": true, "Purchases": true,
+		"Conversions": true, "Charges": true, "Purchases": true, "Holds": true,
 	}
 	terminals := map[string]bool{
 		"Save": true, "Delete": true, "Restore": true, "Touch": true,

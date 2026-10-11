@@ -82,6 +82,17 @@ const (
 	// no longer moves, or a ledger with a row in it that no request produced.
 	// Neither is a reading of somebody's money, and neither is theirs to do.
 	WalletReconcile security.Action = "wallet.reconcile"
+
+	// WalletHold is setting money aside on a wallet without moving its balance.
+	WalletHold security.Action = "wallet.hold"
+	// WalletCapture is turning a hold into the withdrawal it promised.
+	WalletCapture security.Action = "wallet.capture"
+	// WalletRelease is giving a hold back without taking its money.
+	WalletRelease security.Action = "wallet.release"
+	// WalletExpire is the sweep that gives back every hold whose time ended,
+	// across the wallets of the tenant. It reads holds that are not one
+	// holder's, so it is the operator's.
+	WalletExpire security.Action = "wallet.expire"
 )
 
 // OperatorRole is the role an application grants to the people who run its
@@ -164,7 +175,8 @@ func (WalletPolicy) Can(ctx context.Context, s security.Subject, a security.Acti
 			WalletDeposit, WalletWithdraw, WalletTransfer, WalletReverse,
 			WalletConfirm, WalletCredit, WalletForce,
 			WalletPay, WalletRefund, WalletPurchases, WalletReconcile,
-			WalletDescribe, WalletClose:
+			WalletDescribe, WalletClose,
+			WalletHold, WalletCapture, WalletRelease, WalletExpire:
 			return nil
 		}
 	}
@@ -186,7 +198,7 @@ func (WalletPolicy) Can(ctx context.Context, s security.Subject, a security.Acti
 		switch a {
 		case WalletList, WalletView, WalletHistory, WalletDeposit, WalletWithdraw,
 			WalletTransfer, WalletConfirm, WalletPay, WalletPurchases,
-			WalletDescribe:
+			WalletDescribe, WalletHold, WalletCapture, WalletRelease:
 			return nil
 		}
 		return fmt.Errorf("no rule allows %s on wallet", a)
@@ -197,7 +209,7 @@ func (WalletPolicy) Can(ctx context.Context, s security.Subject, a security.Acti
 		switch a {
 		case WalletView, WalletHistory, WalletCreate, WalletDeposit, WalletWithdraw,
 			WalletTransfer, WalletConfirm, WalletPay, WalletPurchases,
-			WalletDescribe:
+			WalletDescribe, WalletHold, WalletCapture, WalletRelease:
 			return nil
 		}
 	}
