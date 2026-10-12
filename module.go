@@ -83,9 +83,12 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
+	"mime"
 	stdhttp "net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/arandu-io/framework/data"
 	"github.com/arandu-io/framework/foundation"
@@ -256,9 +259,11 @@ func New(cfg Config, db *data.DB, sessions *security.SessionStore) (*Module, err
 		return nil, err
 	}
 	cfg = cfg.withDefaults()
+	svc := NewWalletService(db, cfg.Rates, cfg.Fees, cfg.Discounts, cfg.Listeners...)
+	svc.receipts = cfg.Receipts
 	return &Module{
 		cfg:      cfg,
-		svc:      NewWalletService(db, cfg.Rates, cfg.Fees, cfg.Discounts, cfg.Listeners...),
+		svc:      svc,
 		sessions: sessions,
 	}, nil
 }
@@ -314,6 +319,16 @@ func (m *Module) Routes(r *fhttp.Router) {
 	m.register(r, "wallet.reverse", m.reverse)
 	m.register(r, "wallet.confirm", m.confirm)
 	m.register(r, "wallet.refund", m.refund)
+	m.register(r, "wallet.payout_accounts", m.payoutAccounts)
+	m.register(r, "wallet.payout_accounts.store", m.storePayoutAccount)
+	m.register(r, "wallet.payout_accounts.disable", m.disablePayoutAccount)
+	m.register(r, "wallet.withdrawals.request", m.requestWithdrawal)
+	m.register(r, "wallet.withdrawals.index", m.withdrawalRequests)
+	m.register(r, "wallet.withdrawals.cancel", m.cancelWithdrawal)
+	m.register(r, "wallet.withdrawals.process", m.processWithdrawal)
+	m.register(r, "wallet.withdrawals.pay", m.payWithdrawal)
+	m.register(r, "wallet.withdrawals.reject", m.rejectWithdrawal)
+	m.register(r, "wallet.withdrawals.receipt", m.withdrawalReceipt)
 }
 
 // Paying for a basket has no route here, and its absence is a decision.
@@ -1057,6 +1072,15 @@ func (m *Module) answer(ctx *fhttp.Context, err error) error {
 	case errors.Is(err, ErrNotFound):
 		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusNotFound, "not found")
 		return nil
+	case errors.Is(err, ErrAccountUnusable):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusUnprocessableEntity, "that payout account cannot take this request")
+		return nil
+	case errors.Is(err, ErrWithdrawalProcessing):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusConflict, "that request is being paid and can no longer be cancelled")
+		return nil
+	case errors.Is(err, ErrWithdrawalClosed):
+		fhttp.Refuse(ctx.Response, ctx.Request, stdhttp.StatusConflict, "that request is already closed")
+		return nil
 
 	// The state of a record that already exists is a conflict: the request was
 	// well formed and the answer is that it has already been settled one way.
@@ -1216,6 +1240,9 @@ func (m *Module) Migrations() []foundation.Migration {
 		addWalletClosure{},
 		addWalletHeld{},
 		createWalletHolds{},
+		addWalletPayoutByRequest{},
+		createWalletPayoutAccounts{},
+		createWalletWithdrawalRequests{},
 	}
 }
 
@@ -1862,3 +1889,304 @@ func (createWalletHolds) Up(ctx context.Context, conn migrations.Connection) err
 func (createWalletHolds) Down(ctx context.Context, conn migrations.Connection) error {
 	return conn.Schema().DropIfExists(ctx, holdsTable)
 }
+
+var (
+	_ migrations.ReversibleMigration = addWalletPayoutByRequest{}
+	_ migrations.ReversibleMigration = createWalletPayoutAccounts{}
+	_ migrations.ReversibleMigration = createWalletWithdrawalRequests{}
+)
+
+// addWalletPayoutByRequest adds the flag that closes a wallet to every way out
+// but a withdrawal request.
+type addWalletPayoutByRequest struct{ migrations.BaseMigration }
+
+// GetName is the migration's identity, and it carries the order.
+func (addWalletPayoutByRequest) GetName() string { return "20261013_0015_add_wallet_payout_by_request" }
+
+// Up adds the column, off for every wallet that already exists.
+func (addWalletPayoutByRequest) Up(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Table(ctx, walletsTable, func(table *schema.Blueprint) {
+		table.UnsignedSmallInteger("payout_by_request").Default(0)
+	})
+}
+
+// Down drops the column.
+func (addWalletPayoutByRequest) Down(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Table(ctx, walletsTable, func(table *schema.Blueprint) {
+		table.DropColumn("payout_by_request")
+	})
+}
+
+// createWalletPayoutAccounts is the table of where holders want to be paid.
+type createWalletPayoutAccounts struct{ migrations.BaseMigration }
+
+// GetName is the migration's identity, and it carries the order.
+func (createWalletPayoutAccounts) GetName() string {
+	return "20261013_0016_create_wallet_payout_accounts"
+}
+
+// Up creates the table.
+func (createWalletPayoutAccounts) Up(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Create(ctx, payoutAccountsTable, func(table *schema.Blueprint) {
+		table.String("id", maxIdentifierLen).Primary()
+		table.String("tenant_id", maxIdentifierLen)
+		table.String("holder_id", maxIdentifierLen)
+		table.String("kind", maxIdentifierLen)
+		table.String("label", maxNameLen)
+		table.Text("details")
+		table.String("holder_name", maxNameLen)
+		table.String("holder_document", maxIdentifierLen)
+		table.UnsignedSmallInteger("disabled").Default(0)
+		table.Timestamp("created_at")
+		table.Timestamp("updated_at")
+
+		table.Index([]string{"tenant_id", "holder_id", "created_at"}, "wallet_payout_accounts_holder_idx")
+	})
+}
+
+// Down drops the table.
+func (createWalletPayoutAccounts) Down(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().DropIfExists(ctx, payoutAccountsTable)
+}
+
+// createWalletWithdrawalRequests is the table of withdrawal requests.
+type createWalletWithdrawalRequests struct{ migrations.BaseMigration }
+
+// GetName is the migration's identity, and it carries the order.
+func (createWalletWithdrawalRequests) GetName() string {
+	return "20261013_0017_create_wallet_withdrawal_requests"
+}
+
+// Up creates the table. Asking twice with one key makes one request: the
+// unique index decides between two concurrent first asks.
+func (createWalletWithdrawalRequests) Up(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Create(ctx, withdrawalRequestsTable, func(table *schema.Blueprint) {
+		table.String("id", maxIdentifierLen).Primary()
+		table.String("tenant_id", maxIdentifierLen)
+		table.String("wallet_id", maxIdentifierLen)
+		table.String("holder_id", maxIdentifierLen)
+		table.String("idempotency_key", maxIdempotencyKeyLen)
+		table.BigInteger("amount")
+		table.String("reference", maxNameLen).Default("")
+		table.String("account_id", maxIdentifierLen)
+		table.Text("account_snapshot")
+		table.String("status", maxKindLen)
+		table.String("hold_id", maxIdentifierLen)
+		table.String("operation_id", maxIdentifierLen).Default("")
+		table.String("requested_by", maxIdentifierLen)
+		table.Timestamp("requested_at")
+		table.String("processing_by", maxIdentifierLen).Default("")
+		table.Timestamp("processing_at").Nullable()
+		table.String("closed_by", maxIdentifierLen).Default("")
+		table.Timestamp("closed_at").Nullable()
+		table.String("end_to_end_id", maxIdentifierLen).Default("")
+		table.String("receipt_key", maxReasonLen).Default("")
+		table.String("receipt_name", maxNameLen).Default("")
+		table.String("receipt_type", maxIdentifierLen).Default("")
+		table.String("receipt_sha256", maxIdentifierLen).Default("")
+		table.String("rejected_reason", maxReasonLen).Default("")
+		table.Timestamp("created_at")
+		table.Timestamp("updated_at")
+
+		table.Unique([]string{"tenant_id", "idempotency_key"}, "wallet_withdrawal_requests_key_uq")
+		table.Index([]string{"tenant_id", "status", "requested_at"}, "wallet_withdrawal_requests_status_idx")
+		table.Index([]string{"tenant_id", "holder_id", "requested_at"}, "wallet_withdrawal_requests_holder_idx")
+	})
+}
+
+// Down drops the table.
+func (createWalletWithdrawalRequests) Down(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().DropIfExists(ctx, withdrawalRequestsTable)
+}
+
+// The handlers of the withdrawal flow. Thin, as every handler here: read the
+// input and who is asking, ask the service, answer. They answer JSON; the
+// screens that use them belong to the consumer that knows what is withdrawn.
+
+// payoutAccounts answers a holder's accounts: ?holder= for an operator, the
+// subject's own otherwise.
+func (m *Module) payoutAccounts(ctx *fhttp.Context) error {
+	who := m.subject(ctx.Request)
+	holder := ctx.Query("holder")
+	if holder == "" {
+		holder = who.ID
+	}
+	accounts, err := m.svc.PayoutAccountsOf(ctx.Ctx(), who, holder)
+	if err != nil {
+		return m.answer(ctx, err)
+	}
+	return ctx.JSON(stdhttp.StatusOK, payoutAccountsResource(accounts))
+}
+
+// storePayoutAccount declares an account. holder_id defaults to the subject.
+func (m *Module) storePayoutAccount(ctx *fhttp.Context) error {
+	who := m.subject(ctx.Request)
+	holder := ctx.Input("holder_id")
+	if holder == "" {
+		holder = who.ID
+	}
+	account, err := m.svc.AddPayoutAccount(ctx.Ctx(), who, PayoutAccountRequest{
+		HolderID: holder, Kind: ctx.Input("kind"), Label: ctx.Input("label"),
+		Details: m.meta(ctx, "details"), HolderName: ctx.Input("holder_name"),
+		HolderDocument: ctx.Input("holder_document"),
+	})
+	if err != nil {
+		return m.answer(ctx, err)
+	}
+	return ctx.JSON(stdhttp.StatusCreated, payoutAccountsResource([]*PayoutAccount{account}))
+}
+
+// disablePayoutAccount stops an account from taking new requests.
+func (m *Module) disablePayoutAccount(ctx *fhttp.Context) error {
+	account, err := m.svc.DisablePayoutAccount(ctx.Ctx(), m.subject(ctx.Request), ctx.Param("account"))
+	if err != nil {
+		return m.answer(ctx, err)
+	}
+	return ctx.JSON(stdhttp.StatusOK, payoutAccountsResource([]*PayoutAccount{account}))
+}
+
+// requestWithdrawal asks for money to leave the wallet in the path.
+func (m *Module) requestWithdrawal(ctx *fhttp.Context) error {
+	key, err := m.idempotencyKey(ctx, "wallet.withdrawals.request", ctx.Param("id"))
+	if err != nil {
+		return m.answer(ctx, err)
+	}
+	req, err := m.svc.RequestWithdrawal(ctx.Ctx(), m.subject(ctx.Request), WithdrawalRequestInput{
+		IdempotencyKey: key, WalletID: ctx.Param("id"), Amount: ctx.Input("amount"),
+		AccountID: ctx.Input("account_id"), Reference: ctx.Input("reference"),
+	})
+	if err != nil {
+		return m.answer(ctx, err)
+	}
+	return ctx.JSON(stdhttp.StatusCreated, withdrawalsResource([]*WithdrawalRequest{req}))
+}
+
+// withdrawalRequests answers requests: the subject's own, or for an operator
+// the queue, filtered by ?status=&holder=&wallet=.
+func (m *Module) withdrawalRequests(ctx *fhttp.Context) error {
+	list, err := m.svc.WithdrawalRequestsOf(ctx.Ctx(), m.subject(ctx.Request), WithdrawalFilter{
+		HolderID: ctx.Query("holder"), WalletID: ctx.Query("wallet"),
+		Status: WithdrawalStatus(ctx.Query("status")), Limit: m.cfg.PageSize,
+	})
+	if err != nil {
+		return m.answer(ctx, err)
+	}
+	return ctx.JSON(stdhttp.StatusOK, withdrawalsResource(list))
+}
+
+// cancelWithdrawal is the holder taking a request back.
+func (m *Module) cancelWithdrawal(ctx *fhttp.Context) error {
+	req, err := m.svc.CancelWithdrawal(ctx.Ctx(), m.subject(ctx.Request), ctx.Param("request"))
+	if err != nil {
+		return m.answer(ctx, err)
+	}
+	return ctx.JSON(stdhttp.StatusOK, withdrawalsResource([]*WithdrawalRequest{req}))
+}
+
+// processWithdrawal is an operator taking a request to pay it.
+func (m *Module) processWithdrawal(ctx *fhttp.Context) error {
+	req, err := m.svc.StartProcessing(ctx.Ctx(), m.subject(ctx.Request), ctx.Param("request"))
+	if err != nil {
+		return m.answer(ctx, err)
+	}
+	return ctx.JSON(stdhttp.StatusOK, withdrawalsResource([]*WithdrawalRequest{req}))
+}
+
+// payWithdrawal records the payment: a multipart form with end_to_end_id and
+// the receipt as the part named "receipt".
+func (m *Module) payWithdrawal(ctx *fhttp.Context) error {
+	ctx.Request.Body = stdhttp.MaxBytesReader(ctx.Response, ctx.Request.Body, MaxReceiptBytes+(1<<20))
+	if err := ctx.Request.ParseMultipartForm(MaxReceiptBytes); err != nil {
+		return m.answer(ctx, validation.Errors{"receipt": {"could not be read; send the form as multipart/form-data, under the size limit"}})
+	}
+	in := PaymentInput{RequestID: ctx.Param("request"), EndToEndID: ctx.Request.FormValue("end_to_end_id")}
+	var receipt io.Reader
+	if file, header, err := ctx.Request.FormFile("receipt"); err == nil {
+		defer file.Close()
+		in.ReceiptName, in.ReceiptType = header.Filename, header.Header.Get("Content-Type")
+		receipt = file
+	}
+	req, err := m.svc.PayWithdrawal(ctx.Ctx(), m.subject(ctx.Request), in, receipt)
+	if err != nil {
+		return m.answer(ctx, err)
+	}
+	return ctx.JSON(stdhttp.StatusOK, withdrawalsResource([]*WithdrawalRequest{req}))
+}
+
+// rejectWithdrawal is an operator refusing a request, with the reason.
+func (m *Module) rejectWithdrawal(ctx *fhttp.Context) error {
+	req, err := m.svc.RejectWithdrawal(ctx.Ctx(), m.subject(ctx.Request), ctx.Param("request"), ctx.Input("reason"))
+	if err != nil {
+		return m.answer(ctx, err)
+	}
+	return ctx.JSON(stdhttp.StatusOK, withdrawalsResource([]*WithdrawalRequest{req}))
+}
+
+// withdrawalReceipt streams the receipt of a paid request.
+func (m *Module) withdrawalReceipt(ctx *fhttp.Context) error {
+	req, file, err := m.svc.WithdrawalReceipt(ctx.Ctx(), m.subject(ctx.Request), ctx.Param("request"))
+	if err != nil {
+		return m.answer(ctx, err)
+	}
+	defer file.Body.Close()
+	header := ctx.Response.Header()
+	header.Set("Content-Type", req.ReceiptType)
+	header.Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": req.ReceiptName}))
+	header.Set("Cache-Control", "private, no-store")
+	header.Set("X-Content-Type-Options", "nosniff")
+	ctx.Response.WriteHeader(stdhttp.StatusOK)
+	_, err = io.Copy(ctx.Response, file.Body)
+	return err
+}
+
+type payoutAccountsResource []*PayoutAccount
+
+func (r payoutAccountsResource) ToArray() map[string]any {
+	items := make([]map[string]any, 0, len(r))
+	for _, a := range r {
+		details := map[string]string{}
+		for k, v := range a.Details {
+			details[k] = v
+		}
+		items = append(items, map[string]any{
+			"id": a.ID, "holder_id": a.HolderID, "kind": a.Kind, "label": a.Label,
+			"details": details, "holder_name": a.HolderName, "holder_document": a.HolderDocument,
+			"disabled": bool(a.Disabled), "created_at": a.CreatedAt.UTC().Format(time.RFC3339),
+		})
+	}
+	return map[string]any{"items": items}
+}
+func (r payoutAccountsResource) With() map[string]any { return nil }
+
+type withdrawalsResource []*WithdrawalRequest
+
+func (r withdrawalsResource) ToArray() map[string]any {
+	stamp := func(t *time.Time) string {
+		if t == nil {
+			return ""
+		}
+		return t.UTC().Format(time.RFC3339)
+	}
+	items := make([]map[string]any, 0, len(r))
+	for _, w := range r {
+		if w == nil {
+			continue
+		}
+		account := map[string]string{}
+		for k, v := range w.AccountSnapshot {
+			account[k] = v
+		}
+		items = append(items, map[string]any{
+			"id": w.ID, "wallet_id": w.WalletID, "holder_id": w.HolderID,
+			"amount": int64(w.Amount), "reference": w.Reference,
+			"account_id": w.AccountID, "account": account, "status": string(w.Status),
+			"requested_by": w.RequestedBy, "requested_at": w.RequestedAt.UTC().Format(time.RFC3339),
+			"processing_by": w.ProcessingBy, "processing_at": stamp(w.ProcessingAt),
+			"closed_by": w.ClosedBy, "closed_at": stamp(w.ClosedAt),
+			"end_to_end_id": w.EndToEndID, "has_receipt": w.ReceiptKey != "",
+			"receipt_name": w.ReceiptName, "rejected_reason": w.RejectedReason,
+		})
+	}
+	return map[string]any{"items": items}
+}
+func (r withdrawalsResource) With() map[string]any { return nil }

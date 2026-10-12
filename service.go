@@ -7,6 +7,7 @@ import (
 	"github.com/arandu-io/framework/data"
 	"github.com/arandu-io/framework/security"
 	"github.com/arandu-io/framework/validation"
+	"github.com/arandu-io/hesape/filesystem"
 )
 
 // Pagination bounds for the listings. A request that asks for everything gets
@@ -50,6 +51,9 @@ type WalletService struct {
 	fees      FeeProvider
 	discounts DiscountProvider
 	listeners []Listener
+	// receipts is where the proof of a paid withdrawal is kept: the Disk the
+	// application passed in Config.Receipts, reached with the Grant.
+	receipts *filesystem.Disk
 }
 
 // NewWalletService wires the service over the application's database handle.

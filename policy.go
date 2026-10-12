@@ -93,6 +93,13 @@ const (
 	// across the wallets of the tenant. It reads holds that are not one
 	// holder's, so it is the operator's.
 	WalletExpire security.Action = "wallet.expire"
+	// WalletWithdrawalsRequest is asking for money to leave a wallet through an
+	// operator: the holder's way out of a wallet opened with PayoutByRequest,
+	// and the payout accounts it is paid to.
+	WalletWithdrawalsRequest security.Action = "wallet.withdrawals.request"
+	// WalletWithdrawalsManage is an operator taking, paying or rejecting a
+	// withdrawal request.
+	WalletWithdrawalsManage security.Action = "wallet.withdrawals.manage"
 )
 
 // OperatorRole is the role an application grants to the people who run its
@@ -176,7 +183,8 @@ func (WalletPolicy) Can(ctx context.Context, s security.Subject, a security.Acti
 			WalletConfirm, WalletCredit, WalletForce,
 			WalletPay, WalletRefund, WalletPurchases, WalletReconcile,
 			WalletDescribe, WalletClose,
-			WalletHold, WalletCapture, WalletRelease, WalletExpire:
+			WalletHold, WalletCapture, WalletRelease, WalletExpire,
+			WalletWithdrawalsRequest, WalletWithdrawalsManage:
 			return nil
 		}
 	}
@@ -198,10 +206,24 @@ func (WalletPolicy) Can(ctx context.Context, s security.Subject, a security.Acti
 		switch a {
 		case WalletList, WalletView, WalletHistory, WalletDeposit, WalletWithdraw,
 			WalletTransfer, WalletConfirm, WalletPay, WalletPurchases,
-			WalletDescribe, WalletHold, WalletCapture, WalletRelease:
+			WalletDescribe, WalletHold, WalletCapture, WalletRelease,
+			WalletWithdrawalsRequest:
 			return nil
 		}
 		return fmt.Errorf("no rule allows %s on wallet", a)
+	}
+
+	// A wallet opened with PayoutByRequest lets its money out only through a
+	// withdrawal request an operator pays. Every other way the holder could
+	// take it -- withdrawing, spending, transferring, holding and capturing --
+	// is closed to the holder here, and stays open to the operator above. A
+	// holder who could withdraw from the ledger directly would take a balance
+	// nobody paid out.
+	if bool(record.PayoutByRequest) && s.ID != "" && s.ID == record.HolderID {
+		switch a {
+		case WalletWithdraw, WalletTransfer, WalletPay, WalletHold, WalletCapture, WalletRelease:
+			return fmt.Errorf("wallet %s pays out only through withdrawal requests", record.ID)
+		}
 	}
 
 	// The holder, on a row that has one. This is the call that decides.
@@ -209,7 +231,8 @@ func (WalletPolicy) Can(ctx context.Context, s security.Subject, a security.Acti
 		switch a {
 		case WalletView, WalletHistory, WalletCreate, WalletDeposit, WalletWithdraw,
 			WalletTransfer, WalletConfirm, WalletPay, WalletPurchases,
-			WalletDescribe, WalletHold, WalletCapture, WalletRelease:
+			WalletDescribe, WalletHold, WalletCapture, WalletRelease,
+			WalletWithdrawalsRequest:
 			return nil
 		}
 	}

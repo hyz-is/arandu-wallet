@@ -48,6 +48,11 @@ type OpenRequest struct {
 	// DecimalPlaces is the scale of that currency's minor unit, and it is fixed
 	// once the wallet exists.
 	DecimalPlaces int
+
+	// PayoutByRequest opens a wallet whose money leaves only through a
+	// withdrawal request an operator pays: what a consumer opens for an
+	// investor's or an affiliate's earnings.
+	PayoutByRequest bool
 }
 
 // CreditRequest is what setting a wallet's credit limit takes.
@@ -112,6 +117,7 @@ func (s *WalletService) Open(ctx context.Context, actor security.Subject, in Ope
 	candidate.Meta = in.Meta
 	candidate.Currency = in.Currency
 	candidate.DecimalPlaces = in.DecimalPlaces
+	candidate.PayoutByRequest = Flag(in.PayoutByRequest)
 	candidate.Balance = 0
 
 	if _, err := candidate.Save(ctx, g); err != nil {

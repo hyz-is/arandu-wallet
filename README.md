@@ -170,6 +170,16 @@ needed it.
 | `POST` | `/wallet/operations/{operation}/reversals` | `wallet.reverse` |
 | `POST` | `/wallet/operations/{operation}/confirmations` | `wallet.confirm` |
 | `POST` | `/wallet/purchases/refunds` | `wallet.refund` |
+| `GET` | `/wallet/payouts/accounts` | `wallet.payout_accounts` |
+| `POST` | `/wallet/payouts/accounts` | `wallet.payout_accounts.store` |
+| `DELETE` | `/wallet/payouts/accounts/{account}` | `wallet.payout_accounts.disable` |
+| `POST` | `/wallet/{id}/withdrawal-requests` | `wallet.withdrawals.request` |
+| `GET` | `/wallet/payouts/requests` | `wallet.withdrawals.index` |
+| `DELETE` | `/wallet/payouts/requests/{request}` | `wallet.withdrawals.cancel` |
+| `PUT` | `/wallet/payouts/requests/{request}/processing` | `wallet.withdrawals.process` |
+| `POST` | `/wallet/payouts/requests/{request}/payment` | `wallet.withdrawals.pay` |
+| `POST` | `/wallet/payouts/requests/{request}/rejection` | `wallet.withdrawals.reject` |
+| `GET` | `/wallet/payouts/requests/{request}/receipt` | `wallet.withdrawals.receipt` |
 
 Every one of them is refused until the policy is opened. That is the state the
 package ships in, and it is deliberate.
@@ -219,6 +229,34 @@ afterwards, one statement for a whole page of questions.
 
 A basket is undone line by line, with `Refund`, so a basket half of which was
 already given back cannot be given back whole.
+
+## Pay out through requests
+
+Earnings somebody else pays out -- an investor's share, an affiliate's
+commission -- go in a wallet opened with `PayoutByRequest: true`. Its holder
+cannot withdraw, pay, transfer or hold from it; the only way out is a request
+an operator pays:
+
+```go
+account, err := svc.AddPayoutAccount(ctx, holder, wallet.PayoutAccountRequest{
+	HolderID: holder.ID, Kind: "pix", Label: "Minha chave",
+	Details: wallet.Meta{"key": "ana@example.com", "key_type": "email"},
+	HolderName: "Ana", HolderDocument: "52998224725",
+})
+req, err := svc.RequestWithdrawal(ctx, holder, wallet.WithdrawalRequestInput{
+	IdempotencyKey: key, WalletID: w.ID, Amount: "250.00", AccountID: account.ID,
+	Reference: "invoice:2026-10",
+})
+// the operator, after sending the PIX:
+paid, err := svc.PayWithdrawal(ctx, operator, wallet.PaymentInput{
+	RequestID: req.ID, EndToEndID: e2e, ReceiptName: "comprovante.pdf", ReceiptType: "application/pdf",
+}, receipt)
+```
+
+The amount is held when the request is made, captured when it is paid, and
+released when it is rejected or cancelled. Pass `Config.Receipts`, a Disk, for
+the receipts. A consumer's own rules -- a minimum, one request a day, the whole
+of an invoice -- are checked by the consumer before it asks.
 
 ## Hold before work whose outcome is unknown
 

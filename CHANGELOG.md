@@ -16,6 +16,56 @@ name here. They are gone.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-13
+
+### Added
+
+- Withdrawal requests: money that leaves a wallet because its holder asked
+  and an operator paid it outside the system. `RequestWithdrawal` holds the
+  amount at once, under the same guard every hold answers to, so it cannot be
+  spent twice while the request waits; `StartProcessing` is an operator taking
+  it; `PayWithdrawal` keeps the receipt (PDF, JPEG or PNG) and the end-to-end
+  identifier and captures the hold; `RejectWithdrawal`, with the reason the
+  holder reads, and `CancelWithdrawal`, by the holder before processing,
+  release it. Every step is idempotent, so a payment that failed halfway is
+  finished by asking again and never repeated. `WithdrawalRequestsOf` lists a
+  holder's own requests or, for an operator, the queue; `WithdrawalReceipt`
+  opens the receipt for the holder and the operators.
+- Payout accounts: where a holder wants to be paid -- a PIX key, a bank
+  account, a crypto address or another kind the application names -- with
+  the account holder's name and document. `AddPayoutAccount`,
+  `DisablePayoutAccount`, `PayoutAccountsOf`. A request keeps a snapshot of
+  the account it named, so changing the account later never changes where an
+  old request was paid.
+- `OpenRequest.PayoutByRequest` and `Wallet.PayoutByRequest`: a wallet whose
+  money leaves only through a withdrawal request. Its holder is refused every
+  other way out -- withdrawing, paying, transferring, holding, capturing,
+  releasing -- and the operator keeps them all. It is what a consumer opens
+  for earnings somebody else pays out, such as an investor's or an
+  affiliate's.
+- `Config.Receipts`, the Disk receipts are kept on, reached with the Grant so
+  every key carries the tenant's prefix. Without it every other movement
+  works and paying a withdrawal request is refused.
+- The actions `WalletWithdrawalsRequest`, allowed to the holder on their own
+  wallet and to the operator, and `WalletWithdrawalsManage`, allowed to the
+  operator only.
+- The entities `PayoutAccount` and `WithdrawalRequest`, `WithdrawalStatus`
+  (`WithdrawalRequested`, `WithdrawalProcessing`, `WithdrawalPaid`,
+  `WithdrawalRejected`, `WithdrawalCancelled`), and the errors
+  `ErrWithdrawalClosed`, `ErrWithdrawalProcessing` and `ErrAccountUnusable`.
+- Routes under the prefix: `GET`/`POST /payouts/accounts`,
+  `DELETE /payouts/accounts/{account}`, `POST /{id}/withdrawal-requests`,
+  `GET /payouts/requests`, `DELETE /payouts/requests/{request}`,
+  `PUT /payouts/requests/{request}/processing`,
+  `POST /payouts/requests/{request}/payment` (multipart, with the receipt),
+  `POST /payouts/requests/{request}/rejection` and
+  `GET /payouts/requests/{request}/receipt`. They answer JSON; the screens
+  belong to the consumer that knows what is being withdrawn.
+- The migrations `20261013_0015_add_wallet_payout_by_request` (a
+  `payout_by_request` column on `wallets`, off everywhere),
+  `20261013_0016_create_wallet_payout_accounts` and
+  `20261013_0017_create_wallet_withdrawal_requests`. Run `aru migrate`.
+
 ## [0.11.0] - 2026-10-11
 
 ### Added

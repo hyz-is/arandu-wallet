@@ -7,6 +7,31 @@ describing a publishing migration and a Repository removal that both happened
 before `v0.1.0` of this package. They are gone, and what this package actually
 changed at each of its own versions is below.
 
+## v0.12.0
+
+Additive. Nothing an application wrote stops compiling, and every wallet that
+already exists keeps every way out it had: `payout_by_request` arrives off.
+
+### Run the migrations
+
+Three migrations arrive: `20261013_0015_add_wallet_payout_by_request`,
+`20261013_0016_create_wallet_payout_accounts` and
+`20261013_0017_create_wallet_withdrawal_requests`. Run `aru migrate` before
+serving: a wallet read by this version names the `payout_by_request` column.
+
+### Paying out through requests
+
+A consumer that pays people out of a wallet -- earnings, commissions, a share
+of revenue -- opens it with `PayoutByRequest: true`. Its holder then asks with
+`RequestWithdrawal` instead of withdrawing, and an operator pays the request
+with `PayWithdrawal`, attaching the receipt. Pass `Config.Receipts`, a Disk,
+for the receipts; without one, paying is refused. The consumer's own rules --
+a minimum, one request a day, the whole of an invoice -- are checked by the
+consumer before it calls `RequestWithdrawal`.
+
+Give the people who pay out the operator role; `WalletWithdrawalsManage` is
+theirs alone.
+
 ## v0.11.0
 
 Additive. Nothing an application wrote stops compiling, and an application

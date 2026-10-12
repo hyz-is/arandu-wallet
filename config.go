@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/arandu-io/framework/security"
+	"github.com/arandu-io/hesape/filesystem"
 	"github.com/arandu-io/hesape/translation"
 )
 
@@ -101,6 +102,13 @@ type Config struct {
 	// that renders in one language would have got anyway.
 	Translator *translation.Translator
 
+	// Receipts is the Disk the proof of a paid withdrawal is kept on: the
+	// application's, local or S3, reached with the Grant so every key carries
+	// the tenant's prefix. Optional: without it every other movement works,
+	// and paying a withdrawal request is refused, because a payment nobody can
+	// prove is the one thing that flow exists to avoid.
+	Receipts *filesystem.Disk
+
 	// Listeners are told what the money did, after it did it.
 	//
 	// Empty is the ordinary case. Each one is called once the write has
@@ -195,6 +203,16 @@ var routePatterns = []routePattern{
 	{http.MethodPost, "/operations/{operation}/reversals", "wallet.reverse"},
 	{http.MethodPost, "/operations/{operation}/confirmations", "wallet.confirm"},
 	{http.MethodPost, "/purchases/refunds", "wallet.refund"},
+	{http.MethodGet, "/payouts/accounts", "wallet.payout_accounts"},
+	{http.MethodPost, "/payouts/accounts", "wallet.payout_accounts.store"},
+	{http.MethodDelete, "/payouts/accounts/{account}", "wallet.payout_accounts.disable"},
+	{http.MethodPost, "/{id}/withdrawal-requests", "wallet.withdrawals.request"},
+	{http.MethodGet, "/payouts/requests", "wallet.withdrawals.index"},
+	{http.MethodDelete, "/payouts/requests/{request}", "wallet.withdrawals.cancel"},
+	{http.MethodPut, "/payouts/requests/{request}/processing", "wallet.withdrawals.process"},
+	{http.MethodPost, "/payouts/requests/{request}/payment", "wallet.withdrawals.pay"},
+	{http.MethodPost, "/payouts/requests/{request}/rejection", "wallet.withdrawals.reject"},
+	{http.MethodGet, "/payouts/requests/{request}/receipt", "wallet.withdrawals.receipt"},
 }
 
 // withDefaults returns the configuration with the optional fields filled in.

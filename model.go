@@ -14,11 +14,14 @@ import (
 // each call, because a table named in two places is a table one of them will
 // rename alone.
 const (
-	walletsTable     = "wallets"
-	operationsTable  = "wallet_operations"
-	entriesTable     = "wallet_entries"
-	conversionsTable = "wallet_conversions"
-	chargesTable     = "wallet_charges"
+	walletsTable = "wallets"
+	// The withdrawal requests and the accounts they are paid to.
+	payoutAccountsTable     = "wallet_payout_accounts"
+	withdrawalRequestsTable = "wallet_withdrawal_requests"
+	operationsTable         = "wallet_operations"
+	entriesTable            = "wallet_entries"
+	conversionsTable        = "wallet_conversions"
+	chargesTable            = "wallet_charges"
 )
 
 // Wallet is a balance held for somebody, in one currency.
@@ -152,6 +155,11 @@ type Wallet struct {
 	// the same statement that moves the money. It goes back down when a hold is
 	// captured, released or expires. See Hold.
 	Held Amount `db:"held"`
+
+	// PayoutByRequest closes every way out of the wallet to its holder except a
+	// withdrawal request an operator pays: no withdrawal, payment, transfer or
+	// hold of their own. It is decided when the wallet is opened.
+	PayoutByRequest Flag `db:"payout_by_request"`
 
 	// CreatedAt is when the wallet was opened, in UTC.
 	CreatedAt time.Time `db:"created_at"`
