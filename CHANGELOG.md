@@ -16,6 +16,20 @@ name here. They are gone.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-13
+
+### Added
+
+- `OpenRequest.PayoutVia` and `Wallet.PayoutVia`: the package whose rules
+  every withdrawal request of a wallet passes through. It implies
+  `PayoutByRequest`. `RequestWithdrawal` refuses a request for such a wallet
+  unless `WithdrawalRequestInput.Via` names the same package, with
+  `ErrWithdrawalElsewhere`, which is `security.ErrForbidden` to the router.
+  This package's own route sets no `Via`, so a holder can no longer step
+  around a consumer's limits -- a whole invoice, a minimum, one request a
+  day -- by asking the wallet directly.
+- The migration `20261013_0018_add_wallet_payout_via`.
+
 ## [0.12.0] - 2026-10-13
 
 ### Added

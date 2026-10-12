@@ -7,6 +7,19 @@ describing a publishing migration and a Repository removal that both happened
 before `v0.1.0` of this package. They are gone, and what this package actually
 changed at each of its own versions is below.
 
+## v0.13.0
+
+Additive. Run `aru migrate`: `20261013_0018_add_wallet_payout_via` adds the
+`payout_via` column, empty for every wallet that exists, and a wallet read by
+this version names it. A wallet with an empty `payout_via` behaves exactly as
+before.
+
+A consumer that keeps rules on top of a withdrawal request opens its wallets
+with `PayoutVia: "<its name>"` and passes `Via: "<its name>"` when it asks. A
+wallet such a consumer opened with v0.12.0 has no `payout_via`; set it once
+with an update of the column, or open the consumer's wallets again under a new
+slug.
+
 ## v0.12.0
 
 Additive. Nothing an application wrote stops compiling, and every wallet that

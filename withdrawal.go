@@ -155,6 +155,9 @@ var (
 	ErrWithdrawalProcessing = fmt.Errorf("wallet: the withdrawal request is being paid and can no longer be cancelled: %w", ErrOperationConflict)
 	// ErrAccountUnusable is an account that is disabled or is another holder's.
 	ErrAccountUnusable = errors.New("wallet: the payout account cannot take this request")
+	// ErrWithdrawalElsewhere is a request for a wallet whose withdrawals are
+	// asked for through another package, made without going through it.
+	ErrWithdrawalElsewhere = fmt.Errorf("wallet: this wallet's withdrawals are asked for through the package that manages it: %w", security.ErrForbidden)
 )
 
 // MaxReceiptBytes is the largest receipt accepted: a PDF or a screenshot of a
@@ -282,6 +285,9 @@ type WithdrawalRequestInput struct {
 	Amount         string
 	AccountID      string
 	Reference      string
+	// Via is the package asking on the holder's behalf. It has to match the
+	// wallet's PayoutVia when the wallet names one, and is ignored otherwise.
+	Via string
 }
 
 // Validate reports the errors per field.
@@ -315,6 +321,9 @@ func (s *WalletService) RequestWithdrawal(ctx context.Context, actor security.Su
 	}
 	if _, err := security.Authorize(ctx, s.policy, actor, WalletWithdrawalsRequest, *source); err != nil {
 		return nil, err
+	}
+	if source.PayoutVia != "" && strings.TrimSpace(in.Via) != source.PayoutVia {
+		return nil, ErrWithdrawalElsewhere
 	}
 	amount, err := positiveAmount(in.Amount, source.DecimalPlaces)
 	if err != nil {

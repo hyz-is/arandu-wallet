@@ -1243,6 +1243,7 @@ func (m *Module) Migrations() []foundation.Migration {
 		addWalletPayoutByRequest{},
 		createWalletPayoutAccounts{},
 		createWalletWithdrawalRequests{},
+		addWalletPayoutVia{},
 	}
 }
 
@@ -1894,7 +1895,29 @@ var (
 	_ migrations.ReversibleMigration = addWalletPayoutByRequest{}
 	_ migrations.ReversibleMigration = createWalletPayoutAccounts{}
 	_ migrations.ReversibleMigration = createWalletWithdrawalRequests{}
+	_ migrations.ReversibleMigration = addWalletPayoutVia{}
 )
+
+// addWalletPayoutVia adds the name of the package a wallet's withdrawals are
+// asked for through.
+type addWalletPayoutVia struct{ migrations.BaseMigration }
+
+// GetName is the migration's identity, and it carries the order.
+func (addWalletPayoutVia) GetName() string { return "20261013_0018_add_wallet_payout_via" }
+
+// Up adds the column, empty for every wallet that already exists.
+func (addWalletPayoutVia) Up(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Table(ctx, walletsTable, func(table *schema.Blueprint) {
+		table.String("payout_via", maxIdentifierLen).Default("")
+	})
+}
+
+// Down drops the column.
+func (addWalletPayoutVia) Down(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Table(ctx, walletsTable, func(table *schema.Blueprint) {
+		table.DropColumn("payout_via")
+	})
+}
 
 // addWalletPayoutByRequest adds the flag that closes a wallet to every way out
 // but a withdrawal request.

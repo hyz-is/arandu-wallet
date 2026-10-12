@@ -258,6 +258,22 @@ released when it is rejected or cancelled. Pass `Config.Receipts`, a Disk, for
 the receipts. A consumer's own rules -- a minimum, one request a day, the whole
 of an invoice -- are checked by the consumer before it asks.
 
+A consumer that keeps such rules opens the wallet with `PayoutVia` naming
+itself, and asks with the same name in `WithdrawalRequestInput.Via`. Any other
+request for that wallet -- this package's own `POST /{id}/withdrawal-requests`
+sets no `Via` -- is refused with `ErrWithdrawalElsewhere`, a 403, so a holder
+cannot step around the consumer by asking the wallet directly:
+
+```go
+w, err := svc.Open(ctx, operator, wallet.OpenRequest{
+	HolderID: userID, Slug: "affiliate", Name: "Comissões", Currency: "BRL", DecimalPlaces: 2,
+	PayoutVia: "affiliate", // implies PayoutByRequest
+})
+req, err := svc.RequestWithdrawal(ctx, holder, wallet.WithdrawalRequestInput{
+	IdempotencyKey: key, WalletID: w.ID, Amount: "150.00", AccountID: account.ID, Via: "affiliate",
+})
+```
+
 ## Hold before work whose outcome is unknown
 
 Some work has a known price and an unknown outcome: a lookup that may fail, a

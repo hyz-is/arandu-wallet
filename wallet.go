@@ -3,6 +3,7 @@ package wallet
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/arandu-io/framework/data"
 	"github.com/arandu-io/framework/security"
@@ -53,6 +54,12 @@ type OpenRequest struct {
 	// withdrawal request an operator pays: what a consumer opens for an
 	// investor's or an affiliate's earnings.
 	PayoutByRequest bool
+
+	// PayoutVia names the package that asks for this wallet's withdrawals on
+	// the holder's behalf, and implies PayoutByRequest. A request is then
+	// accepted only when it carries the same name in WithdrawalRequestInput.Via,
+	// which this package's own route never does.
+	PayoutVia string
 }
 
 // CreditRequest is what setting a wallet's credit limit takes.
@@ -117,7 +124,8 @@ func (s *WalletService) Open(ctx context.Context, actor security.Subject, in Ope
 	candidate.Meta = in.Meta
 	candidate.Currency = in.Currency
 	candidate.DecimalPlaces = in.DecimalPlaces
-	candidate.PayoutByRequest = Flag(in.PayoutByRequest)
+	candidate.PayoutVia = strings.TrimSpace(in.PayoutVia)
+	candidate.PayoutByRequest = Flag(in.PayoutByRequest || candidate.PayoutVia != "")
 	candidate.Balance = 0
 
 	if _, err := candidate.Save(ctx, g); err != nil {

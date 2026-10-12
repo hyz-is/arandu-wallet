@@ -16,6 +16,7 @@ func (r OpenRequest) Validate() validation.Errors {
 	validation.Required(e, "name", r.Name)
 	validation.MaxLen(e, "name", r.Name, maxNameLen)
 	validation.MaxLen(e, "description", r.Description, maxDescriptionLen)
+	validation.MaxLen(e, "payout_via", r.PayoutVia, maxIdentifierLen)
 	checkMeta(e, "meta", r.Meta)
 	validation.Required(e, "currency", string(r.Currency))
 	validation.MaxLen(e, "currency", string(r.Currency), maxCurrencyLen)

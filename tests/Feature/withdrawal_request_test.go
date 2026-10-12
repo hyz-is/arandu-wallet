@@ -257,3 +257,53 @@ func TestAHolderListsOnlyTheirOwnRequests(t *testing.T) {
 		t.Fatalf("the operator's queue: %d rows, %v; want both", len(queue), err)
 	}
 }
+
+// TestAWalletManagedByAPackageTakesRequestsOnlyThroughIt holds the rule a
+// consumer's own limits depend on: a wallet opened with PayoutVia refuses a
+// request that did not come through that package, so asking the wallet
+// directly -- its own route sets no Via -- cannot step around a whole
+// invoice, a minimum or one request a day.
+func TestAWalletManagedByAPackageTakesRequestsOnlyThroughIt(t *testing.T) {
+	t.Parallel()
+	svc, _ := payouts(t)
+	ctx := context.Background()
+	w, err := svc.Open(ctx, staff(), wallet.OpenRequest{
+		HolderID: "ana", Slug: "investor", Name: "Investidor", Currency: "BRL", DecimalPlaces: 2, PayoutVia: "investor",
+	})
+	if err != nil {
+		t.Fatalf("opening the wallet: %v", err)
+	}
+	if !bool(w.PayoutByRequest) || w.PayoutVia != "investor" {
+		t.Fatalf("the wallet opened with payout by request %v via %q", w.PayoutByRequest, w.PayoutVia)
+	}
+	deposit(t, svc, w.ID, "credit-ana", "1000.00")
+	account := pixAccount(t, svc, "ana")
+
+	for _, via := range []string{"", "affiliate"} {
+		_, err := svc.RequestWithdrawal(ctx, person("ana"), wallet.WithdrawalRequestInput{
+			IdempotencyKey: "direct-" + via, WalletID: w.ID, Amount: "10.00", AccountID: account.ID, Via: via,
+		})
+		if !errors.Is(err, wallet.ErrWithdrawalElsewhere) || !errors.Is(err, security.ErrForbidden) {
+			t.Fatalf("a request via %q answered %v, want it refused as forbidden", via, err)
+		}
+	}
+	if after := walletNow(t, svc, w.ID); after.Held != 0 {
+		t.Fatalf("a refused request held %d", after.Held)
+	}
+
+	r, err := svc.RequestWithdrawal(ctx, person("ana"), wallet.WithdrawalRequestInput{
+		IdempotencyKey: "through", WalletID: w.ID, Amount: "10.00", AccountID: account.ID, Via: "investor",
+	})
+	if err != nil || r.Status != wallet.WithdrawalRequested {
+		t.Fatalf("the request through the managing package answered %v, %v", r, err)
+	}
+
+	// A wallet no package manages ignores the field.
+	plain := earnings(t, svc, "bruno")
+	other := pixAccount(t, svc, "bruno")
+	if _, err := svc.RequestWithdrawal(ctx, person("bruno"), wallet.WithdrawalRequestInput{
+		IdempotencyKey: "plain", WalletID: plain.ID, Amount: "10.00", AccountID: other.ID, Via: "whatever",
+	}); err != nil {
+		t.Fatalf("a wallet nobody manages refused a request: %v", err)
+	}
+}

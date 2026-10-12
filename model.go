@@ -161,6 +161,14 @@ type Wallet struct {
 	// hold of their own. It is decided when the wallet is opened.
 	PayoutByRequest Flag `db:"payout_by_request"`
 
+	// PayoutVia names the package whose rules every withdrawal request of this
+	// wallet passes through -- "investor", "affiliate" -- and is empty for a
+	// wallet whose holder asks through this package's own route. A request
+	// that does not say it came through that package is refused, so the rules
+	// the package keeps on top of a request (a whole invoice, a minimum, one a
+	// day) cannot be stepped around by asking the wallet directly.
+	PayoutVia string `db:"payout_via"`
+
 	// CreatedAt is when the wallet was opened, in UTC.
 	CreatedAt time.Time `db:"created_at"`
 
