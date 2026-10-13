@@ -7,6 +7,21 @@ describing a publishing migration and a Repository removal that both happened
 before `v0.1.0` of this package. They are gone, and what this package actually
 changed at each of its own versions is below.
 
+## v0.14.0
+
+Additive. Run `aru migrate`: `20261013_0019_create_wallet_credit_agreements`
+and `20261013_0020_create_wallet_credit_installments` create the two tables of
+credit agreements. Nothing that exists changes.
+
+A consumer that sells on its own credit approves a holder by opening a wallet
+for them and setting its limit with `SetCredit`, then calls `OpenCredit` with
+the terms the holder accepted, `PayInstallment` as each installment's money
+arrives, and `SweepCredit` once a day. It listens for
+`wallet.credit_installment_overdue` and `wallet.credit_delinquent` to warn the
+holder and the creditor, and for `wallet.credit_settled` to tell a creditor who
+reported the holder to withdraw it. Every one of these is the operator's:
+reach them through `wallet.OperatorFor(g)` after your own policy decided.
+
 ## v0.13.0
 
 Additive. Run `aru migrate`: `20261013_0018_add_wallet_payout_via` adds the

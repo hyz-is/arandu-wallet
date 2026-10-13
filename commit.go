@@ -55,6 +55,14 @@ type operation struct {
 	// there is no state in which the money left and the hold still reads as
 	// open, nor one in which the hold is spent and the money stayed.
 	hold string
+	// record writes the rows a credit agreement keeps about this operation --
+	// the agreement and its installments when it opens, an installment paid,
+	// an agreement settled or cancelled -- inside the same transaction as the
+	// movements, so there is no state in which the debt moved and the agreement
+	// does not say so, nor one in which the agreement says it and the debt did
+	// not move. It answers an error to roll both back. Empty on every other
+	// operation.
+	record func(ctx context.Context, g security.Grant, operationID string) error
 }
 
 // purchaseLine is one line of a basket as it will be recorded, and there are
@@ -446,6 +454,11 @@ func (s *WalletService) attempt(ctx context.Context, g security.Grant, op operat
 			return err
 		}
 		purchases = bought
+		if op.record != nil {
+			if err := op.record(ctx, g, id); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if err != nil {

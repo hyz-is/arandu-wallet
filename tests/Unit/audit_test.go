@@ -195,6 +195,7 @@ func firstModelReach(body *ast.BlockStmt) token.Pos {
 		"Wallets": true, "Operations": true, "Entries": true,
 		"Conversions": true, "Charges": true, "Purchases": true, "Holds": true,
 		"PayoutAccounts": true, "WithdrawalRequests": true,
+		"CreditAgreements": true, "CreditInstallments": true,
 	}
 	terminals := map[string]bool{
 		"Save": true, "Delete": true, "Restore": true, "Touch": true,

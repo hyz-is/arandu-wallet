@@ -134,6 +134,25 @@ A holder may deposit into their own wallet. When a wallet holds credits that are
 sold rather than earned, do not register this package's routes: call the Service
 from your own handlers, behind your own policy.
 
+## Selling on credit (crediário)
+
+A store that sells on its own credit opens a wallet per buyer, approves them
+with `SetCredit` (the limit), and opens an agreement per purchase with
+`OpenCredit`: the total is drawn, so the balance is the debt. Record each
+installment's money with `PayInstallment` (refused with `ErrUnderpaid` below
+`QuoteInstallment`, which adds a late fee once and interest by the day after
+the due date), run `SweepCredit` once a day, and listen for
+`wallet.credit_installment_overdue`, `wallet.credit_delinquent` and
+`wallet.credit_settled`. `PayOffCredit` takes off the interest not yet due and
+`CancelCredit` clears what is still owed. All of it is the operator's: reach it
+through `wallet.OperatorFor(g)` after your own policy decided. The holder reads
+their own with `Credit` and `Credits`. Reporting a debtor to a credit bureau is
+the store's act; `MarkCreditReported` only keeps the record.
+
+The late fee, the interest for lateness and the financing's interest are
+capped at the Brazilian consumer ceilings (`MaxLateFeeBP`, `MaxMoraRateBP`,
+`MaxInterestRateBP`); asking for more is a validation error.
+
 ## Holds
 
 `Hold` sets an amount aside without moving the balance, `Capture` turns it into

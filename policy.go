@@ -100,6 +100,16 @@ const (
 	// WalletWithdrawalsManage is an operator taking, paying or rejecting a
 	// withdrawal request.
 	WalletWithdrawalsManage security.Action = "wallet.withdrawals.manage"
+	// WalletCreditOpen is opening a credit agreement against a holder's limit:
+	// the creditor's act, and so the operator's. A holder who could open one
+	// could spend a limit somebody lent them without the lender.
+	WalletCreditOpen security.Action = "wallet.credit.open"
+	// WalletCreditView is reading credit agreements: the holder their own.
+	WalletCreditView security.Action = "wallet.credit.view"
+	// WalletCreditManage is recording installments paid, paying off,
+	// cancelling, recording a report and sweeping for the overdue. The money
+	// arrives from outside, so recording it is not the holder's.
+	WalletCreditManage security.Action = "wallet.credit.manage"
 )
 
 // OperatorRole is the role an application grants to the people who run its
@@ -184,7 +194,8 @@ func (WalletPolicy) Can(ctx context.Context, s security.Subject, a security.Acti
 			WalletPay, WalletRefund, WalletPurchases, WalletReconcile,
 			WalletDescribe, WalletClose,
 			WalletHold, WalletCapture, WalletRelease, WalletExpire,
-			WalletWithdrawalsRequest, WalletWithdrawalsManage:
+			WalletWithdrawalsRequest, WalletWithdrawalsManage,
+			WalletCreditOpen, WalletCreditView, WalletCreditManage:
 			return nil
 		}
 	}
@@ -207,7 +218,7 @@ func (WalletPolicy) Can(ctx context.Context, s security.Subject, a security.Acti
 		case WalletList, WalletView, WalletHistory, WalletDeposit, WalletWithdraw,
 			WalletTransfer, WalletConfirm, WalletPay, WalletPurchases,
 			WalletDescribe, WalletHold, WalletCapture, WalletRelease,
-			WalletWithdrawalsRequest:
+			WalletWithdrawalsRequest, WalletCreditView:
 			return nil
 		}
 		return fmt.Errorf("no rule allows %s on wallet", a)
@@ -232,7 +243,7 @@ func (WalletPolicy) Can(ctx context.Context, s security.Subject, a security.Acti
 		case WalletView, WalletHistory, WalletCreate, WalletDeposit, WalletWithdraw,
 			WalletTransfer, WalletConfirm, WalletPay, WalletPurchases,
 			WalletDescribe, WalletHold, WalletCapture, WalletRelease,
-			WalletWithdrawalsRequest:
+			WalletWithdrawalsRequest, WalletCreditView:
 			return nil
 		}
 	}

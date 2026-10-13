@@ -18,6 +18,9 @@ const (
 	// The withdrawal requests and the accounts they are paid to.
 	payoutAccountsTable     = "wallet_payout_accounts"
 	withdrawalRequestsTable = "wallet_withdrawal_requests"
+	// The credit agreements and their installments.
+	creditAgreementsTable   = "wallet_credit_agreements"
+	creditInstallmentsTable = "wallet_credit_installments"
 	operationsTable         = "wallet_operations"
 	entriesTable            = "wallet_entries"
 	conversionsTable        = "wallet_conversions"

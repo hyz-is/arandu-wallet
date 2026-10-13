@@ -1244,6 +1244,8 @@ func (m *Module) Migrations() []foundation.Migration {
 		createWalletPayoutAccounts{},
 		createWalletWithdrawalRequests{},
 		addWalletPayoutVia{},
+		createWalletCreditAgreements{},
+		createWalletCreditInstallments{},
 	}
 }
 
@@ -1895,6 +1897,8 @@ var (
 	_ migrations.ReversibleMigration = addWalletPayoutByRequest{}
 	_ migrations.ReversibleMigration = createWalletPayoutAccounts{}
 	_ migrations.ReversibleMigration = createWalletWithdrawalRequests{}
+	_ migrations.ReversibleMigration = createWalletCreditAgreements{}
+	_ migrations.ReversibleMigration = createWalletCreditInstallments{}
 	_ migrations.ReversibleMigration = addWalletPayoutVia{}
 )
 
@@ -2020,6 +2024,105 @@ func (createWalletWithdrawalRequests) Up(ctx context.Context, conn migrations.Co
 // Down drops the table.
 func (createWalletWithdrawalRequests) Down(ctx context.Context, conn migrations.Connection) error {
 	return conn.Schema().DropIfExists(ctx, withdrawalRequestsTable)
+}
+
+// createWalletCreditAgreements is the table of credit agreements.
+type createWalletCreditAgreements struct{ migrations.BaseMigration }
+
+// GetName is the migration's identity, and it carries the order.
+func (createWalletCreditAgreements) GetName() string {
+	return "20261013_0019_create_wallet_credit_agreements"
+}
+
+// Up creates the table. Opening twice with one key opens one agreement: the
+// unique index decides between two concurrent first opens.
+func (createWalletCreditAgreements) Up(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Create(ctx, creditAgreementsTable, func(table *schema.Blueprint) {
+		table.String("id", maxIdentifierLen).Primary()
+		table.String("tenant_id", maxIdentifierLen)
+		table.String("wallet_id", maxIdentifierLen)
+		table.String("holder_id", maxIdentifierLen)
+		table.String("idempotency_key", maxIdempotencyKeyLen)
+		table.String("reference", maxNameLen).Default("")
+		table.BigInteger("principal")
+		table.BigInteger("total")
+		table.Integer("installments")
+		table.Integer("interest_rate_bp").Default(0)
+		table.Integer("late_fee_bp").Default(0)
+		table.Integer("mora_rate_bp").Default(0)
+		table.Integer("delinquent_after_days").Default(30)
+		table.String("time_zone", maxIdentifierLen).Default("UTC")
+		table.Text("terms")
+		table.Timestamp("accepted_at")
+		table.String("accepted_from", maxIdentifierLen).Default("")
+		table.String("status", maxKindLen)
+		table.String("operation_id", maxIdentifierLen).Default("")
+		table.String("opened_by", maxIdentifierLen)
+		table.Timestamp("delinquent_at").Nullable()
+		table.Timestamp("settled_at").Nullable()
+		table.Timestamp("cancelled_at").Nullable()
+		table.String("closed_by", maxIdentifierLen).Default("")
+		table.String("cancel_reason", maxReasonLen).Default("")
+		table.BigInteger("rebate").Default(0)
+		table.Timestamp("reported_at").Nullable()
+		table.Timestamp("report_cleared_at").Nullable()
+		table.String("reported_by", maxIdentifierLen).Default("")
+		table.Timestamp("created_at")
+		table.Timestamp("updated_at")
+
+		table.Unique([]string{"tenant_id", "idempotency_key"}, "wallet_credit_agreements_key_uq")
+		table.Index([]string{"tenant_id", "holder_id", "created_at"}, "wallet_credit_agreements_holder_idx")
+		table.Index([]string{"tenant_id", "status", "created_at"}, "wallet_credit_agreements_status_idx")
+	})
+}
+
+// Down drops the table.
+func (createWalletCreditAgreements) Down(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().DropIfExists(ctx, creditAgreementsTable)
+}
+
+// createWalletCreditInstallments is the table of a credit agreement's
+// installments.
+type createWalletCreditInstallments struct{ migrations.BaseMigration }
+
+// GetName is the migration's identity, and it carries the order.
+func (createWalletCreditInstallments) GetName() string {
+	return "20261013_0020_create_wallet_credit_installments"
+}
+
+// Up creates the table. An agreement has one installment per place: the
+// unique index holds it.
+func (createWalletCreditInstallments) Up(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Create(ctx, creditInstallmentsTable, func(table *schema.Blueprint) {
+		table.String("id", maxIdentifierLen).Primary()
+		table.String("tenant_id", maxIdentifierLen)
+		table.String("agreement_id", maxIdentifierLen)
+		table.String("wallet_id", maxIdentifierLen)
+		table.String("holder_id", maxIdentifierLen)
+		table.Integer("sequence")
+		table.Timestamp("due_on")
+		table.BigInteger("amount")
+		table.BigInteger("principal_part")
+		table.BigInteger("interest_part").Default(0)
+		table.String("status", maxKindLen)
+		table.Timestamp("overdue_at").Nullable()
+		table.BigInteger("paid_amount").Default(0)
+		table.BigInteger("late_fee").Default(0)
+		table.BigInteger("mora").Default(0)
+		table.Timestamp("paid_at").Nullable()
+		table.String("paid_by", maxIdentifierLen).Default("")
+		table.String("operation_id", maxIdentifierLen).Default("")
+		table.Timestamp("created_at")
+		table.Timestamp("updated_at")
+
+		table.Unique([]string{"tenant_id", "agreement_id", "sequence"}, "wallet_credit_installments_seq_uq")
+		table.Index([]string{"tenant_id", "status", "due_on"}, "wallet_credit_installments_due_idx")
+	})
+}
+
+// Down drops the table.
+func (createWalletCreditInstallments) Down(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().DropIfExists(ctx, creditInstallmentsTable)
 }
 
 // The handlers of the withdrawal flow. Thin, as every handler here: read the

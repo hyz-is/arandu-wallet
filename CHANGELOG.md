@@ -16,6 +16,38 @@ name here. They are gone.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-13
+
+### Added
+
+- Credit agreements: a holder buying now and paying in installments against
+  the credit limit a creditor approved (`SetCredit`) -- a store's own
+  crediário. `OpenCredit` works out the installments (`Schedule`: equal parts
+  without interest, the Price table with it), draws the total from the wallet
+  -- refused with `ErrInsufficientFunds` past the limit -- and writes the
+  agreement and its installments in the same transaction as the drawing.
+  `PayInstallment` deposits an installment and keeps what was paid for
+  lateness on it, refusing less than `QuoteInstallment` with `ErrUnderpaid`;
+  the last one settles the agreement. `QuoteCreditPayoff` and `PayOffCredit`
+  clear an agreement at once, taking off the interest of the installments not
+  yet due. `CancelCredit` clears what is still owed. `SweepCredit` marks the
+  installments past their date overdue and the agreements past their grace
+  delinquent, once each. `MarkCreditReported` keeps when the creditor reported
+  the holder to a credit bureau and withdrew it; reporting stays the
+  creditor's act. `Credit`, `Credits` and `CreditDue` read them.
+- The ceilings of a consumer agreement in Brazil, checked on opening:
+  `MaxLateFeeBP` (2%), `MaxMoraRateBP` (1% a month) and `MaxInterestRateBP`
+  (1% a month for a creditor that is not a financial institution).
+- The actions `WalletCreditOpen` (`wallet.credit.open`) and
+  `WalletCreditManage` (`wallet.credit.manage`), the operator's, and
+  `WalletCreditView` (`wallet.credit.view`), the holder's for their own.
+- The events `wallet.credit_opened`, `wallet.credit_installment_paid`,
+  `wallet.credit_installment_overdue`, `wallet.credit_delinquent`,
+  `wallet.credit_regularized`, `wallet.credit_settled` and
+  `wallet.credit_cancelled`.
+- The migrations `20261013_0019_create_wallet_credit_agreements` and
+  `20261013_0020_create_wallet_credit_installments`.
+
 ## [0.13.0] - 2026-10-13
 
 ### Added

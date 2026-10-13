@@ -43,6 +43,31 @@ const (
 	// because this is the one event worth an alert -- a wallet reaching it has
 	// been frozen, and something wrote a balance no request accounts for.
 	MoneyAdjusted EventKind = "wallet.money_adjusted"
+
+	// The credit agreements. Amount is the agreement's total on CreditOpened,
+	// what was paid on CreditInstallmentPaid and CreditWasSettled, the
+	// installment's amount on CreditInstallmentOverdue and CreditWentDelinquent,
+	// and what was still owed on CreditWasCancelled. Meta names the agreement,
+	// the installment where there is one, and the creditor's reference.
+	//
+	// CreditOpened is an agreement that now exists, its total drawn.
+	CreditOpened EventKind = "wallet.credit_opened"
+	// CreditInstallmentPaid is an installment recorded paid.
+	CreditInstallmentPaid EventKind = "wallet.credit_installment_paid"
+	// CreditInstallmentOverdue is an installment found unpaid after its date,
+	// told once.
+	CreditInstallmentOverdue EventKind = "wallet.credit_installment_overdue"
+	// CreditWentDelinquent is an agreement whose oldest unpaid installment
+	// passed its grace. Reporting the holder is the creditor's to decide.
+	CreditWentDelinquent EventKind = "wallet.credit_delinquent"
+	// CreditRegularized is a delinquent agreement with nothing past its grace
+	// any more.
+	CreditRegularized EventKind = "wallet.credit_regularized"
+	// CreditWasSettled is an agreement paid in full. A creditor who reported
+	// the holder withdraws the report now.
+	CreditWasSettled EventKind = "wallet.credit_settled"
+	// CreditWasCancelled is an agreement undone, what it owed cleared.
+	CreditWasCancelled EventKind = "wallet.credit_cancelled"
 )
 
 // Event is one thing that happened, told to whoever asked to be told.

@@ -274,6 +274,37 @@ req, err := svc.RequestWithdrawal(ctx, holder, wallet.WithdrawalRequestInput{
 })
 ```
 
+## Sell on credit
+
+A store that sells on its own credit -- a crediário -- approves a holder by
+setting the limit of a wallet opened for them, and opens an agreement for each
+purchase. The total is drawn from the wallet, so the balance is the debt, and
+each installment paid is deposited, so the ledger explains it.
+
+```go
+statement, err := walletService.OpenCredit(ctx, wallet.OperatorFor(g), wallet.CreditOpenRequest{
+	IdempotencyKey: "order-123",
+	WalletID:       credit.ID,
+	Principal:      "1200.00",
+	Installments:   6,
+	FirstDue:       "2026-11-10",
+	TimeZone:       "America/Sao_Paulo",
+	LateFeeBP:      200, // 2%
+	MoraRateBP:     100, // 1% a month, by the day
+	Terms:          wallet.Meta{"text": termsShown},
+	AcceptedAt:     time.Now(),
+	AcceptedFrom:   clientIP,
+})
+```
+
+`QuoteInstallment` says what an installment costs on a day -- its amount, and
+after its date a late fee once and interest by the day -- and `PayInstallment`
+records it paid. `SweepCredit`, once a day, marks what is overdue and what is
+delinquent and tells the listeners, once each. `PayOffCredit` clears an
+agreement taking off the interest not yet due, and `CancelCredit` clears what
+is still owed. Reporting a holder to a credit bureau is the creditor's act;
+`MarkCreditReported` keeps when they did it and when they withdrew it.
+
 ## Hold before work whose outcome is unknown
 
 Some work has a known price and an unknown outcome: a lookup that may fail, a
