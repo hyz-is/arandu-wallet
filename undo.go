@@ -54,6 +54,12 @@ type PartialReversalRequest struct {
 	// Reason is what the partial reversal is recorded as, and it is required
 	// for the reason a reversal's is.
 	Reason string
+	// Force asks for the money to be given back even where the wallet it
+	// leaves -- the one the operation paid -- no longer holds it within its
+	// balance and credit limit, and is answered by WalletForce on that wallet.
+	// It moves the floor and nothing else: the cap on what the operation moved
+	// still holds, and the column still cannot wrap.
+	Force bool
 	// AccruedAt is the date the money given back is about, and zero for none.
 	AccruedAt time.Time
 	// Meta is what the application attaches to the partial reversal.
@@ -241,6 +247,13 @@ func (s *WalletService) Void(ctx context.Context, actor security.Subject, in Voi
 // back part of them needs a share of each side decided. A basket is given back
 // line by line, through Refund.
 //
+// The wallet the money leaves is held to its balance and credit limit like any
+// withdrawal, and a part it no longer covers answers ErrInsufficientFunds.
+// PartialReversalRequest.Force asks for it anyway -- a refund owed whatever
+// the wallet that was paid has spent since -- and is answered by WalletForce
+// on that wallet, as Transfer's and Withdraw's are; it lowers the floor and
+// leaves the cap above exactly where it was.
+//
 // An operation reversed whole answers ErrAlreadyReversed, and once part of one
 // is given back, Reverse refuses it with ErrPartiallyReversed: what is left is
 // given back here. It is the operator's, through WalletReverse on every wallet
@@ -278,6 +291,18 @@ func (s *WalletService) ReversePartially(ctx context.Context, actor security.Sub
 	whole, partable := reversibleInPart(movements)
 	if !partable {
 		return Receipt{}, ErrNotPartiallyReversible
+	}
+	// Force is asked about every wallet the money leaves, after mirror asked
+	// about reversing on each of them, and before a replay could answer: a
+	// receipt is handed back only to a subject who may make the request.
+	for i := range movements {
+		if movements[i].kind != EntryWithdraw {
+			continue
+		}
+		if err := s.allowForce(ctx, actor, in.Force, *movements[i].wallet); err != nil {
+			return Receipt{}, err
+		}
+		movements[i].force = in.Force
 	}
 	amount, err := positiveAmount(in.Amount, movements[0].wallet.DecimalPlaces)
 	if err != nil {

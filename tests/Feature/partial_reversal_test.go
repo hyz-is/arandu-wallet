@@ -208,3 +208,148 @@ func TestPartialReversalsRacingNeverGiveBackMoreThanMoved(t *testing.T) {
 		}
 	})
 }
+
+// reversePartForced gives back part of an operation with the floor lowered,
+// and answers with whatever the service said.
+func reversePartForced(service *wallet.WalletService, actor security.Subject, operationID, key, amount string) (wallet.Receipt, error) {
+	return service.ReversePartially(context.Background(), actor, wallet.PartialReversalRequest{
+		IdempotencyKey: key, OperationID: operationID, Amount: amount, Force: true,
+		Reason: "refund owed whatever the payee spent",
+	})
+}
+
+func TestAForcedPartialReversalGoesPastWhatThePayeeStillHolds(t *testing.T) {
+	t.Parallel()
+
+	engines(t, func(t *testing.T, db *data.DB) {
+		ctx := context.Background()
+		service := wallet.NewWalletService(db, nil, nil, nil)
+		payer := openWallet(t, service, "user-1", "main", 2)
+		payee := openWallet(t, service, "user-2", "main", 2)
+		deposit(t, service, payer.ID, "fund", "10.00")
+		paid, err := payment(t, service, payer.ID, payee.ID, "pay", "10.00")
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The payee spends most of what arrived before the refund is asked.
+		if err := withdraw(t, service, staff(), payee.ID, "spent", "8.00", false); err != nil {
+			t.Fatal(err)
+		}
+
+		// Unforced, the wallet the money leaves is held to its balance, and the
+		// refusal leaves nothing written: no money, and nothing counted against
+		// the cap.
+		if _, err := reversePart(service, staff(), paid.Operation.ID, "back-unforced", "4.00"); !errors.Is(err, wallet.ErrInsufficientFunds) {
+			t.Fatalf("giving back 4.00 from a payee holding 2.00 answered %v, want ErrInsufficientFunds", err)
+		}
+		if got := balanceOf(t, service, payee.ID); got != 200 {
+			t.Fatalf("the refused partial reversal left the payee with %d, want 200", got)
+		}
+		original, err := service.OperationByKey(ctx, staff(), "pay")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if original.Operation.ReversedAmount != 0 {
+			t.Fatalf("the refused partial reversal counted %d against the cap, want 0", original.Operation.ReversedAmount)
+		}
+
+		// A holder asking for force is refused, and nothing moves.
+		if _, err := reversePartForced(service, person("user-2"), paid.Operation.ID, "back-holder", "4.00"); !errors.Is(err, security.ErrForbidden) {
+			t.Fatalf("a holder forcing a partial reversal answered %v, want ErrForbidden", err)
+		}
+
+		forced, err := reversePartForced(service, staff(), paid.Operation.ID, "back-forced", "4.00")
+		if err != nil {
+			t.Fatalf("the operator forcing 4.00 back: %v", err)
+		}
+		if got := balanceOf(t, service, payee.ID); got != -200 {
+			t.Fatalf("the payee holds %d after the forced partial reversal, want -200", got)
+		}
+		if got := balanceOf(t, service, payer.ID); got != 400 {
+			t.Fatalf("the payer holds %d, want 400", got)
+		}
+		again, err := reversePartForced(service, staff(), paid.Operation.ID, "back-forced", "4.00")
+		assertReplayed(t, forced, again, err)
+
+		// Force lowers the floor and leaves the cap: 6.00 is what is left of
+		// the payment, and not a minor unit more comes back.
+		if _, err := reversePartForced(service, staff(), paid.Operation.ID, "back-too-much", "6.01"); !errors.Is(err, wallet.ErrExceedsReversible) {
+			t.Fatalf("forcing past what is left answered %v, want ErrExceedsReversible", err)
+		}
+		if _, err := reversePartForced(service, staff(), paid.Operation.ID, "back-rest", "6.00"); err != nil {
+			t.Fatalf("forcing back the 6.00 left: %v", err)
+		}
+		if got := balanceOf(t, service, payee.ID); got != -800 {
+			t.Fatalf("the payee holds %d after everything came back, want -800", got)
+		}
+		for _, id := range []string{payer.ID, payee.ID} {
+			if ledger, balance := ledgerOf(t, service, id), balanceOf(t, service, id); ledger != balance {
+				t.Fatalf("wallet %s: the ledger sums to %d and the balance says %d", id, ledger, balance)
+			}
+		}
+	})
+}
+
+func TestForcedPartialReversalsRacingStillStopAtTheCap(t *testing.T) {
+	t.Parallel()
+
+	engines(t, func(t *testing.T, db *data.DB) {
+		service := wallet.NewWalletService(db, nil, nil, nil)
+		payer := openWallet(t, service, "user-1", "main", 2)
+		payee := openWallet(t, service, "user-2", "main", 2)
+		deposit(t, service, payer.ID, "fund", "10.00")
+		paid, err := payment(t, service, payer.ID, payee.ID, "pay", "10.00")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := withdraw(t, service, staff(), payee.ID, "spent", "10.00", false); err != nil {
+			t.Fatal(err)
+		}
+
+		// Twelve forced parts of 2.00 against 10.00 from an empty payee: the
+		// floor is out of the way, and the cap alone lets exactly five through.
+		const askers = 12
+		var (
+			start, done sync.WaitGroup
+			mu          sync.Mutex
+			succeeded   int
+			other       []error
+		)
+		start.Add(1)
+		done.Add(askers)
+		for i := range askers {
+			go func() {
+				defer done.Done()
+				start.Wait()
+				_, err := reversePartForced(service, staff(), paid.Operation.ID, fmt.Sprintf("part-%d", i), "2.00")
+				mu.Lock()
+				defer mu.Unlock()
+				switch {
+				case err == nil:
+					succeeded++
+				case errors.Is(err, wallet.ErrExceedsReversible):
+				default:
+					other = append(other, err)
+				}
+			}()
+		}
+		start.Done()
+		done.Wait()
+
+		for _, err := range other {
+			t.Errorf("a forced partial reversal failed for a reason other than the cap: %v", err)
+		}
+		if succeeded != 5 {
+			t.Fatalf("%d forced partial reversals of 2.00 succeeded against 10.00, want exactly 5", succeeded)
+		}
+		if got := balanceOf(t, service, payee.ID); got != -1000 {
+			t.Fatalf("the payee holds %d, want -1000", got)
+		}
+		if got := balanceOf(t, service, payer.ID); got != 1000 {
+			t.Fatalf("the payer holds %d, want 1000", got)
+		}
+		if ledger := ledgerOf(t, service, payee.ID); ledger != -1000 {
+			t.Fatalf("the payee's ledger sums to %d, want -1000", ledger)
+		}
+	})
+}

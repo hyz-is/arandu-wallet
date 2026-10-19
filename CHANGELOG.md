@@ -16,6 +16,20 @@ name here. They are gone.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-19
+
+### Added
+
+- `PartialReversalRequest.Force`: give back part of an operation even where
+  the wallet the money leaves -- the one the operation paid -- no longer holds
+  it within its balance and credit limit, as `Force` does on `WithdrawRequest`,
+  `TransferRequest` and `ConfirmRequest`. It is answered by `WalletForce` on
+  that wallet, so it stays the operator's, and it lowers the floor only: what
+  all partial reversals give back is still capped by what the operation moved
+  (`ErrExceedsReversible`), concurrent forced ones included, and the column
+  still cannot wrap. Without it nothing changes: a part the wallet no longer
+  covers answers `ErrInsufficientFunds` and counts nothing against the cap.
+
 ## [0.15.0] - 2026-10-19
 
 ### Added

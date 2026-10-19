@@ -300,7 +300,7 @@ func TestTheServiceRefusesBeforeReachingTheModel(t *testing.T) {
 		},
 		"ReversePartially": func() error {
 			_, err := service.ReversePartially(ctx, actor, wallet.PartialReversalRequest{
-				IdempotencyKey: "key-1", OperationID: "operation-1", Amount: "1.00", Reason: "asked"})
+				IdempotencyKey: "key-1", OperationID: "operation-1", Amount: "1.00", Reason: "asked", Force: true})
 			return err
 		},
 		"BalanceAt": func() error {

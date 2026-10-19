@@ -171,7 +171,9 @@ hold paid to a seller.
 
 A movement recorded with `Pending` ends with `Confirm` or with `Void` (the
 operator's), never both. `ReversePartially` gives back part of a deposit,
-withdrawal or fee-free transfer, repeatedly, never past what it moved. Every
+withdrawal or fee-free transfer, repeatedly, never past what it moved; with
+`Force: true` (v0.16.0, answered by `WalletForce`) it does so even where the
+payee no longer holds the money, instead of a forced `Transfer` beside it. Every
 movement request takes an optional `AccruedAt`; `History` reads a period with
 `From`/`Until` by record or, with `Basis: wallet.DateAccrued`, by accrual, and
 `BalanceAt` answers the balance at an instant. `OperationByKey` finds what a

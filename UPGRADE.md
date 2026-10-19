@@ -7,6 +7,19 @@ describing a publishing migration and a Repository removal that both happened
 before `v0.1.0` of this package. They are gone, and what this package actually
 changed at each of its own versions is below.
 
+## v0.16.0
+
+Additive. No migration, no signature change, no new action. A
+`PartialReversalRequest` that leaves `Force` false behaves exactly as before.
+
+A consumer that gave back part of a payment through a forced `Transfer` from
+the payee because `ReversePartially` refused a payee that had spent the money
+passes `Force: true` to `ReversePartially` instead, as the operator it already
+was. The refund is then recorded as a partial reversal of the payment it gives
+back (`Operation.RefersID`, `Operation.ReversedAmount`) and capped by what that
+payment moved. Forced transfers already recorded under a key stay what they
+are; keep reading them by that key.
+
 ## v0.15.0
 
 Run `aru migrate`: `20261019_0021_add_wallet_operation_settlement` adds four

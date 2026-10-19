@@ -370,7 +370,10 @@ confirmation of the same operation from both succeeding.
 `ReversePartially` gives back part of what a deposit, a withdrawal or a
 transfer without a fee moved, as many times as it takes, never past what it
 moved in total; `Operation.ReversedAmount` is what was given back. An operation
-reversed in part is no longer reversed whole with `Reverse`.
+reversed in part is no longer reversed whole with `Reverse`. The wallet the
+money leaves is held to its balance and credit limit; `Force: true` gives the
+part back anyway -- a refund owed after the payee spent the money -- and is
+answered by `WalletForce`, so it stays the operator's and the cap still holds.
 
 ```go
 _, err = svc.Void(ctx, operator, wallet.VoidRequest{
