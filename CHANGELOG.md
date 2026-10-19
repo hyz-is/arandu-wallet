@@ -16,6 +16,26 @@ name here. They are gone.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-19
+
+### Added
+
+- The migration `20261019_0024_widen_wallet_time_precision`: every date-time
+  column of the module's eleven tables that an earlier framework default
+  created in whole seconds -- which PostgreSQL rounds a value to and MySQL
+  truncates it to -- is raised to microseconds, one statement per table,
+  through Hesape's `migrations.WidenTimePrecision`. A column already in
+  microseconds is left alone, SQLite has nothing to widen, and the rollback
+  keeps the columns wide.
+
+### Changed
+
+- Requires Framework v0.58.0 and Hesape v0.69.0, whose schema declares a
+  date-time column in microseconds by default. The manifest's framework
+  floor is `>= 0.58`.
+- `rates/frankfurter` requires Framework v0.58.0 and Hesape v0.69.0, and its
+  manifest's framework floor is `>= 0.58`.
+
 ## [0.16.0] - 2026-10-19
 
 ### Added

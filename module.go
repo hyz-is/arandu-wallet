@@ -1249,7 +1249,22 @@ func (m *Module) Migrations() []foundation.Migration {
 		addWalletOperationSettlement{},
 		addWalletHoldCapturedAmount{},
 		addWalletPeriodIndexes{},
+		widenWalletTimePrecision,
 	}
+}
+
+// widenWalletTimePrecision raises every date-time column of the module's
+// tables to microseconds where an earlier framework default created them in
+// whole seconds -- which PostgreSQL rounds a value to and MySQL truncates it
+// to -- so a statement read by period and a ledger read by instant see each
+// movement at the instant it was recorded. A table created in microseconds
+// already is left alone, and SQLite has nothing to widen.
+var widenWalletTimePrecision = migrations.WidenTimePrecision{
+	Name: "20261019_0024_widen_wallet_time_precision",
+	Tables: []string{
+		walletsTable, operationsTable, entriesTable, conversionsTable, chargesTable, purchasesTable,
+		holdsTable, payoutAccountsTable, withdrawalRequestsTable, creditAgreementsTable, creditInstallmentsTable,
+	},
 }
 
 // The migrations are reversible, and the assertions are here rather than

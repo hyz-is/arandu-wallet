@@ -7,6 +7,25 @@ describing a publishing migration and a Repository removal that both happened
 before `v0.1.0` of this package. They are gone, and what this package actually
 changed at each of its own versions is below.
 
+## v0.17.0
+
+Run `aru migrate`: `20261019_0024_widen_wallet_time_precision` raises the
+date-time columns of the wallet tables from whole seconds to microseconds where
+a release before Hesape v0.67.0 created them so. On PostgreSQL it changes the
+type modifier of each column, one `ALTER TABLE` per table, and rewrites neither
+a table nor an index; on MySQL each column is restated with `MODIFY`, which may
+copy the table. Nothing else about a column changes, and no row does.
+
+A connection that prepared a statement over the narrow columns holds a cached
+plan whose result type changed, and PostgreSQL refuses it once with "cached
+plan must not change result type": migrate before the new binary starts, and
+expect a process still running the old one to see that error on its existing
+connections until they are replaced.
+
+This release selects Framework v0.58.0 and Hesape v0.69.0; read their upgrade
+guides from the versions the application required before. No symbol of this
+package changes.
+
 ## v0.16.0
 
 Additive. No migration, no signature change, no new action. A
