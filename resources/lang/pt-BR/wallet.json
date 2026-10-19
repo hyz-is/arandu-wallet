@@ -67,7 +67,9 @@
         "confirmation": "Confirmação",
         "purchase": "Compra",
         "refund": "Reembolso",
-        "adjustment": "Ajuste"
+        "adjustment": "Ajuste",
+        "void": "Cancelamento",
+        "partial_reversal": "Estorno parcial"
     },
     "direction": {
         "deposit": "Entrada",

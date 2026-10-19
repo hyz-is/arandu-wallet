@@ -118,8 +118,9 @@ subjects and nobody else:
   deposits, withdraws, transfers, confirms, pays, reads purchases, describes,
   and holds, captures and releases on their own wallet.
 - **The operator** (`s.HasRole(wallet.OperatorRole)`) does all of that across
-  the tenant, and also reverses, refunds, sets credit limits, forces, closes,
-  reconciles and sweeps expired holds.
+  the tenant, and also reverses (whole or in part), voids a pending operation,
+  refunds, sets credit limits, forces, closes, reconciles and sweeps expired
+  holds.
 
 A guest, a subject from another tenant and a signed-in person reaching for
 somebody else's wallet are refused.
@@ -160,6 +161,28 @@ the withdrawal, `Release` gives it back, and `ReleaseExpired` sweeps the ones pa
 `ExpiresAt`. `Wallet.Held` is what open holds set aside and `Wallet.Available()`
 what may still be spent. Run `aru migrate` after upgrading to v0.11.0, or every
 withdrawal fails on the missing `held` column.
+
+`CaptureRequest.Amount` captures part of a hold and gives the rest back in the
+same statement; `CaptureRequest.ToWalletID` captures into another wallet (a
+transfer, same currency and scale) instead of out of the ledger -- a buyer's
+hold paid to a seller.
+
+## Pending, voids, partial reversals and statements by period
+
+A movement recorded with `Pending` ends with `Confirm` or with `Void` (the
+operator's), never both. `ReversePartially` gives back part of a deposit,
+withdrawal or fee-free transfer, repeatedly, never past what it moved. Every
+movement request takes an optional `AccruedAt`; `History` reads a period with
+`From`/`Until` by record or, with `Basis: wallet.DateAccrued`, by accrual, and
+`BalanceAt` answers the balance at an instant. `OperationByKey` finds what a
+request did by its idempotency key -- ask it after a timeout before sending
+again. Run `aru migrate` after upgrading to v0.15.0: the columns these need are
+added by `20261019_0021_add_wallet_operation_settlement` and
+`20261019_0022_add_wallet_hold_captured_amount`.
+
+Do not keep a pending/void flag, a refunded-amount column or a competence date
+of your own beside an operation: they are here, and a second copy is a second
+answer to what happened to the money.
 
 ## What the answers mean
 

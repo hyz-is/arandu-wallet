@@ -34,10 +34,14 @@ type operation struct {
 	key     string
 	kind    OperationKind
 	settles string
-	reason  string
-	meta    Meta
-	rate    *appliedRate
-	charge  *appliedCharge
+	// refers is the operation a partial reversal gives part of back. It is not
+	// settles, because settles is under the unique index that lets an operation
+	// be settled once.
+	refers string
+	reason string
+	meta   Meta
+	rate   *appliedRate
+	charge *appliedCharge
 	// owner is the wallet the calling method authorized before it asked
 	// whether the key was already spent, and asked is what the request said.
 	// They travel with the operation because commit asks the same question
@@ -55,6 +59,14 @@ type operation struct {
 	// there is no state in which the money left and the hold still reads as
 	// open, nor one in which the hold is spent and the money stayed.
 	hold string
+	// captured is how much of that hold the operation takes. What is left of it
+	// is released by the same statement, so a hold is settled once whether it
+	// was taken whole or in part.
+	captured Amount
+	// accruedAt is the date the money is about, and zero where the caller said
+	// none. It is recorded on the operation and compared by nothing: a retry
+	// that names another date is still the same request.
+	accruedAt time.Time
 	// record writes the rows a credit agreement keeps about this operation --
 	// the agreement and its installments when it opens, an installment paid,
 	// an agreement settled or cancelled -- inside the same transaction as the
@@ -174,6 +186,10 @@ type movement struct {
 	// the same amount and guards on it rather than on the balance floor the
 	// hold already answered.
 	fromHold bool
+	// release is what a capture leaves of its hold, given back by the same
+	// statement that takes the rest: the held column comes down by the amount
+	// and the release together, so a partial capture settles the whole hold.
+	release Amount
 	// setAside and takeBack move the held column alone, for placing and
 	// releasing a hold. Neither moves the balance nor writes a ledger row,
 	// which is why they are never in the list an operation applies.
@@ -403,6 +419,11 @@ func (s *WalletService) attempt(ctx context.Context, g security.Grant, op operat
 	if record.SettlesID == "" {
 		record.SettlesID = id
 	}
+	record.RefersID = op.refers
+	if !op.accruedAt.IsZero() {
+		at := op.accruedAt.UTC()
+		record.AccruedAt = &at
+	}
 
 	var entries []Entry
 	var conversion *Conversion
@@ -436,7 +457,7 @@ func (s *WalletService) attempt(ctx context.Context, g security.Grant, op operat
 			charge = taken
 		}
 		if op.hold != "" {
-			if err := s.captureHold(ctx, g, op.hold, id); err != nil {
+			if err := s.captureHold(ctx, g, op.hold, id, op.captured); err != nil {
 				return err
 			}
 		}
@@ -852,10 +873,15 @@ func moveStatement(m movement, tenant string, dialect data.Dialect) (string, []a
 		// placed, under the same floor every withdrawal answers to, so what is
 		// checked here is that it is still set aside: a hold released in the
 		// meantime leaves the held column short and this matching no row.
+		//
+		// A partial capture gives back what it leaves of the hold in the same
+		// statement, so the held column comes down by the whole hold and the
+		// guard asks that the whole hold is still there.
+		settled := int64(m.amount) + int64(m.release)
 		set = fmt.Sprintf("%s = %s - %d, %s = %s - %d, %s = %s + 1",
-			q("balance"), q("balance"), int64(m.amount), q("held"), q("held"), int64(m.amount),
+			q("balance"), q("balance"), int64(m.amount), q("held"), q("held"), settled,
 			q("last_sequence"), q("last_sequence"))
-		guard = servableGuard(q) + fmt.Sprintf(" and %s >= %d", q("held"), int64(m.amount))
+		guard = servableGuard(q) + fmt.Sprintf(" and %s >= %d", q("held"), settled)
 	case m.kind == EntryWithdraw:
 		// The balance has to still be enough at the moment of the write, and
 		// what "enough" is comes off the same row in the same statement: the

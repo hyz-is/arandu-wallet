@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/arandu-io/framework/data"
 	"github.com/arandu-io/framework/security"
@@ -43,6 +44,7 @@ var everyAction = []security.Action{
 	wallet.WalletTransfer,
 	wallet.WalletReverse,
 	wallet.WalletConfirm,
+	wallet.WalletVoid,
 	wallet.WalletCredit,
 	wallet.WalletForce,
 	wallet.WalletPay,
@@ -122,6 +124,25 @@ func TestOnlyAnOperatorMayReverse(t *testing.T) {
 	if _, err := security.Authorize(context.Background(), wallet.WalletPolicy{},
 		operator(), wallet.WalletReverse, theirWallet()); err != nil {
 		t.Fatalf("an operator was refused a reversal: %v", err)
+	}
+}
+
+func TestOnlyAnOperatorMayVoid(t *testing.T) {
+	t.Parallel()
+
+	// Withdrawing a proposal decides that money somebody was promised will not
+	// arrive. It is not the holder's, whichever side of the promise they are.
+	if _, err := security.Authorize(context.Background(), wallet.WalletPolicy{},
+		holder(), wallet.WalletVoid, theirWallet()); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("the holder was allowed to void: got %v, want ErrForbidden", err)
+	}
+	if _, err := security.Authorize(context.Background(), wallet.WalletPolicy{},
+		holder(), wallet.WalletVoid, wallet.Wallet{}); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("the holder passed the probe for a void: got %v, want ErrForbidden", err)
+	}
+	if _, err := security.Authorize(context.Background(), wallet.WalletPolicy{},
+		operator(), wallet.WalletVoid, theirWallet()); err != nil {
+		t.Fatalf("an operator was refused a void: %v", err)
 	}
 }
 
@@ -270,6 +291,28 @@ func TestTheServiceRefusesBeforeReachingTheModel(t *testing.T) {
 		"Confirm": func() error {
 			_, err := service.Confirm(ctx, actor, wallet.ConfirmRequest{
 				IdempotencyKey: "key-1", OperationID: "operation-1"})
+			return err
+		},
+		"Void": func() error {
+			_, err := service.Void(ctx, actor, wallet.VoidRequest{
+				IdempotencyKey: "key-1", OperationID: "operation-1", Reason: "withdrawn"})
+			return err
+		},
+		"ReversePartially": func() error {
+			_, err := service.ReversePartially(ctx, actor, wallet.PartialReversalRequest{
+				IdempotencyKey: "key-1", OperationID: "operation-1", Amount: "1.00", Reason: "asked"})
+			return err
+		},
+		"BalanceAt": func() error {
+			_, err := service.BalanceAt(ctx, actor, "wallet-1", time.Now())
+			return err
+		},
+		"OperationByKey": func() error {
+			_, err := service.OperationByKey(ctx, actor, "key-1")
+			return err
+		},
+		"Credits": func() error {
+			_, err := service.Credits(ctx, actor, wallet.CreditQuery{Reference: "order-1", ReferencePrefix: true})
 			return err
 		},
 		"SetCredit": func() error {

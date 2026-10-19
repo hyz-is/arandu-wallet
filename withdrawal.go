@@ -545,12 +545,13 @@ func (s *WalletService) PayWithdrawal(ctx context.Context, actor security.Subjec
 	}
 	if !found {
 		receiptOp, err = s.commit(ctx, g, operation{
-			key:   opKey,
-			kind:  OperationWithdraw,
-			meta:  Meta{"hold": h.ID, "withdrawal_request": req.ID, "end_to_end_id": in.EndToEndID},
-			owner: source.ID,
-			asked: asked,
-			hold:  h.ID,
+			key:      opKey,
+			kind:     OperationWithdraw,
+			meta:     Meta{"hold": h.ID, "withdrawal_request": req.ID, "end_to_end_id": in.EndToEndID},
+			owner:    source.ID,
+			asked:    asked,
+			hold:     h.ID,
+			captured: h.Amount,
 		}, []movement{{wallet: source, kind: EntryWithdraw, amount: h.Amount, fromHold: true}})
 		if err != nil {
 			return nil, err

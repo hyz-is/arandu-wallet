@@ -51,10 +51,16 @@ Then, once, before the application serves:
 aru migrate
 ```
 
-This package owns six tables -- the wallets, the operations, the ledger, the
-recorded rates, the recorded charges and the purchases -- which is why the
-migration step is not optional and why `arandu.mod.toml` says
-`migrations = true`.
+This package owns eleven tables -- the wallets (`wallets`), the operations
+(`wallet_operations`), the ledger (`wallet_entries`), the recorded rates
+(`wallet_conversions`), the recorded charges (`wallet_charges`), the purchases
+(`wallet_purchases`), the holds (`wallet_holds`), the payout accounts
+(`wallet_payout_accounts`), the withdrawal requests
+(`wallet_withdrawal_requests`), and the credit agreements and their
+installments (`wallet_credit_agreements`, `wallet_credit_installments`) --
+which is why the migration step is not optional and why `arandu.mod.toml` says
+`migrations = true`. Run it again after every upgrade: a release that adds a
+column ships the migration that adds it, and the CHANGELOG names it.
 
 ## Quote a rate, if your wallets are not all counted the same way
 
@@ -305,6 +311,17 @@ agreement taking off the interest not yet due, and `CancelCredit` clears what
 is still owed. Reporting a holder to a credit bureau is the creditor's act;
 `MarkCreditReported` keeps when they did it and when they withdrew it.
 
+`Credits` lists agreements newest first, a page at a time, and finds them by
+the creditor's reference -- exactly, or by its start:
+
+```go
+page, err := walletService.Credits(ctx, operator, wallet.CreditQuery{
+	Reference: "order-2026-10", ReferencePrefix: true, // every order of October
+	Limit:     50,                                     // at most wallet.MaxPageSize
+})
+// a full page has a next one: pass page[len(page)-1].ID as Cursor
+```
+
 ## Hold before work whose outcome is unknown
 
 Some work has a known price and an unknown outcome: a lookup that may fail, a
@@ -327,6 +344,59 @@ the statement that writes. A capture is one transaction with the withdrawal; a
 release writes nothing to the ledger, because nothing moved. A hold past its
 `ExpiresAt` is never captured, and `ReleaseExpired`, run by an operator on a
 schedule, gives the expired ones back.
+
+A capture may take part of a hold, and may send the money to another wallet
+instead of out of the ledger -- a buyer's hold paid to the seller:
+
+```go
+_, err = svc.Capture(ctx, actor, wallet.CaptureRequest{
+	IdempotencyKey: "capture:" + orderID, HoldID: h.ID,
+	ToWalletID: seller.ID, // a transfer, counted the same way; empty is a withdrawal
+	Amount:     "80.00",   // part of the hold; empty is all of it
+})
+```
+
+What a partial capture leaves of the hold is given back by the same statement
+that takes the rest, so a hold settles once; `Hold.CapturedAmount` says what was
+taken.
+
+## Withdraw a proposal, or give back part of a payment
+
+A movement recorded with `Pending` ends in one of two ways: `Confirm` makes it
+count, and `Void` withdraws it. A void moves nothing -- it appends the opposite
+pending entry beside each proposed one -- and the database keeps a void and a
+confirmation of the same operation from both succeeding.
+
+`ReversePartially` gives back part of what a deposit, a withdrawal or a
+transfer without a fee moved, as many times as it takes, never past what it
+moved in total; `Operation.ReversedAmount` is what was given back. An operation
+reversed in part is no longer reversed whole with `Reverse`.
+
+```go
+_, err = svc.Void(ctx, operator, wallet.VoidRequest{
+	IdempotencyKey: "void:" + orderID, OperationID: pendingID, Reason: "order cancelled",
+})
+_, err = svc.ReversePartially(ctx, operator, wallet.PartialReversalRequest{
+	IdempotencyKey: "refund:" + itemID, OperationID: paymentID, Amount: "25.00",
+	Reason: "one item returned",
+})
+```
+
+Both are the operator's (`WalletVoid`, `WalletReverse`).
+
+## Read a period
+
+`History` narrows a statement to a period -- `From` inclusive, `Until`
+exclusive -- read by when each entry was recorded, or with `Basis:
+wallet.DateAccrued` by the date its operation said the money is about. Every
+movement request carries an optional `AccruedAt` for that; a confirmation keeps
+the date of what it confirms, and an operation without one accrues when it was
+recorded. `BalanceAt` answers what a wallet held at an instant, read off the
+last entry at or before it. The ledger keeps its timestamps to the second.
+
+`OperationByKey` finds what a request did by the idempotency key it was sent
+with -- the question to ask after a timeout -- showing the subject only the
+wallets they may read.
 
 ## Act as the operator after your own policy decided
 
@@ -355,7 +425,10 @@ policy checks the tenant before the role on every call.
 
 A listener is called after the write has committed, never inside it. A basket
 that runs out of money on its last line announces nothing at all, though every
-earlier line really moved a balance for as long as the transaction lasted.
+earlier line really moved a balance for as long as the transaction lasted. A
+listener that panics is recovered and logged through `log/slog`; the listeners
+after it are still told, and the caller still gets the receipt of the write
+that committed.
 
 There is no dispatcher and no queue here: an application that wants the work off
 the request hands it to whatever it already uses.
@@ -424,6 +497,14 @@ meta.go        what the application attaches to a movement
 cart.go        the basket, and the seams that say what is for sale
 model.go       the entities, and what they may answer with
 purchase.go    the record of what was bought, and its own read model
+wallet.go      opening a wallet, naming it, finding it, taking it out of service
+movement.go    deposit, withdrawal, transfer, reversal, confirmation, statement
+undo.go        a proposal withdrawn, and part of an operation given back
+payment.go     a basket paid for, and a line given back
+reconcile.go   a ledger that stopped explaining its balance, and its repair
+commit.go      the engine: one operation, one transaction, the guarded write
+withdrawal.go  payout accounts and the withdrawal requests an operator pays
+credit.go      credit agreements: installments against a credit limit
 hold.go        money set aside before it is taken, and how a hold settles
 operator.go    the operator derived from an application's own decision
 policy.go      who may do what

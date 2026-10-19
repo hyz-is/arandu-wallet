@@ -2,6 +2,8 @@ package wallet
 
 import (
 	"context"
+	"log/slog"
+	"runtime/debug"
 	"time"
 
 	"github.com/arandu-io/framework/data"
@@ -43,6 +45,12 @@ const (
 	// because this is the one event worth an alert -- a wallet reaching it has
 	// been frozen, and something wrote a balance no request accounts for.
 	MoneyAdjusted EventKind = "wallet.money_adjusted"
+	// MoneyVoided is one entry of a void: the withdrawal of a movement that was
+	// proposed and never counted. No balance changed, and the balance on it is
+	// the balance the proposal did not change either. It is its own kind
+	// because a listener that read it as MoneyProposed would announce a second
+	// proposal where one was taken back.
+	MoneyVoided EventKind = "wallet.money_voided"
 
 	// The credit agreements. Amount is the agreement's total on CreditOpened,
 	// what was paid on CreditInstallmentPaid and CreditWasSettled, the
@@ -118,6 +126,10 @@ type Event struct {
 	// Meta is what the application attached to the movement this event is
 	// about.
 	Meta Meta
+
+	// AccruedAt is the date the operation said its money is about, and nil
+	// where it said none or the event is about a wallet rather than money.
+	AccruedAt *time.Time
 }
 
 // Listener is something told what happened.
@@ -132,6 +144,12 @@ type Event struct {
 // listener could report that anything could still act on -- and an error that
 // travelled back to the caller would report a write that succeeded as one that
 // did not.
+//
+// A listener that panics is recovered, logged through log/slog with its stack,
+// and passed over; the listeners after it are still told, and the caller is
+// answered with the write that committed. A panic that reached the request
+// would turn a movement that happened into an error page about one that did
+// not.
 type Listener func(context.Context, Event)
 
 // notify tells every listener what happened.
@@ -186,10 +204,33 @@ func (s *WalletService) notify(ctx context.Context, g security.Grant, events ...
 	_ = database.AfterCommit(ctx, s.db, func(after context.Context) {
 		for _, event := range ready {
 			for _, listen := range s.listeners {
-				listen(after, event)
+				tell(after, listen, event)
 			}
 		}
 	})
+}
+
+// tell hands one event to one listener, and keeps a panic in it from reaching
+// anything else.
+//
+// The write is committed by the time this runs, so the only outcome a panic
+// could have here is a caller told that money did not move when it did, and the
+// listeners after this one never told at all. It is recovered, logged with the
+// event it was told and the stack it panicked at, and passed over. The log is
+// the application's default slog logger, the one the framework configures.
+func tell(ctx context.Context, listen Listener, event Event) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			slog.ErrorContext(ctx, "wallet: a listener panicked and was passed over",
+				"event", string(event.Kind),
+				"wallet_id", event.WalletID,
+				"operation_id", event.OperationID,
+				"panic", recovered,
+				"stack", string(debug.Stack()),
+			)
+		}
+	}()
+	listen(ctx, event)
 }
 
 // movedEvents is what an operation's movements are told as, once they have
@@ -206,6 +247,8 @@ func movedEvents(op Operation, entries []Entry, wallets map[string]Wallet) []Eve
 		switch {
 		case op.Kind == OperationAdjustment:
 			kind = MoneyAdjusted
+		case op.Kind == OperationVoid:
+			kind = MoneyVoided
 		case !bool(entry.Settled):
 			kind = MoneyProposed
 		}
@@ -222,6 +265,7 @@ func movedEvents(op Operation, entries []Entry, wallets map[string]Wallet) []Eve
 			Amount:        entry.Amount,
 			Balance:       entry.BalanceAfter,
 			Meta:          entry.Meta,
+			AccruedAt:     op.AccruedAt,
 		})
 	}
 	return events

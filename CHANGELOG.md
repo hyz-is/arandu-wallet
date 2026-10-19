@@ -16,6 +16,79 @@ name here. They are gone.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-19
+
+### Added
+
+- `Void` and `VoidRequest`: withdrawing an operation that was recorded as
+  pending and never counted. It appends the opposite pending entry beside each
+  proposed one under an operation of kind `OperationVoid`
+  (`Operation.Voids()` names what it voided), so nothing moves and the ledger
+  reads as the proposal and its withdrawal. Idempotent by its own key. An
+  operation that counted answers `ErrNotPending`, one that counted on one side
+  only `ErrNotVoidable`, and a void and a confirmation of the same operation
+  cannot both succeed: the loser answers `ErrAlreadyVoided` or
+  `ErrAlreadyConfirmed`, held by a guarded statement on the new
+  `Operation.ResolvedBy`.
+- `ReversePartially` and `PartialReversalRequest`: giving back part of what a
+  deposit, a withdrawal, a transfer without a fee or a confirmation of one of
+  them moved, under an operation of kind `OperationPartialReversal` that names
+  the original in `Operation.RefersID`. It may be repeated; what all of them
+  give back is capped by what the operation moved, by a guarded statement on
+  the new `Operation.ReversedAmount`, so concurrent ones never pass it
+  (`ErrExceedsReversible`). An exchange, a payment that charged a fee, a basket
+  or an adjustment answers `ErrNotPartiallyReversible`. Idempotent by its own
+  key, and the operator's through `WalletReverse`.
+- `CaptureRequest.Amount` captures part of a hold, giving back the rest in the
+  same statement, and `CaptureRequest.ToWalletID` captures into another wallet
+  as a transfer instead of a withdrawal. `Hold.CapturedAmount` records what a
+  capture took; asking past the hold is `ErrCaptureExceedsHold`, and a target
+  that would need a rate `ErrCurrencyMismatch`.
+- A statement by period: `HistoryRequest.From` (inclusive) and `Until`
+  (exclusive), read by when each entry was recorded or, with
+  `Basis: DateAccrued`, by the operation's accrual date (`DateBasis`,
+  `DateRecorded`, `DateAccrued`). `BalanceAt` answers what a wallet held at an
+  instant, read off the last entry at or before it.
+- An optional accrual (competence) date on every movement:
+  `AccruedAt` on `DepositRequest`, `WithdrawRequest`, `TransferRequest`,
+  `ReverseRequest`, `ConfirmRequest` (which keeps the confirmed operation's
+  date when it names none), `PayRequest`, `RefundRequest`, `CaptureRequest`,
+  `VoidRequest` and `PartialReversalRequest`, recorded on
+  `Operation.AccruedAt` and carried on `Event.AccruedAt`.
+- `OperationByKey`: the operation an idempotency key named, tenant-scoped and
+  asked of the policy (`WalletHistory`) for every wallet it touched; the
+  receipt holds the rows on the wallets the subject may read.
+- `CreditQuery.Reference` with `ReferencePrefix` finds agreements by the
+  creditor's reference, exactly or by its start, and `CreditQuery.Cursor` and
+  `Limit` page `Credits` (keyset on opening time and identifier, newest
+  first). `CreditQuery.Validate` refuses a limit above `MaxPageSize`.
+- The action `WalletVoid` (`wallet.void`), the operator's.
+- The event `wallet.money_voided` (`MoneyVoided`), one per entry of a void.
+- The errors `ErrAlreadyVoided`, `ErrNotVoidable`, `ErrNotPartiallyReversible`,
+  `ErrExceedsReversible`, `ErrPartiallyReversed` and `ErrCaptureExceedsHold`.
+- The migrations `20261019_0021_add_wallet_operation_settlement` (the
+  operation's `refers_id`, `reversed_amount`, `resolved_by` and
+  `accrued_at`), `20261019_0022_add_wallet_hold_captured_amount` (filled in
+  for holds already captured) and `20261019_0023_add_wallet_period_indexes`.
+
+### Changed
+
+- `Credits` answers one page: fifty agreements unless `CreditQuery.Limit`
+  says otherwise, at most `MaxPageSize`. It answered every matching
+  agreement before.
+- `Reverse` refuses an operation that `ReversePartially` already gave part of
+  back, with `ErrPartiallyReversed`, and closes one that could be reversed in
+  part to further partial reversals.
+- `Confirm` refuses an operation that was voided, with `ErrAlreadyVoided`, and
+  a void itself, with `ErrNotPending`.
+- `Receipt.Pending` is false for a void.
+
+### Fixed
+
+- A listener that panics no longer breaks the request after the write
+  committed: each listener is recovered on its own, the panic is logged with
+  its stack through `log/slog`, and the listeners after it are still told.
+
 ## [0.14.0] - 2026-10-13
 
 ### Added

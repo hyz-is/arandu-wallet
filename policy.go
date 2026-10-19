@@ -38,6 +38,11 @@ const (
 	WalletReverse security.Action = "wallet.reverse"
 	// WalletConfirm is making an operation that was only recorded count.
 	WalletConfirm security.Action = "wallet.confirm"
+	// WalletVoid is withdrawing an operation that was only recorded, so that it
+	// never counts. It sits beside WalletReverse and not under WalletConfirm:
+	// deciding that money somebody was promised will not arrive is not the
+	// decision of the person it was promised to, nor of the one who owes it.
+	WalletVoid security.Action = "wallet.void"
 	// WalletCredit is setting how far below zero a wallet may go.
 	WalletCredit security.Action = "wallet.credit"
 	// WalletForce is moving money past the limit that would otherwise refuse
@@ -190,7 +195,7 @@ func (WalletPolicy) Can(ctx context.Context, s security.Subject, a security.Acti
 		switch a {
 		case WalletView, WalletList, WalletCreate, WalletHistory,
 			WalletDeposit, WalletWithdraw, WalletTransfer, WalletReverse,
-			WalletConfirm, WalletCredit, WalletForce,
+			WalletConfirm, WalletVoid, WalletCredit, WalletForce,
 			WalletPay, WalletRefund, WalletPurchases, WalletReconcile,
 			WalletDescribe, WalletClose,
 			WalletHold, WalletCapture, WalletRelease, WalletExpire,
@@ -211,8 +216,9 @@ func (WalletPolicy) Can(ctx context.Context, s security.Subject, a security.Acti
 	// read them has already read them, so the service adds the holder predicate
 	// for a subject who is not an operator.
 	//
-	// Reversal, the credit limit and forcing a movement past it are absent from
-	// the list, so all three stop here for everybody who is not an operator.
+	// Reversal, voiding, the credit limit and forcing a movement past it are
+	// absent from the list, so all four stop here for everybody who is not an
+	// operator.
 	if isProbe(record) {
 		switch a {
 		case WalletList, WalletView, WalletHistory, WalletDeposit, WalletWithdraw,

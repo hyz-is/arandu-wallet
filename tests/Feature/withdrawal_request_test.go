@@ -154,6 +154,9 @@ func TestPayingCapturesTheHoldWithItsReceiptOnce(t *testing.T) {
 	if after.Balance != 75000 || after.Held != 0 {
 		t.Fatalf("balance %d held %d after paying; want 75000 and 0", after.Balance, after.Held)
 	}
+	if captured := capturedHold(t, svc, w.ID, r.HoldID); captured.CapturedAmount != 25000 {
+		t.Fatalf("the paid request's hold records %d captured, want 25000", captured.CapturedAmount)
+	}
 
 	// Paying again is the same payment.
 	if again, err := svc.PayWithdrawal(ctx, staff(), pay, strings.NewReader("%PDF pix")); err != nil || again.OperationID != paid.OperationID {

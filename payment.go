@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/arandu-io/framework/data"
 	"github.com/arandu-io/framework/security"
@@ -29,6 +30,9 @@ type PayRequest struct {
 	// Force asks for the payment even where the balance and the credit limit do
 	// not cover it, and is answered by WalletForce on the wallet paying.
 	Force bool
+	// AccruedAt is the date the payment is about -- its competence -- and zero
+	// for none.
+	AccruedAt time.Time
 }
 
 // RefundRequest is what giving back some lines of a purchase takes.
@@ -47,6 +51,8 @@ type RefundRequest struct {
 	// Force asks for the movement even where the wallet giving the money back
 	// does not cover it, and is answered by WalletForce.
 	Force bool
+	// AccruedAt is the date the refund is about, and zero for none.
+	AccruedAt time.Time
 	// Meta is what the application attaches to the refund.
 	Meta Meta
 }
@@ -113,12 +119,13 @@ func (s *WalletService) Pay(ctx context.Context, actor security.Subject, in PayR
 	}
 
 	return s.commit(ctx, g, operation{
-		key:   in.IdempotencyKey,
-		kind:  OperationPurchase,
-		meta:  in.Cart.Meta(),
-		lines: priced.lines,
-		owner: payer.ID,
-		asked: asked,
+		key:       in.IdempotencyKey,
+		kind:      OperationPurchase,
+		meta:      in.Cart.Meta(),
+		lines:     priced.lines,
+		owner:     payer.ID,
+		asked:     asked,
+		accruedAt: in.AccruedAt,
 	}, priced.movements)
 }
 
@@ -203,13 +210,14 @@ func (s *WalletService) Refund(ctx context.Context, actor security.Subject, in R
 	}
 
 	receipt, err := s.commit(ctx, g, operation{
-		key:    in.IdempotencyKey,
-		kind:   OperationRefund,
-		reason: in.Reason,
-		meta:   in.Meta,
-		lines:  priced.lines,
-		owner:  owner,
-		asked:  asked,
+		key:       in.IdempotencyKey,
+		kind:      OperationRefund,
+		reason:    in.Reason,
+		meta:      in.Meta,
+		lines:     priced.lines,
+		owner:     owner,
+		asked:     asked,
+		accruedAt: in.AccruedAt,
 	}, priced.movements)
 	if err != nil && !errors.Is(err, ErrInsufficientFunds) {
 		// The unique index on the line being settled is what refuses a second

@@ -1246,6 +1246,9 @@ func (m *Module) Migrations() []foundation.Migration {
 		addWalletPayoutVia{},
 		createWalletCreditAgreements{},
 		createWalletCreditInstallments{},
+		addWalletOperationSettlement{},
+		addWalletHoldCapturedAmount{},
+		addWalletPeriodIndexes{},
 	}
 }
 
@@ -2123,6 +2126,109 @@ func (createWalletCreditInstallments) Up(ctx context.Context, conn migrations.Co
 // Down drops the table.
 func (createWalletCreditInstallments) Down(ctx context.Context, conn migrations.Connection) error {
 	return conn.Schema().DropIfExists(ctx, creditInstallmentsTable)
+}
+
+var (
+	_ migrations.ReversibleMigration = addWalletOperationSettlement{}
+	_ migrations.ReversibleMigration = addWalletHoldCapturedAmount{}
+	_ migrations.ReversibleMigration = addWalletPeriodIndexes{}
+)
+
+// addWalletOperationSettlement adds to every operation what voiding, partial
+// reversal and accrual need: the operation a partial reversal refers to, how
+// much of it partial reversals gave back, what resolved its pending entries,
+// and the date its money is about.
+type addWalletOperationSettlement struct{ migrations.BaseMigration }
+
+// GetName is the migration's identity, and it carries the order.
+func (addWalletOperationSettlement) GetName() string {
+	return "20261019_0021_add_wallet_operation_settlement"
+}
+
+// Up adds the four columns. Every operation already written refers to nothing,
+// had nothing given back in part and accrued when it was recorded; one that was
+// confirmed before this ran is still known to be confirmed by the confirmation
+// naming it, which is what a void reads first, so resolved_by is not filled in
+// for it.
+func (addWalletOperationSettlement) Up(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Table(ctx, operationsTable, func(table *schema.Blueprint) {
+		table.String("refers_id", maxIdentifierLen).Default("")
+		table.BigInteger("reversed_amount").Default(0)
+		table.String("resolved_by", maxIdentifierLen).Default("")
+		table.Timestamp("accrued_at").Nullable()
+	})
+}
+
+// Down drops the columns. Voids and partial reversals already written stay in
+// the ledger as the entries they appended; what is lost is the cap on what is
+// left to give back and the mark that keeps a void from being confirmed.
+func (addWalletOperationSettlement) Down(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Table(ctx, operationsTable, func(table *schema.Blueprint) {
+		table.DropColumn("refers_id", "reversed_amount", "resolved_by", "accrued_at")
+	})
+}
+
+// addWalletHoldCapturedAmount adds how much of a hold its capture took.
+type addWalletHoldCapturedAmount struct{ migrations.BaseMigration }
+
+// GetName is the migration's identity, and it carries the order.
+func (addWalletHoldCapturedAmount) GetName() string {
+	return "20261019_0022_add_wallet_hold_captured_amount"
+}
+
+// Up adds the column at zero, and fills it in for every hold already captured:
+// before a capture could take part of a hold, every capture took all of it.
+func (addWalletHoldCapturedAmount) Up(ctx context.Context, conn migrations.Connection) error {
+	if err := conn.Schema().Table(ctx, holdsTable, func(table *schema.Blueprint) {
+		table.BigInteger("captured_amount").Default(0)
+	}); err != nil {
+		return err
+	}
+	// The status is this package's own constant, written into the statement
+	// rather than bound, so the statement reads the same on every engine.
+	_, err := conn.Statement(ctx,
+		"update "+holdsTable+" set captured_amount = amount where status = '"+string(HoldCaptured)+"'", nil)
+	return err
+}
+
+// Down drops the column.
+func (addWalletHoldCapturedAmount) Down(ctx context.Context, conn migrations.Connection) error {
+	return conn.Schema().Table(ctx, holdsTable, func(table *schema.Blueprint) {
+		table.DropColumn("captured_amount")
+	})
+}
+
+// addWalletPeriodIndexes adds the indexes a statement by period and a search
+// of agreements by reference read through.
+type addWalletPeriodIndexes struct{ migrations.BaseMigration }
+
+// GetName is the migration's identity, and it carries the order.
+func (addWalletPeriodIndexes) GetName() string { return "20261019_0023_add_wallet_period_indexes" }
+
+// Up adds two indexes, tenant first like every other here: one wallet's entries
+// by when they were written, which is what a period and a balance at an
+// instant are bounded by, and the agreements by the creditor's reference.
+func (addWalletPeriodIndexes) Up(ctx context.Context, conn migrations.Connection) error {
+	if err := conn.Schema().Table(ctx, entriesTable, func(table *schema.Blueprint) {
+		table.Index([]string{"tenant_id", "wallet_id", "created_at"}, "wallet_entries_wallet_created_idx")
+	}); err != nil {
+		return err
+	}
+	return conn.Schema().Table(ctx, creditAgreementsTable, func(table *schema.Blueprint) {
+		table.Index([]string{"tenant_id", "reference"}, "wallet_credit_agreements_reference_idx")
+	})
+}
+
+// Down drops the two indexes.
+func (addWalletPeriodIndexes) Down(ctx context.Context, conn migrations.Connection) error {
+	if err := conn.Schema().Table(ctx, creditAgreementsTable, func(table *schema.Blueprint) {
+		table.DropIndex("wallet_credit_agreements_reference_idx")
+	}); err != nil {
+		return err
+	}
+	return conn.Schema().Table(ctx, entriesTable, func(table *schema.Blueprint) {
+		table.DropIndex("wallet_entries_wallet_created_idx")
+	})
 }
 
 // The handlers of the withdrawal flow. Thin, as every handler here: read the

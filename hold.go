@@ -73,8 +73,15 @@ type Hold struct {
 	// ReleaseExpired gives it back.
 	ExpiresAt *time.Time `db:"expires_at"`
 
-	// OperationID is the withdrawal a capture wrote, and empty otherwise.
+	// OperationID is the withdrawal or the transfer a capture wrote, and empty
+	// otherwise.
 	OperationID string `db:"operation_id"`
+
+	// CapturedAmount is how much of Amount the capture took, and zero while the
+	// hold is open or once it was released. A capture that took less than the
+	// whole gave the rest back in the same statement, so a captured hold sets
+	// nothing aside whatever this says.
+	CapturedAmount Amount `db:"captured_amount"`
 
 	// Reason is why a hold was released, and empty while it holds or once it
 	// was captured.
@@ -127,13 +134,26 @@ func (r HoldRequest) Validate() validation.Errors {
 	return validateMovement(r.IdempotencyKey, r.WalletID, r.Amount, r.Meta)
 }
 
-// CaptureRequest is what turning a hold into a withdrawal takes.
+// CaptureRequest is what turning a hold into a withdrawal, or into a transfer,
+// takes.
 type CaptureRequest struct {
 	// IdempotencyKey is the capture's own key, and never the hold's.
 	IdempotencyKey string
-	// HoldID is the hold to capture. The whole amount is captured.
+	// HoldID is the hold to capture.
 	HoldID string
-	// Meta is what the application attaches to the withdrawal.
+	// Amount is how much of the hold to take, as a decimal at the wallet's
+	// scale, and empty for all of it. What is left of the hold is released in
+	// the same transaction: a hold is captured once, whole or in part, and
+	// never captured again for the rest.
+	Amount string
+	// ToWalletID is the wallet the captured money goes to, and empty for a
+	// withdrawal that takes it out of the ledger. With a wallet named, the
+	// capture is a transfer from the hold's wallet to that one, counted the
+	// same way -- a capture never converts -- and charged nothing.
+	ToWalletID string
+	// AccruedAt is the date the captured money is about, and zero for none.
+	AccruedAt time.Time
+	// Meta is what the application attaches to the operation.
 	Meta Meta
 }
 
@@ -144,6 +164,7 @@ func (r CaptureRequest) Validate() validation.Errors {
 	validation.MaxLen(e, "idempotency_key", r.IdempotencyKey, maxIdempotencyKeyLen)
 	validation.Required(e, "hold_id", r.HoldID)
 	validation.MaxLen(e, "hold_id", r.HoldID, maxIdentifierLen)
+	validation.MaxLen(e, "to_wallet_id", r.ToWalletID, maxIdentifierLen)
 	checkMeta(e, "meta", r.Meta)
 	return e
 }
@@ -259,12 +280,22 @@ func (s *WalletService) heldUnder(ctx context.Context, g security.Grant, key, wa
 	return existing, nil
 }
 
-// Capture turns a hold into the withdrawal it promised, for its whole amount.
+// Capture turns a hold into the withdrawal it promised, or into a transfer to
+// another wallet, for the whole of it or for part.
 //
-// The withdrawal and the hold settling are one transaction: the money leaves,
-// the held column comes down by the same amount and the hold records the
-// operation, or none of the three happens. The same key twice captures once,
-// and a hold that was already released or expired is ErrHoldNotHeld.
+// The movement and the hold settling are one transaction: the money leaves,
+// the held column comes down by the whole hold and the hold records the
+// operation and what it took, or none of it happens. A capture of part gives
+// back the rest of the hold in the same statement that takes the part, so a
+// hold settles once whatever was taken. The same key twice captures once, a
+// hold that was already captured, released or expired is ErrHoldNotHeld, and
+// asking for more than the hold is ErrCaptureExceedsHold.
+//
+// A capture into another wallet is a transfer between two wallets counted the
+// same way: wallets that would need a rate are ErrCurrencyMismatch, and no fee
+// or discount is asked for, because the price was decided when the money was
+// held. The authority asked is the capture's, on the hold's wallet, as a
+// transfer asks only about the wallet the money leaves.
 func (s *WalletService) Capture(ctx context.Context, actor security.Subject, in CaptureRequest) (Receipt, error) {
 	if errs := in.Validate(); errs.Any() {
 		return Receipt{}, errs
@@ -284,8 +315,40 @@ func (s *WalletService) Capture(ctx context.Context, actor security.Subject, in 
 	if err != nil {
 		return Receipt{}, err
 	}
-	asked := askedMovement(source.ID, EntryWithdraw, h.Amount, false)
-	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationWithdraw, source.ID, asked); err != nil || found {
+	amount := h.Amount
+	if in.Amount != "" {
+		amount, err = positiveAmount(in.Amount, source.DecimalPlaces)
+		if err != nil {
+			return Receipt{}, err
+		}
+		if amount > h.Amount {
+			return Receipt{}, fmt.Errorf("%w: %s of %s", ErrCaptureExceedsHold,
+				source.Money(amount), source.Money(h.Amount))
+		}
+	}
+
+	kind := OperationWithdraw
+	asked := askedMovement(source.ID, EntryWithdraw, amount, false)
+	var target *Wallet
+	if in.ToWalletID != "" {
+		if in.ToWalletID == source.ID {
+			return Receipt{}, ErrSameWallet
+		}
+		target, err = Wallets(s.db).WhereKey(in.ToWalletID).First(ctx, g)
+		if err != nil {
+			return Receipt{}, err
+		}
+		if target == nil {
+			return Receipt{}, ErrNotFound
+		}
+		if converts(*source, *target) {
+			return Receipt{}, fmt.Errorf("%w: %s and %s", ErrCurrencyMismatch,
+				source.Money(0), target.Money(0))
+		}
+		kind = OperationTransfer
+		asked = askedTransfer(source.ID, target.ID, amount, false, false)
+	}
+	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, kind, source.ID, asked); err != nil || found {
 		return receipt, err
 	}
 	if !h.Open() {
@@ -299,14 +362,23 @@ func (s *WalletService) Capture(ctx context.Context, actor security.Subject, in 
 		meta[k] = v
 	}
 	meta["hold"] = h.ID
+
+	movements := []movement{{
+		wallet: source, kind: EntryWithdraw, amount: amount, fromHold: true, release: h.Amount - amount,
+	}}
+	if target != nil {
+		movements = append(movements, movement{wallet: target, kind: EntryDeposit, amount: amount})
+	}
 	return s.commit(ctx, g, operation{
-		key:   in.IdempotencyKey,
-		kind:  OperationWithdraw,
-		meta:  meta,
-		owner: source.ID,
-		asked: asked,
-		hold:  h.ID,
-	}, []movement{{wallet: source, kind: EntryWithdraw, amount: h.Amount, fromHold: true}})
+		key:       in.IdempotencyKey,
+		kind:      kind,
+		meta:      meta,
+		owner:     source.ID,
+		asked:     asked,
+		hold:      h.ID,
+		captured:  amount,
+		accruedAt: in.AccruedAt,
+	}, movements)
 }
 
 // Release gives a hold back: the amount is spendable again and nothing is
@@ -450,11 +522,14 @@ func (s *WalletService) giveBack(ctx context.Context, g security.Grant, h *Hold,
 }
 
 // captureHold marks a hold captured under the operation that took its money,
-// inside the operation's transaction. A hold that stopped holding matches no
-// row and the whole operation rolls back.
-func (s *WalletService) captureHold(ctx context.Context, g security.Grant, holdID, operationID string) error {
+// for the amount it took, inside the operation's transaction. A hold that
+// stopped holding matches no row and the whole operation rolls back.
+func (s *WalletService) captureHold(ctx context.Context, g security.Grant, holdID, operationID string, captured Amount) error {
 	n, err := Holds(s.db).Where("id", holdID).Where("status", string(HoldHeld)).
-		Update(ctx, g, map[string]any{"status": string(HoldCaptured), "operation_id": operationID, "updated_at": time.Now().UTC()})
+		Update(ctx, g, map[string]any{
+			"status": string(HoldCaptured), "operation_id": operationID,
+			"captured_amount": int64(captured), "updated_at": time.Now().UTC(),
+		})
 	if err != nil {
 		return err
 	}

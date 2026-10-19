@@ -292,6 +292,17 @@ const (
 	// that could not tell it apart from a deposit would be a statement where a
 	// correction reads as money arriving.
 	OperationAdjustment OperationKind = "adjustment"
+	// OperationVoid withdrew an operation that was recorded and never counted.
+	// It moves no balance: it appends, beside every pending entry of the
+	// operation it voids, the opposite entry, pending as well, so the proposal
+	// and its withdrawal both stay on the record and add up to nothing. An
+	// operation voided cannot be confirmed, and one confirmed cannot be voided.
+	OperationVoid OperationKind = "void"
+	// OperationPartialReversal gave back part of what an earlier operation
+	// moved. It is its own kind and not a reversal for a smaller amount,
+	// because a reversal undoes an operation once and whole, and a partial one
+	// may be repeated until what was moved has all been given back.
+	OperationPartialReversal OperationKind = "partial_reversal"
 )
 
 // Operation is one request that moved money, recorded before the money moves.
@@ -340,22 +351,68 @@ type Operation struct {
 	// facts about what this money was for. Nothing in this package reads it.
 	Meta Meta `db:"meta"`
 
+	// RefersID is the operation a partial reversal gives part of back, and empty
+	// on every other kind. It is a column of its own rather than SettlesID,
+	// because SettlesID is under the unique index that lets an operation be
+	// settled once, and a partial reversal may be repeated.
+	RefersID string `db:"refers_id"`
+
+	// ReversedAmount is how much of this operation partial reversals have
+	// given back, in the minor units of its entries, and zero where none has.
+	//
+	// It is a projection of the partial reversals naming this operation, kept
+	// on the row so that the cap is a predicate on the statement that raises
+	// it: two partial reversals racing for the last of what is reversible
+	// cannot both pass. A whole reversal of an operation that can be reversed
+	// in part raises it to everything, which is what closes it to both.
+	ReversedAmount Amount `db:"reversed_amount"`
+
+	// ResolvedBy is the confirmation or the void that settled this operation's
+	// pending entries, and empty while they wait. It is written once, by a
+	// statement that matches only while it is empty, which is what keeps a
+	// confirmation and a void of the same operation from both succeeding.
+	ResolvedBy string `db:"resolved_by"`
+
+	// AccruedAt is the date the money is about -- its competence, in the
+	// bookkeeping sense -- where the caller said one, and nil where they did
+	// not. A statement read by accrual reads an operation without one at the
+	// moment it was recorded.
+	AccruedAt *time.Time `db:"accrued_at"`
+
 	// CreatedAt is when the operation was recorded, in UTC.
 	CreatedAt time.Time `db:"created_at"`
 }
 
 // operationTable is the operations table, keyed by application-generated text,
 // and Operations is the query that starts on it.
+//
+// It has no updated_at, and says so: an operation is written once, and the
+// three bookkeeping columns that change afterwards -- what was given back in
+// part, what resolved it -- are moved by guarded statements that would
+// otherwise be handed a column the table does not have.
 var operationTable = model.NewTable(model.TableSpec{
-	Name:      operationsTable,
-	New:       func() model.Entity { return new(Operation) },
-	ManualKey: true,
+	Name:            operationsTable,
+	New:             func() model.Entity { return new(Operation) },
+	ManualKey:       true,
+	UpdatedAtColumn: model.NoColumn,
 })
 
-// Reverses is the operation this one undoes, and the empty string when it
-// undoes nothing.
+// Reverses is the operation this one undoes, in whole or in part, and the
+// empty string when it undoes nothing.
 func (o Operation) Reverses() string {
+	if o.Kind == OperationPartialReversal {
+		return o.RefersID
+	}
 	if o.Kind != OperationReversal || o.SettlesID == o.ID {
+		return ""
+	}
+	return o.SettlesID
+}
+
+// Voids is the operation this one withdrew, and the empty string when it
+// withdrew nothing.
+func (o Operation) Voids() string {
+	if o.Kind != OperationVoid || o.SettlesID == o.ID {
 		return ""
 	}
 	return o.SettlesID
@@ -869,6 +926,41 @@ var (
 	// to count. The refusal comes from a unique index, so two concurrent
 	// confirmations of one operation cannot both succeed.
 	ErrAlreadyConfirmed = errors.New("wallet: this operation has already been confirmed")
+
+	// ErrAlreadyVoided is returned when an operation has already been voided.
+	// The refusal comes from a unique index and from the statement that marks
+	// the operation resolved, so two concurrent voids cannot both succeed, and
+	// neither can a void and a confirmation.
+	ErrAlreadyVoided = errors.New("wallet: this operation has already been voided")
+
+	// ErrNotVoidable is returned when a void names an operation some of whose
+	// entries already counted, or an operation that is itself a void. What
+	// counted is undone by a reversal; a void withdraws only what never moved.
+	ErrNotVoidable = errors.New("wallet: only an operation none of whose entries counted can be voided")
+
+	// ErrNotPartiallyReversible is returned when a partial reversal names an
+	// operation whose settled entries did not all move the same amount -- an
+	// exchange, a payment that charged a fee, a basket -- or one that is itself
+	// a reversal, a void or an adjustment. Giving back part of those would
+	// need a share of each side decided, and that is not this package's to
+	// guess.
+	ErrNotPartiallyReversible = errors.New("wallet: this operation cannot be reversed in part")
+
+	// ErrExceedsReversible is returned when a partial reversal asks for more
+	// than is left of the operation: what it moved less what partial reversals
+	// already gave back. The refusal comes from the statement that raises what
+	// was given back, so two racing for the last of it cannot both pass.
+	ErrExceedsReversible = errors.New("wallet: that is more than is left to reverse of this operation")
+
+	// ErrPartiallyReversed is returned when a whole reversal names an operation
+	// that partial reversals already gave part of back. Undoing it whole would
+	// give back again what was already given back; what is left is reversed in
+	// part.
+	ErrPartiallyReversed = errors.New("wallet: this operation was already reversed in part, and what is left is reversed in part too")
+
+	// ErrCaptureExceedsHold is returned when a capture asks for more than the
+	// hold set aside.
+	ErrCaptureExceedsHold = errors.New("wallet: a capture cannot take more than its hold set aside")
 
 	// ErrWalletExists is returned when the holder already has a wallet under
 	// this slug.
@@ -1404,8 +1496,12 @@ type Receipt struct {
 //
 // A receipt with no entries at all is not pending. There is nothing waiting in
 // it, and answering that there is would be answering about a movement that does
-// not exist.
+// not exist. Neither is a void: its entries never count, and nothing waits on
+// them -- they are the record that a proposal was withdrawn.
 func (r Receipt) Pending() bool {
+	if r.Operation.Kind == OperationVoid {
+		return false
+	}
 	for _, entry := range r.Entries {
 		if entry.Settled {
 			return false

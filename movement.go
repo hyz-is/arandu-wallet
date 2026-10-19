@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/arandu-io/framework/data"
 	"github.com/arandu-io/framework/security"
+	"github.com/arandu-io/framework/validation"
+	"github.com/arandu-io/hesape/database/query"
 )
 
 // DepositRequest is what putting money into a wallet takes.
@@ -30,6 +33,11 @@ type DepositRequest struct {
 	// the one a client that never heard of this field sends: what it asks for
 	// happens, once, now.
 	Pending bool
+	// AccruedAt is the date the money is about -- its competence -- and zero
+	// for none. It is recorded on the operation, carried on its events, and
+	// read by a statement asked for by accrual; nothing about the money is
+	// decided from it.
+	AccruedAt time.Time
 	// Meta is what the application attaches to this request: its own facts
 	// about what the money was for. A movement with one leg carries them on the
 	// operation, because there they are the request's.
@@ -57,6 +65,11 @@ type WithdrawRequest struct {
 	// guarded. Asking is not being answered: WalletForce is a separate
 	// decision, and a subject the policy refuses it to is refused the movement.
 	Force bool
+	// AccruedAt is the date the money is about -- its competence -- and zero
+	// for none. It is recorded on the operation, carried on its events, and
+	// read by a statement asked for by accrual; nothing about the money is
+	// decided from it.
+	AccruedAt time.Time
 	// Meta is what the application attaches to this request.
 	Meta Meta
 }
@@ -90,6 +103,11 @@ type TransferRequest struct {
 	// Force asks for the movement even where the source's balance and credit
 	// limit do not cover it, and is answered by WalletForce.
 	Force bool
+	// AccruedAt is the date the money is about -- its competence -- and zero
+	// for none. It is recorded on the operation, carried on its events, and
+	// read by a statement asked for by accrual; nothing about the money is
+	// decided from it.
+	AccruedAt time.Time
 	// Meta is what the application attaches to the payment as a whole. What
 	// belongs to one side of it goes on that side's Leg.
 	Meta Meta
@@ -121,6 +139,11 @@ type ReverseRequest struct {
 	// Reason is what the reversal is recorded as. It is required, because a
 	// reversal with no reason is a movement nobody can account for later.
 	Reason string
+	// AccruedAt is the date the money is about -- its competence -- and zero
+	// for none. It is recorded on the operation, carried on its events, and
+	// read by a statement asked for by accrual; nothing about the money is
+	// decided from it.
+	AccruedAt time.Time
 	// Meta is what the application attaches to the reversal.
 	Meta Meta
 }
@@ -137,6 +160,10 @@ type ConfirmRequest struct {
 	// do not cover it, and is answered by WalletForce on every wallet the
 	// operation touches.
 	Force bool
+	// AccruedAt is the date the money is about, and zero to keep the date the
+	// operation being confirmed said, if it said one: the confirmation is the
+	// same money, now counting.
+	AccruedAt time.Time
 	// Meta is what the application attaches to the confirmation.
 	Meta Meta
 }
@@ -154,6 +181,45 @@ type HistoryRequest struct {
 	// written, and the cursor walks towards the oldest. The order is still the
 	// sequence, reversed, so each page still adds up read from its end.
 	Newest bool
+	// From and Until narrow the page to a period: the entries from From,
+	// inclusive, up to Until, exclusive, so consecutive months are read by
+	// passing the first instant of each and nothing falls between them or into
+	// both. A zero bound is no bound. The page is still the sequence's, so the
+	// cursor walks the period exactly as it walks the whole ledger. The ledger
+	// keeps its timestamps to the second, and the bounds are read to the
+	// second as well.
+	From  time.Time
+	Until time.Time
+	// Basis is which date the period is read against: DateRecorded, the zero
+	// value, is when each entry was written; DateAccrued is the date its
+	// operation said the money is about, and when the operation was recorded
+	// where it said none.
+	Basis DateBasis
+}
+
+// DateBasis is which date a period of a ledger is read against.
+type DateBasis string
+
+const (
+	// DateRecorded reads a period by when each entry was written.
+	DateRecorded DateBasis = ""
+	// DateAccrued reads a period by the date each entry's operation said the
+	// money is about -- its competence -- and by when the operation was
+	// recorded where it said none.
+	DateAccrued DateBasis = "accrued"
+)
+
+// period checks the bounds of a history request, in the shape a form error
+// takes.
+func (r HistoryRequest) period() validation.Errors {
+	e := validation.Errors{}
+	if r.Basis != DateRecorded && r.Basis != DateAccrued {
+		e.Add("basis", "read a period by when it was recorded or by when it accrued")
+	}
+	if !r.From.IsZero() && !r.Until.IsZero() && !r.From.Before(r.Until) {
+		e.Add("until", "the end of a period comes after its start")
+	}
+	return e
 }
 
 // Statement is a page of one wallet's ledger, together with the wallet it
@@ -195,6 +261,9 @@ type Statement struct {
 // this one. A statement is the whole record of somebody's money, so a path to
 // it that skipped the second question would be the widest read in the package.
 func (s *WalletService) History(ctx context.Context, actor security.Subject, in HistoryRequest) (Statement, error) {
+	if errs := in.period(); errs.Any() {
+		return Statement{}, errs
+	}
 	g, err := security.Authorize(ctx, s.policy, actor, WalletHistory, Wallet{})
 	if err != nil {
 		return Statement{}, err
@@ -231,6 +300,8 @@ func (s *WalletService) History(ctx context.Context, actor security.Subject, in 
 		}
 	}
 
+	page = within(page, data.Tenant(g), in)
+
 	if in.Newest {
 		page = page.OrderByDesc("sequence")
 	} else {
@@ -252,6 +323,190 @@ func (s *WalletService) History(ctx context.Context, actor security.Subject, in 
 		Conversions: conversions,
 		Charges:     charges,
 	}, nil
+}
+
+// within narrows a page of entries to the period a history request names, and
+// leaves it as it was where the request names none.
+//
+// By when it was recorded, the bound is on the entry's own timestamp. By when
+// it accrued, it is on the operation the entry was written under, asked as a
+// correlated subquery on that operation's key: the date is the operation's,
+// and copying it onto every entry would be a second place it is kept. The
+// subquery is scoped to the tenant off the Grant like the page around it.
+func within(page *EntryQuery, tenant string, in HistoryRequest) *EntryQuery {
+	if in.From.IsZero() && in.Until.IsZero() {
+		return page
+	}
+	if in.Basis != DateAccrued {
+		if !in.From.IsZero() {
+			page = page.Where("created_at", ">=", in.From.UTC())
+		}
+		if !in.Until.IsZero() {
+			page = page.Where("created_at", "<", in.Until.UTC())
+		}
+		return page
+	}
+
+	column := func(name string) string { return operationsTable + "." + name }
+	bounded := func(b *query.Builder, name string) {
+		if !in.From.IsZero() {
+			b.Where(column(name), ">=", in.From.UTC())
+		}
+		if !in.Until.IsZero() {
+			b.Where(column(name), "<", in.Until.UTC())
+		}
+	}
+	return page.WhereExists(func(b *query.Builder) {
+		b.From(operationsTable).
+			WhereColumn(column("id"), "=", entriesTable+".operation_id").
+			Where(column("tenant_id"), "=", tenant).
+			Where(func(b *query.Builder) {
+				b.Where(func(b *query.Builder) {
+					b.WhereNotNull(column("accrued_at"))
+					bounded(b, "accrued_at")
+				}).OrWhere(func(b *query.Builder) {
+					b.WhereNull(column("accrued_at"))
+					bounded(b, "created_at")
+				})
+			})
+	})
+}
+
+// BalanceAt is what a wallet held at an instant: the balance its last entry
+// recorded at or before that instant left it at, and zero before its first.
+//
+// It is read off the ledger rather than computed, because every entry records
+// the balance it left -- a pending one the balance it did not change -- so the
+// answer is one row and not a sum over a history. It is a read of the ledger,
+// and asks the policy what History asks.
+//
+// The ledger keeps its timestamps to the second, so an instant is read to the
+// second it falls in: an entry written in that second is at or before it.
+func (s *WalletService) BalanceAt(ctx context.Context, actor security.Subject, walletID string, at time.Time) (Money, error) {
+	g, err := security.Authorize(ctx, s.policy, actor, WalletHistory, Wallet{})
+	if err != nil {
+		return Money{}, err
+	}
+	holder, err := Wallets(s.db).WhereKey(walletID).First(ctx, g)
+	if err != nil {
+		return Money{}, err
+	}
+	if holder == nil {
+		return Money{}, ErrNotFound
+	}
+	if _, err := security.Authorize(ctx, s.policy, actor, WalletHistory, *holder); err != nil {
+		return Money{}, err
+	}
+
+	last, err := Entries(s.db).
+		Where("wallet_id", "=", holder.ID).
+		Where("created_at", "<=", at.UTC()).
+		OrderByDesc("sequence").
+		First(ctx, g)
+	if err != nil {
+		return Money{}, err
+	}
+	if last == nil {
+		return holder.Money(0), nil
+	}
+	return holder.Money(last.BalanceAfter), nil
+}
+
+// OperationByKey answers the operation an idempotency key named, as a receipt
+// of what it wrote on the wallets the subject may read.
+//
+// The key is not the permission, here as on a replay: a key is a string the
+// caller chose and somebody else can guess. So the operation's entries are read
+// and the policy is asked about every wallet they touch; what comes back is the
+// rows on the wallets it allowed, and a subject it allowed none of is refused.
+// An operator reads the whole of it. A holder reading a transfer they paid sees
+// their own side, not the balance the other side was left at.
+//
+// Nothing moves and nothing is replayed: Replayed is false, because this is a
+// read of what was done rather than an answer to a request sent again.
+func (s *WalletService) OperationByKey(ctx context.Context, actor security.Subject, key string) (Receipt, error) {
+	e := validation.Errors{}
+	validation.Required(e, "idempotency_key", key)
+	validation.MaxLen(e, "idempotency_key", key, maxIdempotencyKeyLen)
+	if e.Any() {
+		return Receipt{}, e
+	}
+	g, err := security.Authorize(ctx, s.policy, actor, WalletHistory, Wallet{})
+	if err != nil {
+		return Receipt{}, err
+	}
+	record, err := Operations(s.db).Where("idempotency_key", "=", key).First(ctx, g)
+	if err != nil {
+		return Receipt{}, err
+	}
+	if record == nil {
+		return Receipt{}, ErrNotFound
+	}
+
+	written, err := Entries(s.db).Where("operation_id", "=", record.ID).OrderBy("position").Get(ctx, g)
+	if err != nil {
+		return Receipt{}, err
+	}
+	var lines PurchaseCollection
+	if record.Kind == OperationPurchase || record.Kind == OperationRefund {
+		lines, err = Purchases(s.db).Where("operation_id", "=", record.ID).OrderBy("position").Get(ctx, g)
+		if err != nil {
+			return Receipt{}, err
+		}
+	}
+
+	named := make([]any, 0, len(written)+2*len(lines))
+	seen := make(map[string]bool, cap(named))
+	for _, entry := range written {
+		if entry != nil {
+			collect(&named, seen, entry.WalletID, entry.WalletID)
+		}
+	}
+	for _, line := range lines {
+		if line != nil {
+			collect(&named, seen, line.PayerWalletID, line.PayerWalletID)
+			collect(&named, seen, line.ReceiverWalletID, line.ReceiverWalletID)
+		}
+	}
+	wallets, err := s.walletsByID(ctx, g, named)
+	if err != nil {
+		return Receipt{}, err
+	}
+	readable := make(map[string]bool, len(wallets))
+	refusal := error(ErrNotFound)
+	for id, held := range wallets {
+		if _, err := security.Authorize(ctx, s.policy, actor, WalletHistory, held); err != nil {
+			refusal = err
+			continue
+		}
+		readable[id] = true
+	}
+	if len(readable) == 0 {
+		return Receipt{}, refusal
+	}
+
+	receipt := Receipt{Operation: *record}
+	for _, entry := range written {
+		if entry != nil && readable[entry.WalletID] {
+			receipt.Entries = append(receipt.Entries, *entry)
+		}
+	}
+	for _, line := range lines {
+		if line != nil && (readable[line.PayerWalletID] || readable[line.ReceiverWalletID]) {
+			receipt.Purchases = append(receipt.Purchases, *line)
+		}
+	}
+	if record.Kind == OperationExchange {
+		if receipt.Conversion, err = Conversions(s.db).Where("operation_id", "=", record.ID).First(ctx, g); err != nil {
+			return Receipt{}, err
+		}
+	}
+	if record.Kind == OperationTransfer || record.Kind == OperationExchange {
+		if receipt.Charge, err = Charges(s.db).Where("operation_id", "=", record.ID).First(ctx, g); err != nil {
+			return Receipt{}, err
+		}
+	}
+	return receipt, nil
 }
 
 // Deposit puts money into a wallet.
@@ -296,11 +551,12 @@ func (s *WalletService) Deposit(ctx context.Context, actor security.Subject, in 
 	}
 
 	return s.commit(ctx, g, operation{
-		key:   in.IdempotencyKey,
-		kind:  OperationDeposit,
-		meta:  in.Meta,
-		owner: target.ID,
-		asked: asked,
+		key:       in.IdempotencyKey,
+		kind:      OperationDeposit,
+		meta:      in.Meta,
+		owner:     target.ID,
+		asked:     asked,
+		accruedAt: in.AccruedAt,
 	}, []movement{{wallet: target, kind: EntryDeposit, amount: amount, pending: in.Pending}})
 }
 
@@ -348,11 +604,12 @@ func (s *WalletService) Withdraw(ctx context.Context, actor security.Subject, in
 	}
 
 	return s.commit(ctx, g, operation{
-		key:   in.IdempotencyKey,
-		kind:  OperationWithdraw,
-		meta:  in.Meta,
-		owner: source.ID,
-		asked: asked,
+		key:       in.IdempotencyKey,
+		kind:      OperationWithdraw,
+		meta:      in.Meta,
+		owner:     source.ID,
+		asked:     asked,
+		accruedAt: in.AccruedAt,
 	}, []movement{{wallet: source, kind: EntryWithdraw, amount: amount, pending: in.Pending, force: in.Force}})
 }
 
@@ -495,13 +752,14 @@ func (s *WalletService) Transfer(ctx context.Context, actor security.Subject, in
 	}
 
 	return s.commit(ctx, g, operation{
-		key:    in.IdempotencyKey,
-		kind:   kind,
-		meta:   in.Meta,
-		rate:   applied,
-		charge: charged,
-		owner:  source.ID,
-		asked:  asked,
+		key:       in.IdempotencyKey,
+		kind:      kind,
+		meta:      in.Meta,
+		rate:      applied,
+		charge:    charged,
+		owner:     source.ID,
+		asked:     asked,
+		accruedAt: in.AccruedAt,
 	}, movements)
 }
 
@@ -524,7 +782,10 @@ func (s *WalletService) Transfer(ctx context.Context, actor security.Subject, in
 // ErrAlreadyReversed, and the refusal is a unique index rather than a check, so
 // two reversals arriving together cannot both be the one that succeeds. The
 // same key again is the same request, and it is answered with the receipt of
-// the reversal it already made.
+// the reversal it already made. An operation part of which ReversePartially
+// already gave back answers ErrPartiallyReversed, and what is left of it is
+// given back in part too; one that can be reversed in part is closed to that by
+// being reversed whole.
 //
 // Undoing an exchange moves back exactly what moved, on each side, in the
 // currency it moved in. No rate is asked for and none is recorded: the amounts
@@ -549,7 +810,10 @@ func (s *WalletService) Reverse(ctx context.Context, actor security.Subject, in 
 	if original == nil {
 		return Receipt{}, ErrNotFound
 	}
-	if original.Kind == OperationReversal {
+	// A void is not reversed either: it moved nothing, and what it withdrew
+	// stays withdrawn.
+	switch original.Kind {
+	case OperationReversal, OperationPartialReversal, OperationVoid:
 		return Receipt{}, ErrNotReversible
 	}
 	// A basket is undone line by line and never whole. Reversing one would give
@@ -584,14 +848,31 @@ func (s *WalletService) Reverse(ctx context.Context, actor security.Subject, in 
 		return Receipt{}, ErrAlreadyReversed
 	}
 
+	// An operation that can be reversed in part is closed to that by being
+	// reversed whole, and the whole reversal is refused where part of it was
+	// already given back: undoing it whole would give that part back twice.
+	// The check below is the answer a caller gets at once; the statement in
+	// record is the one that decides, against a partial reversal racing it.
+	var record func(context.Context, security.Grant, string) error
+	if whole, partable := reversibleInPart(movements); partable {
+		if original.ReversedAmount > 0 {
+			return Receipt{}, ErrPartiallyReversed
+		}
+		record = func(ctx context.Context, g security.Grant, _ string) error {
+			return s.closeToPartialReversal(ctx, g, original.ID, whole)
+		}
+	}
+
 	receipt, err := s.commit(ctx, g, operation{
-		key:     in.IdempotencyKey,
-		kind:    OperationReversal,
-		settles: original.ID,
-		reason:  in.Reason,
-		meta:    in.Meta,
-		owner:   owner,
-		asked:   asked,
+		key:       in.IdempotencyKey,
+		kind:      OperationReversal,
+		settles:   original.ID,
+		reason:    in.Reason,
+		meta:      in.Meta,
+		owner:     owner,
+		asked:     asked,
+		accruedAt: in.AccruedAt,
+		record:    record,
 	}, movements)
 	if err != nil && !errors.Is(err, ErrInsufficientFunds) {
 		// The unique index on the operation being settled is what refuses a
@@ -623,7 +904,10 @@ func (s *WalletService) Reverse(ctx context.Context, actor security.Subject, in 
 // ErrAlreadyConfirmed, and the refusal is a unique index rather than a check,
 // so two confirmations arriving together cannot both be the one that succeeds.
 // An operation with nothing waiting -- one that settled when it was made, a
-// reversal, another confirmation -- answers ErrNotPending.
+// reversal, another confirmation, a void -- answers ErrNotPending, and one that
+// was voided answers ErrAlreadyVoided: a confirmation and a void of the same
+// operation cannot both succeed, because each marks the operation resolved by a
+// statement that matches only while nothing has.
 //
 // There is one method and not the reference's pair of a safe and an unsafe one.
 // This is the safe one: it reports why it could not settle instead of answering
@@ -646,6 +930,12 @@ func (s *WalletService) Confirm(ctx context.Context, actor security.Subject, in 
 	if original == nil {
 		return Receipt{}, ErrNotFound
 	}
+	// A void's entries are pending and are never confirmed: they are the
+	// withdrawal of a proposal, and making them count would move the money the
+	// proposal was withdrawn to keep from moving.
+	if original.Kind == OperationVoid {
+		return Receipt{}, ErrNotPending
+	}
 
 	movements, err := s.settle(ctx, g, actor, in, original.ID)
 	if err != nil {
@@ -661,14 +951,31 @@ func (s *WalletService) Confirm(ctx context.Context, actor security.Subject, in 
 	if receipt, found, err := s.replay(ctx, g, in.IdempotencyKey, OperationConfirmation, owner, asked); err != nil || found {
 		return receipt, err
 	}
+	if voided, err := s.voided(ctx, g, original.ID); err != nil {
+		return Receipt{}, err
+	} else if voided {
+		return Receipt{}, ErrAlreadyVoided
+	}
 
+	accrued := in.AccruedAt
+	if accrued.IsZero() && original.AccruedAt != nil {
+		accrued = *original.AccruedAt
+	}
 	receipt, err := s.commit(ctx, g, operation{
-		key:     in.IdempotencyKey,
-		kind:    OperationConfirmation,
-		settles: original.ID,
-		meta:    in.Meta,
-		owner:   owner,
-		asked:   asked,
+		key:       in.IdempotencyKey,
+		kind:      OperationConfirmation,
+		settles:   original.ID,
+		meta:      in.Meta,
+		owner:     owner,
+		asked:     asked,
+		accruedAt: accrued,
+		// The operation is marked resolved by this confirmation in the same
+		// transaction, by a statement that matches only while nothing resolved
+		// it. A void that got there first leaves it matching nothing, and the
+		// confirmation rolls back.
+		record: func(ctx context.Context, g security.Grant, id string) error {
+			return s.resolve(ctx, g, original.ID, id, ErrAlreadyVoided)
+		},
 	}, movements)
 	if err != nil && !errors.Is(err, ErrInsufficientFunds) {
 		// The unique index on the operation being settled is what refuses a

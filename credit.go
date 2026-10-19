@@ -7,11 +7,13 @@ import (
 	"math/big"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/arandu-io/framework/data"
 	"github.com/arandu-io/framework/security"
 	"github.com/arandu-io/framework/validation"
 	"github.com/arandu-io/hesape/database/model"
+	"github.com/arandu-io/hesape/database/query"
 )
 
 // Credit agreements: a holder buying now and paying in installments, against
@@ -648,17 +650,54 @@ func (s *WalletService) Credit(ctx context.Context, actor security.Subject, agre
 	return s.creditStatement(ctx, g, agreement)
 }
 
-// CreditQuery narrows a listing of agreements.
+// CreditQuery narrows a listing of agreements, and pages it.
 type CreditQuery struct {
 	// HolderID is whose; an operator may leave it empty for every holder.
 	HolderID string
 	// Status is one status, or empty for all.
 	Status CreditStatus
+	// Reference is the creditor's reference to match, and empty for any. It is
+	// matched exactly, or as the start of the reference with ReferencePrefix --
+	// "order-2026-10" finds every agreement of that month's orders. The match
+	// is the engine's comparison of text, case and all.
+	Reference       string
+	ReferencePrefix bool
+	// Cursor is the identifier of the last agreement of the page before, and
+	// empty for the first page. Limit is how many one page holds: zero is
+	// fifty, and more than MaxPageSize is refused. A page shorter than Limit is
+	// the last one.
+	Cursor string
+	Limit  int
 }
+
+// Validate reports the errors per field.
+func (q CreditQuery) Validate() validation.Errors {
+	e := validation.Errors{}
+	validation.MaxLen(e, "holder_id", q.HolderID, maxIdentifierLen)
+	validation.MaxLen(e, "reference", q.Reference, maxNameLen)
+	validation.MaxLen(e, "cursor", q.Cursor, maxIdentifierLen)
+	if q.Limit < 0 || q.Limit > MaxPageSize {
+		e.Add("limit", fmt.Sprintf("a page holds between 1 and %d agreements, and 0 is %d", MaxPageSize, defaultLimit))
+	}
+	if q.ReferencePrefix && strings.TrimSpace(q.Reference) == "" {
+		e.Add("reference", "a prefix to match is not empty")
+	}
+	return e
+}
+
+var _ validation.Validatable = CreditQuery{}
 
 // Credits lists agreements, newest first: a holder their own, the operator
 // any holder's.
+//
+// The page is a keyset on the moment an agreement was opened and its
+// identifier, newest first, so a page is never repeated or skipped while
+// agreements are opened between two reads. The next page is asked for with the
+// identifier of the last agreement of this one, when this one is full.
 func (s *WalletService) Credits(ctx context.Context, actor security.Subject, in CreditQuery) ([]*CreditAgreement, error) {
+	if errs := in.Validate(); errs.Any() {
+		return nil, errs
+	}
 	g, err := security.Authorize(ctx, s.policy, actor, WalletCreditView, Wallet{})
 	if err != nil {
 		return nil, err
@@ -679,7 +718,38 @@ func (s *WalletService) Credits(ctx context.Context, actor security.Subject, in 
 	if in.Status != "" {
 		q = q.Where("status", "=", string(in.Status))
 	}
-	return q.Get(ctx, g)
+	if reference := strings.TrimSpace(in.Reference); reference != "" {
+		if in.ReferencePrefix {
+			// A prefix is compared as the leading characters of the column
+			// rather than through LIKE, which every engine spells and escapes
+			// differently and SQLite folds the case of. The length is a count
+			// this package made, never text a caller wrote.
+			column := quoterFor(s.db.Dialect())("reference")
+			q = q.Where(query.Raw(fmt.Sprintf("substr(%s, 1, %d)", column, utf8.RuneCountInString(reference))), "=", reference)
+		} else {
+			q = q.Where("reference", "=", reference)
+		}
+	}
+	if in.Cursor != "" {
+		anchor := CreditAgreements(s.db).WhereKey(in.Cursor)
+		if holder != "" {
+			anchor = anchor.Where("holder_id", "=", holder)
+		}
+		last, err := anchor.First(ctx, g)
+		if err != nil {
+			return nil, err
+		}
+		if last == nil {
+			return nil, nil
+		}
+		q = q.Where(func(q *CreditAgreementQuery) {
+			q.Where("created_at", "<", last.CreatedAt).
+				OrWhere(func(q *CreditAgreementQuery) {
+					q.Where("created_at", "=", last.CreatedAt).Where("id", "<", last.ID)
+				})
+		})
+	}
+	return q.Limit(boundedLimit(in.Limit)).Get(ctx, g)
 }
 
 // CreditPaymentRequest records an installment paid.

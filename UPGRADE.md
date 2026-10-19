@@ -7,6 +7,25 @@ describing a publishing migration and a Repository removal that both happened
 before `v0.1.0` of this package. They are gone, and what this package actually
 changed at each of its own versions is below.
 
+## v0.15.0
+
+Run `aru migrate`: `20261019_0021_add_wallet_operation_settlement` adds four
+columns to `wallet_operations`, `20261019_0022_add_wallet_hold_captured_amount`
+adds one to `wallet_holds` and fills it in for the holds already captured, and
+`20261019_0023_add_wallet_period_indexes` adds two indexes. Every new column is
+nullable or has a default, so the previous binary keeps working while it runs.
+
+No signature changed. One behaviour did: `Credits` now answers one page of at
+most fifty agreements unless `CreditQuery.Limit` asks for another size (up to
+`MaxPageSize`). A caller that read every agreement in one call pages with
+`CreditQuery.Cursor`, the identifier of the last agreement of a full page.
+
+`Reverse` now refuses with `ErrPartiallyReversed` an operation that
+`ReversePartially` gave part of back; give back what is left in part too. A
+listener that panicked used to take the request down after the money had moved;
+it is now recovered and logged, so a consumer that relied on that panic to
+notice a broken listener reads its log instead.
+
 ## v0.14.0
 
 Additive. Run `aru migrate`: `20261013_0019_create_wallet_credit_agreements`
