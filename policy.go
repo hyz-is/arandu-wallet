@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/arandu-io/framework/security"
+	"github.com/arandu-io/hesape/auth"
 )
 
 // The actions of Wallet. Constants rather than strings at the call site: a
@@ -195,6 +196,11 @@ type WalletPolicy struct{}
 // the Model path still compiled.
 var _ security.Policy[Wallet] = WalletPolicy{}
 
+// Compile-time proof that the policy says which of its actions write. Without
+// it every Grant the policy issues would write, the one to view a balance
+// included, and nothing would say so until something used one to.
+var _ auth.Writes = WalletPolicy{}
+
 // Can decides whether the subject may perform the action on the record.
 //
 // It is the only place that decides. The service reaches the Model only after
@@ -308,6 +314,32 @@ func (WalletPolicy) Can(ctx context.Context, s security.Subject, a security.Acti
 	// arandu:end custom
 
 	return fmt.Errorf("no rule allows %s on wallet", a)
+}
+
+// Writes reports whether a Grant issued for the action may change anything.
+//
+// Authorize asks it about every action it decides, and a Grant issued for one
+// answered false only reads: the query builder and the Model refuse it on every
+// insert, update and delete, and the balance statement refuses it before it
+// runs, so a Grant issued to show somebody a balance cannot move it, whatever
+// the code holding it does next.
+//
+// The actions that write are enumerated and everything else reads, the same
+// shape as Can: an action added without a decision here issues Grants that
+// cannot write, so it fails loudly the first time it tries rather than writing
+// under a name that says it only looks. OperatorAction is never asked as an
+// action and answers false with the rest.
+func (WalletPolicy) Writes(a security.Action) bool {
+	switch a {
+	case WalletCreate, WalletDeposit, WalletWithdraw, WalletTransfer,
+		WalletReverse, WalletConfirm, WalletVoid, WalletCredit, WalletForce,
+		WalletPay, WalletRefund, WalletDescribe, WalletClose, WalletReconcile,
+		WalletHold, WalletCapture, WalletRelease, WalletExpire,
+		WalletWithdrawalsRequest, WalletWithdrawalsManage,
+		WalletCreditOpen, WalletCreditManage:
+		return true
+	}
+	return false
 }
 
 // isProbe reports that the question is about the kind of thing rather than

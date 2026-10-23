@@ -91,7 +91,16 @@ yet, and it belongs to nobody until it is written with the tenant off the Grant.
 list holding four of five passes while the fifth is open, which is the only
 state in which any of this matters.
 
-**5. Run the gates.**
+**5. Decide whether the action writes.** `Writes` in `policy.go` enumerates
+the actions whose Grant may change anything; every other action's Grant only
+reads, and the query builder, the Model and the balance statement refuse it
+with `auth.ErrReadGrant`. An action that moves money or changes a row goes in
+that list and in the `writes` table of `tests/Unit/writes_test.go`, which
+reads `policy.go` and fails on an action it has no decision for. An action
+that only reads stays out of the list, so a Grant issued to look at money can
+never move it.
+
+**6. Run the gates.**
 
 ```sh
 export GOWORK=off

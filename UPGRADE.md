@@ -18,6 +18,18 @@ a subject that carries roles or actions unless the application installed a
 without a resolver gets `ErrNoSubjectResolver` at sign-in: install one that
 answers `OperatorRole`, or `OperatorAction`, from the account.
 
+`WalletPolicy` implements `auth.Writes`. A Grant `security.Authorize` issues
+from it for `WalletView`, `WalletList`, `WalletHistory`, `WalletPurchases`,
+`WalletCreditView` or `WalletOperationsAll` only reads: every insert, update
+and delete through `Wallets(db)`, `Entries(db)` or any other query of this
+package refuses it with `auth.ErrReadGrant`, and so does the balance statement.
+No method of the Service changes, because each one already authorizes the
+action it performs. Code of the application that authorized one of those six
+against `WalletPolicy{}` and then wrote with the Grant -- a `Wallets(db)` update
+under the Grant to view, a cache filled with `cache.Remember` under the Grant
+to read the ledger -- is refused, or computes without storing; authorize the
+action that writes, or keep the value under a Grant your own policy issued.
+
 ## v0.18.0
 
 Run `aru migrate`: `20261023_0025_add_wallet_listing_indexes` adds four indexes

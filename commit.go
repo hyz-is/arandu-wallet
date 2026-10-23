@@ -13,6 +13,7 @@ import (
 
 	"github.com/arandu-io/framework/data"
 	"github.com/arandu-io/framework/security"
+	"github.com/arandu-io/hesape/auth"
 	"github.com/arandu-io/hesape/database"
 	"github.com/arandu-io/hesape/database/query/grammars"
 )
@@ -1013,7 +1014,15 @@ type moved struct {
 // It does not write the ledger row. What comes back is the entry the batch in
 // apply appends, so that the statement which moves a balance stays one per
 // wallet and the rows it produced go in one per operation.
+//
+// The statement is written by hand rather than through the query builder, so
+// it asks auth.Writable itself, before it runs, as the builder asks on every
+// write: a Grant issued for an action that only reads, or to somebody only
+// viewing an account, moves no balance.
 func (s *WalletService) move(ctx context.Context, g security.Grant, operationID string, position int, m movement) (Entry, error) {
+	if err := auth.Writable(g); err != nil {
+		return Entry{}, err
+	}
 	statement, bindings := moveStatement(m, data.Tenant(g), s.db.Dialect())
 	if statement == "" {
 		return Entry{}, fmt.Errorf("wallet: %q is not a direction money moves in", m.kind)
