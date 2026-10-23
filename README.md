@@ -510,6 +510,42 @@ this package needs, one action at a time, inside the custom block:
 
 What is not written there stays closed, including every action added later.
 
+## Prove your wiring keeps the wallet's promises
+
+`github.com/hyz-is/arandu-wallet/conformance` checks the package's promises
+over your own composition: the ledger is append-only, every balance is the sum
+of its entries, one idempotency key is one operation, a hold settles exactly
+once, another Organization reaches no wallet, and a Grant issued to read cannot
+write. Call it in one line from `tests/Conformance`, with a fixture built from
+your own wiring over a fresh database:
+
+```go
+func TestWallet(t *testing.T) { conformance.Wallet(t, tests.WalletFixture) }
+
+// in tests/: the Service and DB of the Module your bootstrap built, an Account
+// function that creates an account where your SubjectResolver reads it and
+// answers the subject it resolves, and -- when you register the wallet's
+// routes -- the server test.Serve booted.
+func WalletFixture(t *testing.T) conformance.Fixture {
+	app := Boot(t) // your composition over test.Serve
+	return conformance.Fixture{
+		Service: app.Wallet.Service(),
+		DB:      app.Server.DB(),
+		Account: func(t *testing.T, organization string, operator bool) security.Subject {
+			return CreateAccount(t, app, organization, operator)
+		},
+		Server: app.Server,
+	}
+}
+```
+
+Each failure is a sentence naming what the application broke: an account
+resolved with the operator role it was never granted, an Organization not
+carried as the tenant, a module built over a session store the guards do not
+read. `tests/Conformance` here runs the kit against a small application on
+SQLite and, with `ARANDU_TEST_DATABASE_URL` or `ARANDU_TEST_POSTGRES_DSN` set,
+on PostgreSQL.
+
 ## Model-first data path
 
 `Wallet` embeds `model.Model`, and `Wallets(db)` is the one entry point for its
@@ -562,6 +598,7 @@ event.go       what a listener is told, once the write has committed
 commands.go    what an operator runs from a terminal
 translation.go the sentences the screens say
 views.go       the screens, and the files the application takes ownership of
+conformance/   the kit an application runs over its own wiring
 ```
 
 See it run, against SQLite in a temporary directory, with nothing to configure:

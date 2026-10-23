@@ -30,6 +30,15 @@ under the Grant to view, a cache filled with `cache.Remember` under the Grant
 to read the ledger -- is refused, or computes without storing; authorize the
 action that writes, or keep the value under a Grant your own policy issued.
 
+Add `conformance.Wallet` to `tests/Conformance`
+(`github.com/hyz-is/arandu-wallet/conformance`): it checks the package's
+promises over the application's own wiring, and fails naming what the wiring
+broke. Its fixture is the Service and database of the Module your bootstrap
+built, an `Account` function that creates an account where your
+`SubjectResolver` reads it, and the server `test.Serve` booted when you
+register the wallet's routes. A plain account resolved with `OperatorRole`, or
+an Organization not carried as the subject's tenant, fails every check.
+
 ## v0.18.0
 
 Run `aru migrate`: `20261023_0025_add_wallet_listing_indexes` adds four indexes

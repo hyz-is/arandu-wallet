@@ -205,6 +205,26 @@ ledger (`OperationPending`, `OperationConfirmed`, `OperationVoided`,
 `OperationSettled`, `OperationPartiallyReversed`, `OperationReversed`); do not
 keep one of your own.
 
+## Prove the wiring in tests/Conformance
+
+Add one test that runs the package's kit over the application's own wiring,
+and keep it:
+
+```go
+func TestWallet(t *testing.T) { conformance.Wallet(t, tests.WalletFixture) }
+```
+
+`conformance` is `github.com/hyz-is/arandu-wallet/conformance`. The fixture is
+built per subtest over a fresh database (`test.Serve` with the application's
+own boot and `test.Migrate`): `Service` is `module.Service()` of the Module the
+bootstrap built, `DB` the database it writes, `Account(t, organization,
+operator)` creates an account where the application's `SubjectResolver` reads
+it -- granting `wallet.OperatorRole` or `wallet.OperatorAction` when `operator`
+is true -- and answers the subject the resolver answers, and `Server` is the
+served application when it registers the wallet's routes. Do not hand it
+subjects written in the test: the kit signs accounts in with `test.As`, and a
+role the resolver does not answer is a role no request has.
+
 ## What the answers mean
 
 | status | what happened |

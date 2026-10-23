@@ -83,9 +83,27 @@ func buildable(file *ast.File) bool {
 // commit that adds one: a capability audit that grows a hole the first time
 // somebody needs it is an audit whose answer depends on who ran it.
 //
+// The conformance kit is not linked either. An application imports it from
+// its tests and from nowhere else, so it is compiled into a test binary and
+// never into the one that serves money; and what it does there is reach for
+// the writes every rule below forbids -- an update of the balance, a delete
+// of the ledger -- under a Grant issued to read, to assert that they are
+// refused. Auditing it as production would fail the kit for the one thing it
+// exists to prove. Only the package of that name in that directory is left
+// out, so code that moved there to escape the audit would have to be the kit.
+//
 // Every rule in this file reads what the installer links, and this is where
 // that is decided once.
-func linked(file *ast.File) bool { return file.Name.Name != "main" }
+func linked(source parsedGoFile) bool {
+	if source.file.Name.Name == "main" {
+		return false
+	}
+	return !(source.file.Name.Name == testKitPackage &&
+		filepath.Base(filepath.Dir(source.path)) == testKitPackage)
+}
+
+// testKitPackage is the package an application calls from tests/Conformance.
+const testKitPackage = "conformance"
 
 // auditedFiles is every Go file an application that installs this package
 // compiles into its binary.
@@ -94,7 +112,7 @@ func auditedFiles(t *testing.T) []parsedGoFile {
 
 	out := []parsedGoFile{}
 	for _, source := range productionGoFiles(t, packageRoot(t)) {
-		if buildable(source.file) && linked(source.file) {
+		if buildable(source.file) && linked(source) {
 			out = append(out, source)
 		}
 	}
