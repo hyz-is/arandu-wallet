@@ -7,9 +7,9 @@ describing a publishing migration and a Repository removal that both happened
 before `v0.1.0` of this package. They are gone, and what this package actually
 changed at each of its own versions is below.
 
-## Unreleased
+## v0.19.0
 
-This release selects Framework v0.63.0 and Hesape v0.84.0; read their upgrade
+This release selects Framework v0.64.0 and Hesape v0.84.1; read their upgrade
 guides from the versions the application required before. Two of their changes
 reach this package's screens: the session store refuses to start a session for
 a subject that carries roles or actions unless the application installed a
@@ -25,6 +25,7 @@ v0.63.0 declares `security.SessionStore` as an alias of hesape's
 `controllers.Router`, where v0.58.0 declared structs of its own. An application
 on Framework v0.63.0 passes the store and the router it already builds and
 changes nothing; one that stays on an older Framework cannot take this release.
+Framework v0.64.0 also reads an unset `APP_ENV` as production in `config.Load`.
 
 `WalletPolicy` implements `auth.Writes`. A Grant `security.Authorize` issues
 from it for `WalletView`, `WalletList`, `WalletHistory`, `WalletPurchases`,

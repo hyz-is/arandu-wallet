@@ -16,6 +16,25 @@ name here. They are gone.
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-10-23
+
+### Added
+
+- `github.com/hyz-is/arandu-wallet/conformance`: `Wallet(t, open)`, the kit an
+  application calls from `tests/Conformance`. It proves over the application's
+  own wiring that the ledger is append-only, that every balance is the sum of
+  its entries, that one idempotency key is one operation, that a hold settles
+  exactly once, that another Organization reaches no wallet, and that a Grant
+  to read cannot write.
+
+### Changed
+
+- Require Framework `v0.64.0` and Hesape `v0.84.1`; the manifest floor is
+  `framework = ">= 0.64"`.
+- `WalletPolicy` implements `auth.Writes`, and the balance statement checks
+  `auth.Writable` before it runs, so a Grant issued to read a wallet cannot
+  move money.
+
 ## [0.18.0] - 2026-10-23
 
 ### Added
