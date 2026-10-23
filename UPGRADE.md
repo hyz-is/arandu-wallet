@@ -18,6 +18,14 @@ a subject that carries roles or actions unless the application installed a
 without a resolver gets `ErrNoSubjectResolver` at sign-in: install one that
 answers `OperatorRole`, or `OperatorAction`, from the account.
 
+`apidiff` reports `New` and `(*Module).Routes` as changed. Their signatures
+read as before; what moved is underneath the names they take: Framework
+v0.63.0 declares `security.SessionStore` as an alias of hesape's
+`http.SessionStore` and `fhttp.Router` as an alias of hesape's
+`controllers.Router`, where v0.58.0 declared structs of its own. An application
+on Framework v0.63.0 passes the store and the router it already builds and
+changes nothing; one that stays on an older Framework cannot take this release.
+
 `WalletPolicy` implements `auth.Writes`. A Grant `security.Authorize` issues
 from it for `WalletView`, `WalletList`, `WalletHistory`, `WalletPurchases`,
 `WalletCreditView` or `WalletOperationsAll` only reads: every insert, update
