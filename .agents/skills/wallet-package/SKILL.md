@@ -117,10 +117,16 @@ subjects and nobody else:
 - **The holder** (`s.ID == wallet.HolderID`) views, reads the history, opens,
   deposits, withdraws, transfers, confirms, pays, reads purchases, describes,
   and holds, captures and releases on their own wallet.
-- **The operator** (`s.HasRole(wallet.OperatorRole)`) does all of that across
+- **The operator** (`wallet.IsOperator(s)`: `wallet.OperatorRole`, or the
+  arandu-permission action `wallet.OperatorAction`) does all of that across
   the tenant, and also reverses (whole or in part), voids a pending operation,
   refunds, sets credit limits, forces, closes, reconciles and sweeps expired
   holds.
+- **The platform operator** (`wallet.IsPlatformOperator(s)`:
+  `wallet.PlatformRole`, or the action `wallet.WalletOperationsAll`) reads the
+  operations of every tenant with `ListAllOperations`, and nothing else. A
+  tenant's operator is not one. Derive it with `wallet.PlatformOperatorFor(g)`
+  from a Grant your platform policy issued.
 
 A guest, a subject from another tenant and a signed-in person reaching for
 somebody else's wallet are refused.
@@ -185,6 +191,19 @@ added by `20261019_0021_add_wallet_operation_settlement` and
 Do not keep a pending/void flag, a refunded-amount column or a competence date
 of your own beside an operation: they are here, and a second copy is a second
 answer to what happened to the money.
+
+## Listing operations for a data table
+
+Read operations with `ListOperations` (one tenant) or `ListAllOperations` (every
+tenant, the platform's): filters by wallets, holder, kinds, direction, statuses,
+period, metadata equality and free text; newest, oldest, largest or smallest
+first (`OperationSortFor` maps a data table's column and direction); keyset
+pages with `NextCursor`/`PrevCursor`, or numbered pages with `Page`; `Count`
+for the total. Never read a page of `History` and filter it in memory -- what
+falls off the page disappears from the screen. Status is derived from the
+ledger (`OperationPending`, `OperationConfirmed`, `OperationVoided`,
+`OperationSettled`, `OperationPartiallyReversed`, `OperationReversed`); do not
+keep one of your own.
 
 ## What the answers mean
 

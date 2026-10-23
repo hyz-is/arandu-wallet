@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/arandu-io/framework/foundation"
 	hedatabase "github.com/arandu-io/hesape/database"
 	"github.com/arandu-io/hesape/database/migrations"
 
@@ -16,18 +17,26 @@ import (
 // migration raises every one of them in place, and the money stays where it
 // was.
 
-func TestTheLastMigrationWidensTheWalletInstants(t *testing.T) {
+// widening is the migration that raises the wallet's instants to microseconds.
+func widening(t *testing.T, all []foundation.Migration) migrations.WidenTimePrecision {
+	t.Helper()
+	for _, migration := range all {
+		if widen, ok := migration.(migrations.WidenTimePrecision); ok && widen.GetName() == "20261019_0024_widen_wallet_time_precision" {
+			return widen
+		}
+	}
+	t.Fatal("no migration widens the wallet's instants")
+	return migrations.WidenTimePrecision{}
+}
+
+func TestAMigrationWidensTheWalletInstants(t *testing.T) {
 	t.Parallel()
 
 	module, err := wallet.New(wallet.Config{Tenant: tenant}, database(t), sessionStore())
 	if err != nil {
 		t.Fatal(err)
 	}
-	all := module.Migrations()
-	widen, ok := all[len(all)-1].(migrations.WidenTimePrecision)
-	if !ok || widen.GetName() != "20261019_0024_widen_wallet_time_precision" {
-		t.Fatalf("the last migration is %s, want the widening", all[len(all)-1].GetName())
-	}
+	widen := widening(t, module.Migrations())
 	if len(widen.Tables) != 11 {
 		t.Fatalf("the widening names %d tables, want the module's 11", len(widen.Tables))
 	}
@@ -78,11 +87,11 @@ func TestWideningKeepsTheLedgerOnPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	all := module.Migrations()
+	widen := widening(t, module.Migrations())
 	conn := hedatabase.ForMigrations(hedatabase.NewConnection(db.Unwrap(), "", "", map[string]any{
 		"driver": string(hedatabase.DialectPostgres), "name": "wallet-test",
 	}))
-	if err := all[len(all)-1].Up(ctx, conn); err != nil {
+	if err := widen.Up(ctx, conn); err != nil {
 		t.Fatalf("widening: %v", err)
 	}
 	// A connection that prepared a statement over the narrow columns has a

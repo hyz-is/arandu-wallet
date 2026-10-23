@@ -634,7 +634,7 @@ func (s *WalletService) List(ctx context.Context, actor security.Subject, in Lis
 	}
 
 	holder := in.HolderID
-	if !actor.HasRole(OperatorRole) {
+	if !IsOperator(actor) {
 		// Not a filter the caller chose: whoever is not an operator sees their
 		// own wallets, whatever they asked for.
 		holder = actor.ID

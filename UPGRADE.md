@@ -7,6 +7,35 @@ describing a publishing migration and a Repository removal that both happened
 before `v0.1.0` of this package. They are gone, and what this package actually
 changed at each of its own versions is below.
 
+## v0.18.0
+
+Run `aru migrate`: `20261023_0025_add_wallet_listing_indexes` adds four indexes
+on `wallet_entries` and `wallet_operations`, and on PostgreSQL a GIN index on
+the operations' metadata cast to jsonb. Nothing else about a table changes and
+no row does. Building an index locks the table against writes while it runs:
+on a large ledger, migrate in a quiet window. On PostgreSQL the GIN index
+requires every `meta` of `wallet_operations` to be empty or JSON, which is all
+this package has ever written; a value somebody wrote by hand fails the
+migration by name.
+
+No signature changed. `IsOperator` now answers for a subject holding the
+action `wallet.operator` (`OperatorAction`) as for one holding the role: an
+application whose permission groups grant that action to someone gave them the
+operator's reach in their tenant. Nothing grants it unless the application
+does.
+
+A consumer that read a page of `History` -- the latest few hundred operations
+of each wallet -- and filtered it in memory by kind and metadata replaces that
+with one `ListOperations` call: `WalletIDs` for the wallets, `Kinds`, `Meta`
+for its own facts (`{"reason": "payment"}`), `Statuses` instead of pairing
+each operation with its confirmation by hand, and `Cursor` or `Page` for the
+page the screen draws, with `Count` for its total. Operations older than the
+page it used to read are no longer lost. An operator console that looped over
+tenants reads `ListAllOperations` as a platform operator instead -- grant
+`PlatformRole` or `wallet.operations.all`, or derive the subject with
+`PlatformOperatorFor` from the Grant your console's policy issued -- and
+narrows with `Tenants`. A tenant's operator is refused it.
+
 ## v0.17.0
 
 Run `aru migrate`: `20261019_0024_widen_wallet_time_precision` raises the

@@ -395,11 +395,54 @@ wallet.DateAccrued` by the date its operation said the money is about. Every
 movement request carries an optional `AccruedAt` for that; a confirmation keeps
 the date of what it confirms, and an operation without one accrues when it was
 recorded. `BalanceAt` answers what a wallet held at an instant, read off the
-last entry at or before it. The ledger keeps its timestamps to the second.
+last entry at or before it. The ledger keeps its timestamps to the microsecond
+on PostgreSQL and MySQL, and to the second on SQLite.
 
 `OperationByKey` finds what a request did by the idempotency key it was sent
 with -- the question to ask after a timeout -- showing the subject only the
 wallets they may read.
+
+## Page through operations for a data table
+
+`ListOperations` is the query a server-side data table pages through: the
+operations of the subject's tenant, narrowed, ordered and counted in the
+database. A row (`OperationRow`) is an operation as it moved one wallet -- a
+deposit is one row, a transfer between two wallets read together is two -- and
+carries the wallet's currency and scale, the operation's kind and metadata, and
+its status (`OperationPending`, `OperationConfirmed`, `OperationVoided`,
+`OperationSettled`, `OperationPartiallyReversed`, `OperationReversed`), derived
+from the confirmations, voids and reversals naming it.
+
+```go
+page, err := walletService.ListOperations(ctx, subject, wallet.OperationFilter{
+	WalletIDs: []string{credits.ID, reais.ID},
+	Kinds:     []wallet.OperationKind{wallet.OperationDeposit},
+	Meta:      wallet.Meta{"reason": "payment"}, // equality on every name
+	Statuses:  []wallet.OperationStatus{wallet.OperationPending, wallet.OperationConfirmed},
+	Search:    ctx.Query("search"),               // ids, key, reason, metadata
+	Sort:      wallet.OperationsNewest,           // or OperationSortFor(column, dir)
+	Cursor:    ctx.Query("cursor"),               // page.NextCursor / page.PrevCursor
+	Limit:     25,
+	Count:     true,                              // page.Total, one more statement
+})
+```
+
+Pages are a keyset by default, which costs the same on every page of a ledger
+of millions; `Page: n` asks for a numbered page read by offset instead, for a
+table that draws page numbers. `HolderID`, `Direction`, `From`/`Until` and
+`Basis` narrow further. The policy is asked what `History` asks, for every
+wallet named; a holder reads only their own wallets whatever the filter says.
+
+`ListAllOperations` is the same listing across every tenant, with
+`PlatformOperationFilter.Tenants` to keep some: the platform's console. It is
+answered for `WalletOperationsAll`, which a tenant's operator does not hold --
+only a platform operator: `wallet.PlatformRole`, `wallet.WalletOperationsAll`
+granted through arandu-permission, or the subject `wallet.PlatformOperatorFor(g)`
+derives from a Grant your own platform policy issued. Each row says its tenant.
+
+Do not read a page of `History` and filter it in memory: whatever falls off that
+page is gone from the screen. Run `aru migrate` after upgrading to v0.18.0:
+`20261023_0025_add_wallet_listing_indexes` adds the indexes these filters read.
 
 ## Act as the operator after your own policy decided
 
@@ -416,7 +459,9 @@ operator, err := wallet.OperatorFor(g)
 ```
 
 The operator reaches the wallets of the Grant's tenant and no other: the wallet
-policy checks the tenant before the role on every call.
+policy checks the tenant before the role on every call. An application whose
+permissions arandu-permission administers grants `wallet.OperatorAction`
+(`wallet.operator`) instead of the role, and `wallet.IsOperator` answers both.
 
 ## Be told what the money did
 
@@ -510,6 +555,7 @@ withdrawal.go  payout accounts and the withdrawal requests an operator pays
 credit.go      credit agreements: installments against a credit limit
 hold.go        money set aside before it is taken, and how a hold settles
 operator.go    the operator derived from an application's own decision
+listing.go     the operations a data table pages through, in a tenant and in all
 policy.go      who may do what
 service.go     the rules and authorized Model access
 event.go       what a listener is told, once the write has committed

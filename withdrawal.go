@@ -695,7 +695,7 @@ func (s *WalletService) WithdrawalRequestsOf(ctx context.Context, actor security
 		return nil, err
 	}
 	q := WithdrawalRequests(s.db)
-	if !actor.HasRole(OperatorRole) {
+	if !IsOperator(actor) {
 		// Narrowed by the statement, not by reading the rows and dropping
 		// the ones that are not the subject's.
 		q = q.Where("holder_id", "=", actor.ID)

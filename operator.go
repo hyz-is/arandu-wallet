@@ -32,3 +32,29 @@ func OperatorFor(g security.Grant) (security.Subject, error) {
 	}
 	return security.Subject{ID: "operator:" + g.Subject().ID, Tenant: tenant, Roles: []string{OperatorRole}}, nil
 }
+
+// PlatformOperatorFor is the platform operator, acting for an application
+// whose own platform policy has already decided -- the console that reads the
+// money of every tenant, not any tenant's staff.
+//
+// It is OperatorFor's twin for ListAllOperations: the application asks its own
+// policy whether this person runs the platform, and the Grant that policy
+// issued is the proof. This turns that proof into the subject the wallet's
+// policy answers WalletOperationsAll for, named after whoever the Grant was
+// issued to and refused when that person is inside somebody else's account.
+// Hand it only a Grant the platform's policy issued: a Grant a workspace's own
+// policy issued says nothing about the other workspaces. An invalid Grant --
+// the zero value, or one a policy refused -- is refused here.
+func PlatformOperatorFor(g security.Grant) (security.Subject, error) {
+	if err := g.Check(g.Action()); err != nil {
+		return security.Subject{}, fmt.Errorf("wallet: a platform operator is derived from a Grant somebody's policy issued: %w", err)
+	}
+	tenant := data.Tenant(g)
+	if tenant == "" {
+		return security.Subject{}, fmt.Errorf("wallet: the Grant names no tenant, so there is no platform operator to derive")
+	}
+	if g.Subject().Impersonated() {
+		return security.Subject{}, fmt.Errorf("%w: a subject inside somebody else's account reads no other tenant", security.ErrForbidden)
+	}
+	return security.Subject{ID: "platform:" + g.Subject().ID, Tenant: tenant, Roles: []string{PlatformRole}}, nil
+}

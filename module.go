@@ -1250,6 +1250,7 @@ func (m *Module) Migrations() []foundation.Migration {
 		addWalletHoldCapturedAmount{},
 		addWalletPeriodIndexes{},
 		widenWalletTimePrecision,
+		addWalletListingIndexes{},
 	}
 }
 
@@ -2245,6 +2246,72 @@ func (addWalletPeriodIndexes) Down(ctx context.Context, conn migrations.Connecti
 		table.DropIndex("wallet_entries_wallet_created_idx")
 	})
 }
+
+// addWalletListingIndexes adds the indexes a listing of operations reads by:
+// the ledger of a tenant in the order of each sort, the ledger of every tenant
+// for the platform's listing, the operations of a tenant by kind, and on
+// PostgreSQL the operations by what their metadata holds.
+type addWalletListingIndexes struct{ migrations.BaseMigration }
+
+// GetName is the migration's identity, and it carries the order.
+func (addWalletListingIndexes) GetName() string { return "20261023_0025_add_wallet_listing_indexes" }
+
+// walletOperationsMetaIndex is the GIN index on the operations' metadata read
+// as jsonb. Its expression is the one the listing writes -- the column, with
+// the empty string read as null, cast to jsonb -- which is what lets the
+// planner answer a containment test from it.
+const walletOperationsMetaIndex = "wallet_operations_meta_gin"
+
+// Up adds four indexes everywhere, tenant first where one tenant reads them,
+// and the fifth on PostgreSQL only: the other engines have no index that
+// answers a test on what a JSON value holds, and read the metadata of the rows
+// the other filters already narrowed.
+//
+// Every metadata value this package ever wrote is an object or the empty
+// string, which is what makes the cast safe to index; a column somebody wrote
+// something else into by hand fails this migration by name rather than a
+// listing later.
+func (addWalletListingIndexes) Up(ctx context.Context, conn migrations.Connection) error {
+	if err := conn.Schema().Table(ctx, entriesTable, func(table *schema.Blueprint) {
+		table.Index([]string{"tenant_id", "created_at", "wallet_id", "sequence"}, "wallet_entries_tenant_created_idx")
+		table.Index([]string{"tenant_id", "amount", "wallet_id", "sequence"}, "wallet_entries_tenant_amount_idx")
+		table.Index([]string{"created_at", "wallet_id", "sequence"}, "wallet_entries_created_idx")
+	}); err != nil {
+		return err
+	}
+	if err := conn.Schema().Table(ctx, operationsTable, func(table *schema.Blueprint) {
+		table.Index([]string{"tenant_id", "kind", "created_at"}, "wallet_operations_kind_idx")
+	}); err != nil {
+		return err
+	}
+	if conn.Schema().GetConnection().GetDriverName() != "pgsql" {
+		return nil
+	}
+	_, err := conn.Statement(ctx, "create index if not exists "+walletOperationsMetaIndex+" on "+operationsTable+
+		" using gin ((nullif(meta, '')::jsonb) jsonb_path_ops)", nil)
+	return err
+}
+
+// Down drops the indexes.
+func (addWalletListingIndexes) Down(ctx context.Context, conn migrations.Connection) error {
+	if conn.Schema().GetConnection().GetDriverName() == "pgsql" {
+		if _, err := conn.Statement(ctx, "drop index if exists "+walletOperationsMetaIndex, nil); err != nil {
+			return err
+		}
+	}
+	if err := conn.Schema().Table(ctx, operationsTable, func(table *schema.Blueprint) {
+		table.DropIndex("wallet_operations_kind_idx")
+	}); err != nil {
+		return err
+	}
+	return conn.Schema().Table(ctx, entriesTable, func(table *schema.Blueprint) {
+		table.DropIndex("wallet_entries_created_idx")
+		table.DropIndex("wallet_entries_tenant_amount_idx")
+		table.DropIndex("wallet_entries_tenant_created_idx")
+	})
+}
+
+var _ migrations.ReversibleMigration = addWalletListingIndexes{}
 
 // The handlers of the withdrawal flow. Thin, as every handler here: read the
 // input and who is asking, ask the service, answer. They answer JSON; the

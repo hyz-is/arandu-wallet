@@ -115,6 +115,22 @@ const (
 	// cancelling, recording a report and sweeping for the overdue. The money
 	// arrives from outside, so recording it is not the holder's.
 	WalletCreditManage security.Action = "wallet.credit.manage"
+
+	// WalletOperationsAll is reading the operations of every tenant at once:
+	// the platform's listing, ListAllOperations. It is not the operator's.
+	// An operator acts across one tenant and reaches no further, and an
+	// application that hands its customers' finance staff the operator role
+	// has not thereby shown them anybody else's money. It is answered only
+	// for a platform operator (IsPlatformOperator).
+	WalletOperationsAll security.Action = "wallet.operations.all"
+
+	// OperatorAction is being the operator, held as an action rather than a
+	// role: what an application whose permissions arandu-permission
+	// administers grants to the people who run a tenant's money. A subject
+	// carrying it is answered exactly as one with OperatorRole (IsOperator).
+	// It is never asked of the policy as an action of its own, and the policy
+	// refuses it as one.
+	OperatorAction security.Action = "wallet.operator"
 )
 
 // OperatorRole is the role an application grants to the people who run its
@@ -126,6 +142,31 @@ const (
 // below need exactly one distinction -- the holder, and somebody acting on the
 // holder's behalf.
 const OperatorRole = "wallet.operator"
+
+// PlatformRole is the role an application grants to whoever runs the money of
+// every tenant at once -- the platform's own console, not any customer's
+// staff. It opens WalletOperationsAll and nothing else: a platform operator
+// who moves money in a tenant does so as that tenant's operator (OperatorFor).
+const PlatformRole = "wallet.platform"
+
+// IsOperator reports that the subject runs its tenant's money: it holds
+// OperatorRole, or OperatorAction among the actions arandu-permission
+// resolved for it. The two are one decision, held either way.
+func IsOperator(s security.Subject) bool {
+	return s.HasRole(OperatorRole) || s.Can(OperatorAction)
+}
+
+// IsPlatformOperator reports that the subject reads the money of every
+// tenant: it holds PlatformRole, or WalletOperationsAll among the actions
+// arandu-permission resolved for it. A subject inside somebody else's account
+// is not one, whatever it holds: an operator acting there acts as the
+// account, and the account reads no other tenant.
+func IsPlatformOperator(s security.Subject) bool {
+	if s.IsGuest() || s.Impersonated() {
+		return false
+	}
+	return s.HasRole(PlatformRole) || s.Can(WalletOperationsAll)
+}
 
 // WalletPolicy is the only authority over who does what with a Wallet.
 //
@@ -184,6 +225,17 @@ func (WalletPolicy) Can(ctx context.Context, s security.Subject, a security.Acti
 		return fmt.Errorf("a guest has no wallet")
 	}
 
+	// The platform's listing of every tenant. It is answered here, before the
+	// operator's rules, because it is not one of them: it is asked about the
+	// kind of thing only, never about one tenant's wallet, and the subject it
+	// is open to is the platform operator and nobody else.
+	if a == WalletOperationsAll {
+		if isProbe(record) && IsPlatformOperator(s) {
+			return nil
+		}
+		return fmt.Errorf("only a platform operator reads the operations of every tenant")
+	}
+
 	// The operator acts across the tenant. The tenant check above already ran,
 	// so this is wide inside one customer and reaches no further.
 	//
@@ -191,7 +243,7 @@ func (WalletPolicy) Can(ctx context.Context, s security.Subject, a security.Acti
 	// action nobody has written a rule for is refused to everybody, including
 	// here. A branch that answered "yes" to whatever it was asked would make
 	// the next action somebody adds live the moment it is named.
-	if s.HasRole(OperatorRole) {
+	if IsOperator(s) {
 		switch a {
 		case WalletView, WalletList, WalletCreate, WalletHistory,
 			WalletDeposit, WalletWithdraw, WalletTransfer, WalletReverse,

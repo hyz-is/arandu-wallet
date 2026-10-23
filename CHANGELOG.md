@@ -16,6 +16,56 @@ name here. They are gone.
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-10-23
+
+### Added
+
+- `ListOperations` and `OperationFilter`: the operations of the subject's
+  tenant, narrowed, ordered and counted in the database -- the query a
+  server-side data table pages through. A row (`OperationRow`) is an operation
+  as it moved one wallet, with the wallet's holder, slug, name, currency and
+  scale, the operation's kind, key, reason, metadata, accrual date and what it
+  refers to, and its status. Filters: `WalletIDs`, `HolderID`, `Kinds`,
+  `Direction`, `Statuses`, `From`/`Until` with `Basis`, `Meta` (every name
+  equal to its value) and `Search` (identifiers and key exactly; reason and
+  metadata by contained text, ASCII case folded). Sorted newest, oldest,
+  largest or smallest first (`OperationSort`, `OperationsNewest`,
+  `OperationsOldest`, `OperationsLargest`, `OperationsSmallest`, and
+  `OperationSortFor` for a data table's column and direction). Paged by keyset
+  on the sort column, the wallet and the entry's position (`Cursor`,
+  `OperationPage.NextCursor`, `PrevCursor`, `HasMore`) or by number (`Page`),
+  with `Count` for `Total` and `Pages`. Asked of the policy as `History` is,
+  for every wallet named; a subject who is not an operator reads only their
+  own wallets.
+- `OperationStatus`, derived from the ledger and never stored:
+  `OperationPending`, `OperationConfirmed`, `OperationVoided`,
+  `OperationSettled`, `OperationPartiallyReversed`, `OperationReversed`.
+- `ListAllOperations` and `PlatformOperationFilter`: the same listing across
+  every tenant, or the `Tenants` named, for the platform's console. Each row
+  says its tenant.
+- The action `WalletOperationsAll` (`wallet.operations.all`), answered only for
+  a platform operator: `PlatformRole` (`wallet.platform`) or the action itself
+  granted through arandu-permission (`IsPlatformOperator`), never for a
+  tenant's operator, a guest, or a subject inside somebody else's account.
+  `PlatformOperatorFor` derives that subject from a Grant the application's
+  own platform policy issued.
+- The action `OperatorAction` (`wallet.operator`): the operator held as an
+  arandu-permission action, answered exactly as `OperatorRole` (`IsOperator`)
+  by the policy and wherever a listing narrows a subject who is not an
+  operator.
+- `MaxListingValues`: how many wallets, tenants, kinds or statuses one filter
+  names.
+- The migration `20261023_0025_add_wallet_listing_indexes`: the ledger by
+  tenant and date, by tenant and amount, and by date across tenants (each
+  ending in the wallet and the position), the operations by tenant, kind and
+  date, and on PostgreSQL a GIN index (`jsonb_path_ops`) on the operations'
+  metadata read as jsonb, which answers `OperationFilter.Meta`.
+
+### Changed
+
+- `Meta` is matched and searched by a listing. Nothing about the money is
+  decided from it, and the column stays text.
+
 ## [0.17.0] - 2026-10-19
 
 ### Added

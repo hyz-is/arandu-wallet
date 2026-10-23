@@ -50,6 +50,8 @@ var everyAction = []security.Action{
 	wallet.WalletPay,
 	wallet.WalletRefund,
 	wallet.WalletPurchases,
+	wallet.WalletOperationsAll,
+	wallet.OperatorAction,
 }
 
 // operator is the most privileged subject this package knows: somebody the
@@ -313,6 +315,14 @@ func TestTheServiceRefusesBeforeReachingTheModel(t *testing.T) {
 		},
 		"Credits": func() error {
 			_, err := service.Credits(ctx, actor, wallet.CreditQuery{Reference: "order-1", ReferencePrefix: true})
+			return err
+		},
+		"ListOperations": func() error {
+			_, err := service.ListOperations(ctx, actor, wallet.OperationFilter{WalletIDs: []string{"wallet-1"}, Count: true})
+			return err
+		},
+		"ListAllOperations": func() error {
+			_, err := service.ListAllOperations(ctx, actor, wallet.PlatformOperationFilter{Tenants: []string{"acme"}})
 			return err
 		},
 		"SetCredit": func() error {

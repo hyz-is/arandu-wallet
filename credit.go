@@ -703,7 +703,7 @@ func (s *WalletService) Credits(ctx context.Context, actor security.Subject, in 
 		return nil, err
 	}
 	holder := strings.TrimSpace(in.HolderID)
-	if !actor.HasRole(OperatorRole) {
+	if !IsOperator(actor) {
 		holder = actor.ID
 	}
 	if holder != "" {

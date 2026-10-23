@@ -45,9 +45,11 @@ var (
 // one name, where it is the application's to parse and this package's only to
 // carry.
 //
-// Nothing here is read by this package. It is not indexed, not searched and not
-// compared: it is what a receipt shows and what an export carries, and every
-// decision about the money is made from the columns beside it.
+// Nothing about the money is decided from it: it is what a receipt shows and
+// what an export carries, and every decision is made from the columns beside
+// it. A listing finds operations by it -- OperationFilter.Meta matches names to
+// values exactly, and OperationFilter.Search reads its text -- which is a read
+// of what the application wrote, never a rule about the money.
 type Meta map[string]string
 
 // Validate reports why this metadata cannot be stored, and nil when it can.
@@ -101,9 +103,9 @@ func (m Meta) encode() (string, error) {
 // where there is none.
 //
 // Text rather than a document type: the engines spell one differently and only
-// some of them have it, and nothing in this package reads what is inside. A
-// column an application wants to query is a column it adds to a table of its
-// own, against rows it owns.
+// some of them have it. What a listing matches is read out of the text with
+// each engine's JSON functions, and on PostgreSQL through an index on the text
+// cast to jsonb, so the column stays what every engine can hold.
 func (m Meta) Value() (driver.Value, error) {
 	if err := m.Validate(); err != nil {
 		return nil, err
