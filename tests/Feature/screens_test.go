@@ -55,6 +55,7 @@ func TestEveryAddressOnAScreenIsTheRouteItLinksTo(t *testing.T) {
 	const prefix = "/money"
 	ctx := context.Background()
 	sessions := security.NewSessionStore([]byte(appKey), time.Hour, false, security.NewMemoryBackend())
+	resolveAccounts(sessions)
 	module, err := wallet.New(wallet.Config{Tenant: tenant, Prefix: prefix, PageSize: 1}, database(t), sessions)
 	if err != nil {
 		t.Fatalf("building the module: %v", err)
@@ -71,7 +72,7 @@ func TestEveryAddressOnAScreenIsTheRouteItLinksTo(t *testing.T) {
 	deposit(t, service, alice.ID, "screens-2", "2.50")
 
 	signedIn := httptest.NewRecorder()
-	if _, err := sessions.Start(ctx, signedIn, staff()); err != nil {
+	if _, err := sessions.Start(ctx, signedIn, identity(staff())); err != nil {
 		t.Fatalf("starting a session: %v", err)
 	}
 	cookies := signedIn.Result().Cookies()

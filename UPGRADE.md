@@ -7,6 +7,17 @@ describing a publishing migration and a Repository removal that both happened
 before `v0.1.0` of this package. They are gone, and what this package actually
 changed at each of its own versions is below.
 
+## Unreleased
+
+This release selects Framework v0.63.0 and Hesape v0.84.0; read their upgrade
+guides from the versions the application required before. Two of their changes
+reach this package's screens: the session store refuses to start a session for
+a subject that carries roles or actions unless the application installed a
+`SubjectResolver` with `ResolveSubjects` (the skeleton does), and a missing
+`APP_ENV` reads as production. An application that signs its operators in
+without a resolver gets `ErrNoSubjectResolver` at sign-in: install one that
+answers `OperatorRole`, or `OperatorAction`, from the account.
+
 ## v0.18.0
 
 Run `aru migrate`: `20261023_0025_add_wallet_listing_indexes` adds four indexes

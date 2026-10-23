@@ -104,6 +104,7 @@ func serveWallet(t *testing.T, withNavigation bool) servedWallet {
 	t.Helper()
 
 	sessions := security.NewSessionStore([]byte(appKey), time.Hour, false, security.NewMemoryBackend())
+	resolveAccounts(sessions)
 	module, err := wallet.New(wallet.Config{Tenant: tenant}, database(t), sessions)
 	if err != nil {
 		t.Fatalf("building the module: %v", err)
@@ -156,12 +157,13 @@ func (a servedWallet) visit(t *testing.T, method, target string, form url.Values
 	return rec
 }
 
-// signIn starts a session for the subject and answers the cookies a browser
-// would keep from the answer.
+// signIn starts a session for the subject's account and answers the cookies a
+// browser would keep from the answer. The session is started with the identity
+// alone; what the subject may do is what the store's resolver answers.
 func (a servedWallet) signIn(t *testing.T, subject security.Subject) []*http.Cookie {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	if _, err := a.sessions.Start(context.Background(), rec, subject); err != nil {
+	if _, err := a.sessions.Start(context.Background(), rec, identity(subject)); err != nil {
 		t.Fatalf("signing in: %v", err)
 	}
 	return rec.Result().Cookies()
@@ -424,6 +426,7 @@ func serveApplication(t *testing.T, name string) servedWallet {
 	t.Helper()
 
 	sessions := security.NewSessionStore([]byte(appKey), time.Hour, false, security.NewMemoryBackend())
+	resolveAccounts(sessions)
 	module, err := wallet.New(wallet.Config{Tenant: tenant}, database(t), sessions)
 	if err != nil {
 		t.Fatalf("building the module: %v", err)

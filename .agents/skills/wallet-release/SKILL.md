@@ -56,7 +56,7 @@ opened by nothing but that package's own suite.
 
 ```toml
 name = "hyz-is/wallet"
-framework = ">= 0.58"
+framework = ">= 0.63"
 profiles = ["conventional", "performance"]
 
 [permissions]

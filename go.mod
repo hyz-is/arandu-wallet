@@ -3,8 +3,8 @@ module github.com/hyz-is/arandu-wallet
 go 1.26.0
 
 require (
-	github.com/arandu-io/framework v0.58.0
-	github.com/arandu-io/hesape v0.69.0
+	github.com/arandu-io/framework v0.63.0
+	github.com/arandu-io/hesape v0.84.0
 	github.com/arandu-io/hesape/database/connectors/mysql v0.11.0
 	github.com/arandu-io/hesape/database/connectors/pgx v0.11.0
 	github.com/arandu-io/hesape/database/connectors/sqlite v0.11.0
@@ -14,6 +14,7 @@ require (
 
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect
+	github.com/arandu-io/hesape/filesystem/s3 v0.11.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/go-sql-driver/mysql v1.10.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect

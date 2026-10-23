@@ -6,7 +6,7 @@
 # four lines below worth reading before installing anything.
 
 name = "hyz-is/wallet"
-framework = ">= 0.58"
+framework = ">= 0.63"
 profiles = ["conventional", "performance"]
 
 [permissions]

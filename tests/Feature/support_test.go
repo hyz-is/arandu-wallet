@@ -13,6 +13,7 @@ import (
 	"github.com/arandu-io/framework/security"
 	hedatabase "github.com/arandu-io/hesape/database"
 	sqliteconnector "github.com/arandu-io/hesape/database/connectors/sqlite"
+	hhttp "github.com/arandu-io/hesape/http"
 
 	wallet "github.com/hyz-is/arandu-wallet"
 )
@@ -98,6 +99,35 @@ func database(t *testing.T) *data.DB {
 // never read; New refuses a nil one, and rightly.
 func sessionStore() *security.SessionStore {
 	return security.NewSessionStore([]byte(appKey), 0, false, security.NewMemoryBackend())
+}
+
+// resolveAccounts installs on sessions the resolver an application installs:
+// the one that answers, on every request, who the account a session was
+// opened for is now. The accounts are the two this suite signs in -- staff-1,
+// the operator, and any holder of the tenant -- and an account of another
+// tenant is gone.
+//
+// A session keeps the identity and nothing else, so a role reaches a handler
+// only through this answer, exactly as it does in an application: a test that
+// started a session carrying the operator role would be proving a handler
+// against a subject no store hands it.
+func resolveAccounts(sessions *security.SessionStore) {
+	sessions.ResolveSubjects(func(_ context.Context, who security.Subject) (security.Subject, error) {
+		switch {
+		case who.Tenant != tenant:
+			return security.Subject{}, hhttp.ErrSubjectGone
+		case who.ID == staff().ID:
+			return staff(), nil
+		default:
+			return person(who.ID), nil
+		}
+	})
+}
+
+// identity is the part of a subject a session is started with: the account
+// and its tenant. Roles are the resolver's to answer.
+func identity(s security.Subject) security.Subject {
+	return security.Subject{ID: s.ID, Tenant: s.Tenant}
 }
 
 // staff is the operator every test acts as unless the subject is the point.
