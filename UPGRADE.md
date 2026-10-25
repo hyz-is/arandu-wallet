@@ -7,6 +7,26 @@ describing a publishing migration and a Repository removal that both happened
 before `v0.1.0` of this package. They are gone, and what this package actually
 changed at each of its own versions is below.
 
+## Unreleased
+
+Go 1.26.10 is the floor: both `go.mod` files, the wallet's and
+`rates/frankfurter`'s, declare `go 1.26.10`, because every vulnerability an
+application reaches through this package is in the standard library and fixed
+in that release (crypto/x509, net/http HTTP/2 and CONNECT, html/template,
+net/textproto, crypto/tls). A build with `GOTOOLCHAIN=auto` downloads it; a
+Docker build pins `golang:1.26.10` or newer.
+
+This release selects Framework v0.66.0 and Hesape v0.85.0; the SQLite, MySQL and
+PostgreSQL connectors stay at v0.11.0, the latest published. Between
+v0.64.0/v0.84.1 and these, Hesape v0.84.2 stamps `created_at` and `updated_at`
+from the framework clock, so a test that freezes or travels in time moves them
+too. `apidiff` reports no incompatible change against `v0.19.0`.
+
+`rates/frankfurter` requires the wallet at `v0.19.0` and the same Framework and
+Hesape. The `framework` floor is `>= 0.66` in both `arandu.mod.toml` files; the
+rate provider's had stayed at `>= 0.58` while its `go.mod` already required
+v0.64.0.
+
 ## v0.19.0
 
 This release selects Framework v0.64.0 and Hesape v0.84.1; read their upgrade
