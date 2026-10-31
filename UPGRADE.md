@@ -7,6 +7,30 @@ describing a publishing migration and a Repository removal that both happened
 before `v0.1.0` of this package. They are gone, and what this package actually
 changed at each of its own versions is below.
 
+## v0.21.0
+
+This release selects Framework v0.67.0 and Hesape v0.89.2; Hesape v0.86.0 is the
+first release that reads a listing (`pagination.Listing`) from the database, and
+`ListCredits` is built on it, so an application that installs this release
+requires at least that Hesape. The manifest floor is `framework = ">= 0.67"`.
+`apidiff` reports no incompatible change against `v0.20.0`; the release adds
+`ListCredits`, `CreditListingSpec`, `CreditListFilter`, `CreditListing`,
+`CreditStatusFacet` and the six `CreditSort*` keys. There is no migration.
+
+`ListCredits` reads only the keys it declares from the state it is given (the
+search text, the `status` facet, the sort key and direction, the page and its
+size) and its own columns, so a spec built from `CreditListingSpec` can add page
+sizes, hideable columns and facets of the application's own; a facet it adds is
+not applied by the wallet, and an application that narrows by it does so through
+`CreditListFilter` (a period is `From` and `Until`). The search is a "contains"
+over the reference and the terms as stored, so it finds the names the creditor
+recorded in the terms and also a name of one of them; an application that must
+order by something the wallet does not hold, such as a customer's name, orders
+by one of the wallet's keys.
+
+An application that read `Credits` to the last page to cut a table in memory
+replaces that with one `ListCredits` call. `Credits` is unchanged.
+
 ## v0.20.0
 
 Go 1.26.10 is the floor: both `go.mod` files, the wallet's and

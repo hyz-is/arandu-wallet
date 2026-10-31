@@ -322,6 +322,35 @@ page, err := walletService.Credits(ctx, operator, wallet.CreditQuery{
 // a full page has a next one: pass page[len(page)-1].ID as Cursor
 ```
 
+A table of agreements that draws page numbers, a total, a search and a status
+filter reads them with `ListCredits`, which takes the state of a Hesape
+`pagination.Listing` and answers the rows beside the `pagination.ListingResult`
+the data table is drawn from:
+
+```go
+spec := wallet.CreditListingSpec()          // search, sorts and the status facet
+spec.PageSizes, spec.DefaultPageSize = []int{10, 25, 50}, 25
+listing, err := pagination.NewListing(spec) // once, when the service is built
+
+page, err := walletService.ListCredits(ctx, subject,
+	listing.Parse(r.URL.Query()), "/sales/credit",
+	wallet.CreditListFilter{
+		Reference: "order-", ReferencePrefix: true, // what the application narrows to
+		From: start, Until: end,                    // opened in a period
+	})
+// page.Rows are the agreements; page.Result.Total(), .Page and
+// .FacetCounts(wallet.CreditStatusFacet) draw the footer and the filter
+```
+
+The search looks in the reference and the terms the holder accepted, so
+whatever the creditor recorded there -- the customer's name, what was sold -- is
+found; the orders are `wallet.CreditSortOpened` (the default, newest first),
+`CreditSortTotal`, `CreditSortPrincipal`, `CreditSortInstallments`,
+`CreditSortStatus` and `CreditSortReference`. The wallet reads only those keys
+and its own columns from the state: a sort or a facet the application added is
+not applied, and stays in the links. The reach is `Credits`': a holder reads
+only their own agreements, an operator any holder's, in the Grant's tenant.
+
 ## Hold before work whose outcome is unknown
 
 Some work has a known price and an unknown outcome: a lookup that may fail, a
@@ -589,6 +618,7 @@ reconcile.go   a ledger that stopped explaining its balance, and its repair
 commit.go      the engine: one operation, one transaction, the guarded write
 withdrawal.go  payout accounts and the withdrawal requests an operator pays
 credit.go      credit agreements: installments against a credit limit
+credit_listing.go the agreements a data table pages through, with a total and counts
 hold.go        money set aside before it is taken, and how a hold settles
 operator.go    the operator derived from an application's own decision
 listing.go     the operations a data table pages through, in a tenant and in all

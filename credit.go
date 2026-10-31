@@ -718,18 +718,7 @@ func (s *WalletService) Credits(ctx context.Context, actor security.Subject, in 
 	if in.Status != "" {
 		q = q.Where("status", "=", string(in.Status))
 	}
-	if reference := strings.TrimSpace(in.Reference); reference != "" {
-		if in.ReferencePrefix {
-			// A prefix is compared as the leading characters of the column
-			// rather than through LIKE, which every engine spells and escapes
-			// differently and SQLite folds the case of. The length is a count
-			// this package made, never text a caller wrote.
-			column := quoterFor(s.db.Dialect())("reference")
-			q = q.Where(query.Raw(fmt.Sprintf("substr(%s, 1, %d)", column, utf8.RuneCountInString(reference))), "=", reference)
-		} else {
-			q = q.Where("reference", "=", reference)
-		}
-	}
+	q = s.whereCreditReference(q, in.Reference, in.ReferencePrefix)
 	if in.Cursor != "" {
 		anchor := CreditAgreements(s.db).WhereKey(in.Cursor)
 		if holder != "" {
@@ -750,6 +739,24 @@ func (s *WalletService) Credits(ctx context.Context, actor security.Subject, in 
 		})
 	}
 	return q.Limit(boundedLimit(in.Limit)).Get(ctx, g)
+}
+
+// whereCreditReference keeps the agreements of one reference, exactly or as the
+// start of it, and all of them where the reference is empty.
+func (s *WalletService) whereCreditReference(q *CreditAgreementQuery, reference string, prefix bool) *CreditAgreementQuery {
+	reference = strings.TrimSpace(reference)
+	if reference == "" {
+		return q
+	}
+	if !prefix {
+		return q.Where("reference", "=", reference)
+	}
+	// A prefix is compared as the leading characters of the column rather than
+	// through LIKE, which every engine spells and escapes differently and SQLite
+	// folds the case of. The length is a count this package made, never text a
+	// caller wrote.
+	column := quoterFor(s.db.Dialect())("reference")
+	return q.Where(query.Raw(fmt.Sprintf("substr(%s, 1, %d)", column, utf8.RuneCountInString(reference))), "=", reference)
 }
 
 // CreditPaymentRequest records an installment paid.

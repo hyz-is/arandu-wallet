@@ -16,6 +16,29 @@ name here. They are gone.
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-31
+
+### Added
+
+- `ListCredits`, `CreditListingSpec` and `CreditListFilter`: the agreements a
+  server-side data table pages through, with a numbered page and its total, a
+  search over the reference and the terms, the status facet with the number of
+  agreements beside each value, and the orders `CreditSortOpened`,
+  `CreditSortTotal`, `CreditSortPrincipal`, `CreditSortInstallments`,
+  `CreditSortStatus` and `CreditSortReference`. It takes the state of a Hesape
+  `pagination.Listing` and answers a `pagination.ListingResult`, so the
+  application no longer reads the newest agreements whole to cut the page in
+  memory. It asks the policy what `Credits` asks, `WalletCreditView`: a holder
+  reads their own agreements, an operator any holder's, in the Grant's tenant.
+  `CreditListFilter` narrows before the table does, by holder, by reference
+  (exactly or by its start) and by the period the agreements were opened in.
+
+### Changed
+
+- Require Framework `v0.67.0` and Hesape `v0.89.2`, the Hesape that reads a
+  listing from the database; the manifest floor is `framework = ">= 0.67"`.
+- `Credits` and `ListCredits` share one reference match, unchanged for `Credits`.
+
 ## [0.20.0] - 2026-10-25
 
 ### Changed
